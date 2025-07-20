@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="OpenGBSA Logo" width="400"/>
+  <img src="assets/original_logo.png" alt="OpenGBSA Logo" width="400"/>
   
   # OpenGBSA
   
@@ -8,7 +8,7 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
   [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
   [![OpenMM 8.0+](https://img.shields.io/badge/OpenMM-8.0+-green.svg)](https://openmm.org/)
-  [![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/halilibrahimozdemir/opengbsa)
+  [![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/Bio-Otto/opengbsa)
 </div>
 
 A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) analysis package with advanced features including entropy analysis, per-residue decomposition, and YAML-based configuration.
