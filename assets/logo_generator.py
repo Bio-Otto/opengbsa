@@ -50,22 +50,28 @@ def create_svg_logo():
                            facecolor='#FF5722', edgecolor='#D84315', linewidth=2)
             ax.add_patch(circle2)
     
-    # Add energy calculation symbols
-    # Delta G symbol
+    # Add energy calculation symbols with better visibility
+    # Delta G symbol with shadow
+    ax.text(2, 4.5, r'$\Delta G$', fontsize=24, color='#000000', 
+            weight='bold', ha='center', alpha=0.3)  # Shadow
     ax.text(2, 4.5, r'$\Delta G$', fontsize=24, color='#FFC107', 
-            weight='bold', ha='center')
+            weight='bold', ha='center')  # Main text
     
-    # MM/GBSA text
+    # MM/GBSA text with shadow
+    ax.text(6, 4.5, 'MM/GBSA', fontsize=16, color='#000000', 
+            weight='bold', ha='center', alpha=0.3)  # Shadow
     ax.text(6, 4.5, 'MM/GBSA', fontsize=16, color='#FFFFFF', 
-            weight='bold', ha='center')
+            weight='bold', ha='center')  # Main text
     
-    # OpenGBSA text
+    # OpenGBSA text with shadow and outline
+    ax.text(4, 1.2, 'OpenGBSA', fontsize=28, color='#000000', 
+            weight='bold', ha='center', family='sans-serif', alpha=0.4)  # Shadow
     ax.text(4, 1.2, 'OpenGBSA', fontsize=28, color='#FFFFFF', 
-            weight='bold', ha='center', family='sans-serif')
+            weight='bold', ha='center', family='sans-serif')  # Main text
     
-    # Subtitle
+    # Subtitle with better contrast
     ax.text(4, 0.6, 'Molecular Mechanics / Generalized Born Surface Area', 
-            fontsize=10, color='#BDBDBD', ha='center', family='sans-serif')
+            fontsize=10, color='#E0E0E0', ha='center', family='sans-serif', weight='bold')
     
     # Add some molecular energy lines
     for i in range(3):
@@ -123,22 +129,28 @@ def create_png_logo():
                            facecolor='#FF5722', edgecolor='#D84315', linewidth=3)
             ax.add_patch(circle2)
     
-    # Energy calculation symbols
-    # Delta G symbol
+    # Energy calculation symbols with better visibility
+    # Delta G symbol with shadow
+    ax.text(3, 6.5, r'$\Delta G$', fontsize=32, color='#000000', 
+            weight='bold', ha='center', alpha=0.3)  # Shadow
     ax.text(3, 6.5, r'$\Delta G$', fontsize=32, color='#FFC107', 
-            weight='bold', ha='center')
+            weight='bold', ha='center')  # Main text
     
-    # MM/GBSA text
+    # MM/GBSA text with shadow
+    ax.text(7, 6.5, 'MM/GBSA', fontsize=20, color='#000000', 
+            weight='bold', ha='center', alpha=0.3)  # Shadow
     ax.text(7, 6.5, 'MM/GBSA', fontsize=20, color='#FFFFFF', 
-            weight='bold', ha='center')
+            weight='bold', ha='center')  # Main text
     
-    # OpenGBSA text
+    # OpenGBSA text with shadow and outline
+    ax.text(5, 1.5, 'OpenGBSA', fontsize=36, color='#000000', 
+            weight='bold', ha='center', family='sans-serif', alpha=0.4)  # Shadow
     ax.text(5, 1.5, 'OpenGBSA', fontsize=36, color='#FFFFFF', 
-            weight='bold', ha='center', family='sans-serif')
+            weight='bold', ha='center', family='sans-serif')  # Main text
     
-    # Subtitle
+    # Subtitle with better contrast
     ax.text(5, 0.8, 'Molecular Mechanics / Generalized Born Surface Area', 
-            fontsize=12, color='#BDBDBD', ha='center', family='sans-serif')
+            fontsize=12, color='#E0E0E0', ha='center', family='sans-serif', weight='bold')
     
     # Add energy calculation lines
     for i in range(4):
@@ -168,7 +180,7 @@ def create_png_logo():
     print("PNG logo created: logo.png")
 
 def create_simple_logo():
-    """Create a simple text-based logo"""
+    """Create a simple text-based logo with better visibility"""
     
     # Create image with transparent background
     width, height = 800, 200
@@ -184,7 +196,7 @@ def create_simple_logo():
         font_large = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
-    # Draw OpenGBSA text
+    # Draw OpenGBSA text with multiple shadow layers for better visibility
     text = "OpenGBSA"
     bbox = draw.textbbox((0, 0), text, font=font_large)
     text_width = bbox[2] - bbox[0]
@@ -193,11 +205,15 @@ def create_simple_logo():
     x = (width - text_width) // 2
     y = (height - text_height) // 2 - 20
     
-    # Draw text with shadow effect
-    draw.text((x+2, y+2), text, font=font_large, fill=(0, 0, 0, 100))
+    # Draw multiple shadow layers for better visibility
+    for offset in range(4, 0, -1):
+        alpha = 255 // (offset + 1)
+        draw.text((x+offset, y+offset), text, font=font_large, fill=(0, 0, 0, alpha))
+    
+    # Main text
     draw.text((x, y), text, font=font_large, fill=(255, 255, 255, 255))
     
-    # Draw subtitle
+    # Draw subtitle with better contrast
     subtitle = "Molecular Mechanics / Generalized Born Surface Area"
     bbox_sub = draw.textbbox((0, 0), subtitle, font=font_small)
     sub_width = bbox_sub[2] - bbox_sub[0]
@@ -205,14 +221,16 @@ def create_simple_logo():
     x_sub = (width - sub_width) // 2
     y_sub = y + text_height + 10
     
-    draw.text((x_sub, y_sub), subtitle, font=font_small, fill=(189, 189, 189, 255))
+    # Subtitle shadow
+    draw.text((x_sub+1, y_sub+1), subtitle, font=font_small, fill=(0, 0, 0, 100))
+    draw.text((x_sub, y_sub), subtitle, font=font_small, fill=(224, 224, 224, 255))
     
     # Save
     img.save('logo_simple.png', 'PNG')
     print("Simple logo created: logo_simple.png")
 
 def create_github_banner():
-    """Create a GitHub banner for the repository"""
+    """Create a GitHub banner for the repository with better text visibility"""
     
     # Create image with GitHub banner dimensions
     width, height = 1280, 640
@@ -234,7 +252,7 @@ def create_github_banner():
         color = (13, 17, 23, alpha)  # GitHub dark theme
         draw.line([(0, y), (width, y)], fill=color)
     
-    # Draw OpenGBSA text
+    # Draw OpenGBSA text with multiple shadow layers
     text = "OpenGBSA"
     bbox = draw.textbbox((0, 0), text, font=font_large)
     text_width = bbox[2] - bbox[0]
@@ -243,14 +261,15 @@ def create_github_banner():
     x = (width - text_width) // 2
     y = (height - text_height) // 2 - 50
     
-    # Draw text with glow effect
-    for offset in range(5, 0, -1):
+    # Draw multiple shadow layers for better visibility
+    for offset in range(6, 0, -1):
         alpha = 255 // (offset + 1)
-        draw.text((x+offset, y+offset), text, font=font_large, fill=(255, 255, 255, alpha))
+        draw.text((x+offset, y+offset), text, font=font_large, fill=(0, 0, 0, alpha))
     
+    # Main text
     draw.text((x, y), text, font=font_large, fill=(255, 255, 255, 255))
     
-    # Draw subtitle
+    # Draw subtitle with shadow
     subtitle = "Molecular Mechanics / Generalized Born Surface Area Analysis"
     bbox_sub = draw.textbbox((0, 0), subtitle, font=font_medium)
     sub_width = bbox_sub[2] - bbox_sub[0]
@@ -258,9 +277,11 @@ def create_github_banner():
     x_sub = (width - sub_width) // 2
     y_sub = y + text_height + 20
     
+    # Subtitle shadow
+    draw.text((x_sub+1, y_sub+1), subtitle, font=font_medium, fill=(0, 0, 0, 100))
     draw.text((x_sub, y_sub), subtitle, font=font_medium, fill=(139, 148, 158, 255))
     
-    # Draw features
+    # Draw features with better visibility
     features = [
         "• Complete MM/GBSA Energy Calculation",
         "• Per-Residue Energy Decomposition", 
@@ -270,6 +291,9 @@ def create_github_banner():
     
     y_features = y_sub + 80
     for i, feature in enumerate(features):
+        # Feature shadow
+        draw.text((width//2 - 300 + 1, y_features + i * 40 + 1), feature, 
+                 font=font_small, fill=(0, 0, 0, 80))
         draw.text((width//2 - 300, y_features + i * 40), feature, 
                  font=font_small, fill=(139, 148, 158, 255))
     
@@ -279,7 +303,7 @@ def create_github_banner():
 
 def main():
     """Generate all logo variants"""
-    print("Generating OpenGBSA logos...")
+    print("Generating OpenGBSA logos with improved text visibility...")
     
     # Create different logo variants
     create_svg_logo()
