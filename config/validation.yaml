@@ -1,0 +1,213 @@
+# MM/GBSA Configuration Validation Schema
+# This file defines the validation rules for configuration files
+
+# =============================================================================
+# VALIDATION SCHEMA
+# =============================================================================
+validation_schema:
+  # Required sections
+  required_sections:
+    - input_files
+    - analysis_settings
+  
+  # Input files validation
+  input_files:
+    required_fields:
+      - ligand_mol
+      - complex_pdb
+      - ligand_pdb
+      - trajectory
+    
+    file_extensions:
+      ligand_mol: [".sdf", ".mol2", ".pdb"]
+      complex_pdb: [".pdb"]
+      ligand_pdb: [".pdb"]
+      trajectory: [".xtc", ".dcd", ".trr", ".nc"]
+    
+    file_validation:
+      check_exists: true
+      check_readable: true
+      max_size_mb: 1000  # 1GB max file size
+
+  # Analysis settings validation
+  analysis_settings:
+    required_fields:
+      - temperature
+      - gb_model
+      - salt_concentration
+      - max_frames
+    
+    parameter_ranges:
+      temperature:
+        min: 0
+        max: 1000
+        type: "float"
+        unit: "K"
+      
+      gb_model:
+        allowed_values: ["OBC2", "OBC1", "HCT", "GBn", "GBn2"]
+        type: "string"
+      
+      salt_concentration:
+        min: 0.0
+        max: 2.0
+        type: "float"
+        unit: "M"
+      
+      max_frames:
+        min: 1
+        max: 10000
+        type: "integer"
+      
+      frame_start:
+        min: 0
+        max: 999999
+        type: "integer_or_null"
+      
+      frame_end:
+        min: 0
+        max: 999999
+        type: "integer_or_null"
+      
+      frame_stride:
+        min: 1
+        max: 1000
+        type: "integer_or_null"
+      
+      frame_selection:
+        allowed_values: ["sequential", "equidistant", "random"]
+        type: "string"
+      
+      random_seed:
+        min: 0
+        max: 999999
+        type: "integer_or_null"
+      
+      decomp_frames:
+        min: 1
+        max: 1000
+        type: "integer"
+      
+      run_entropy_analysis:
+        type: "boolean"
+      
+      run_per_residue_decomposition:
+        type: "boolean"
+      
+      energy_decomposition:
+        type: "boolean"
+      
+      use_cache:
+        type: "boolean"
+      
+      parallel_processing:
+        type: "boolean"
+      
+      use_gpu:
+        type: "boolean"
+      
+      gpu_platform:
+        allowed_values: ["CUDA", "OpenCL"]
+        type: "string_or_null"
+
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+validation_rules:
+  # Cross-field validation
+  cross_field_validation:
+    - rule: "frame_end_greater_than_start"
+      condition: "frame_end > frame_start if both are not null"
+      message: "frame_end must be greater than frame_start"
+    
+    - rule: "max_frames_positive"
+      condition: "max_frames > 0"
+      message: "max_frames must be positive"
+    
+    - rule: "decomp_frames_not_greater_than_max_frames"
+      condition: "decomp_frames <= max_frames"
+      message: "decomp_frames cannot be greater than max_frames"
+    
+    - rule: "random_seed_required_for_random_selection"
+      condition: "random_seed is not null if frame_selection is 'random'"
+      message: "random_seed is required when frame_selection is 'random'"
+    
+    - rule: "gpu_platform_required_for_gpu"
+      condition: "gpu_platform is not null if use_gpu is true"
+      message: "gpu_platform is required when use_gpu is true"
+
+  # Logical validation
+  logical_validation:
+    - rule: "valid_frame_range"
+      condition: "frame_start < frame_end if both specified"
+      message: "Invalid frame range"
+    
+    - rule: "reasonable_temperature"
+      condition: "200 <= temperature <= 400"
+      message: "Temperature should be between 200-400K for biological systems"
+    
+    - rule: "reasonable_salt_concentration"
+      condition: "0.0 <= salt_concentration <= 1.0"
+      message: "Salt concentration should be between 0.0-1.0M for biological systems"
+
+# =============================================================================
+# ERROR MESSAGES
+# =============================================================================
+error_messages:
+  missing_section: "Required section '{section}' is missing"
+  missing_field: "Required field '{field}' is missing in section '{section}'"
+  invalid_value: "Invalid value '{value}' for field '{field}'. Expected: {expected}"
+  file_not_found: "File '{file}' not found"
+  file_not_readable: "File '{file}' is not readable"
+  file_too_large: "File '{file}' is too large (max {max_size}MB)"
+  invalid_extension: "File '{file}' has invalid extension. Expected: {expected}"
+  cross_field_error: "Cross-field validation failed: {message}"
+  logical_error: "Logical validation failed: {message}"
+
+# =============================================================================
+# WARNING MESSAGES
+# =============================================================================
+warning_messages:
+  high_frame_count: "High frame count ({count}) may cause long analysis time"
+  low_frame_count: "Low frame count ({count}) may give unreliable results"
+  no_entropy: "Entropy analysis disabled - results may be incomplete"
+  no_decomposition: "Per-residue decomposition disabled - limited analysis"
+  no_gpu: "GPU acceleration disabled - analysis may be slow"
+  high_temperature: "High temperature ({temp}K) may not be biologically relevant"
+  high_salt: "High salt concentration ({salt}M) may not be biologically relevant"
+
+# =============================================================================
+# VALIDATION FUNCTIONS
+# =============================================================================
+validation_functions:
+  # File validation
+  validate_file_exists: "Check if file exists"
+  validate_file_readable: "Check if file is readable"
+  validate_file_size: "Check if file size is within limits"
+  validate_file_extension: "Check if file has valid extension"
+  
+  # Parameter validation
+  validate_parameter_range: "Check if parameter is within valid range"
+  validate_parameter_type: "Check if parameter has correct type"
+  validate_parameter_value: "Check if parameter has allowed value"
+  
+  # Cross-field validation
+  validate_frame_range: "Check if frame range is valid"
+  validate_dependencies: "Check if dependent parameters are set"
+  validate_logical_consistency: "Check logical consistency of parameters"
+
+# =============================================================================
+# USAGE
+# =============================================================================
+# This validation schema is used by the configuration validation system
+# to ensure that configuration files are correct and complete.
+#
+# Validation is performed automatically when:
+# 1. Loading configuration files
+# 2. Running analysis
+# 3. Creating new configurations
+#
+# To use custom validation:
+# 1. Modify this schema
+# 2. Add custom validation rules
+# 3. Update error/warning messages 

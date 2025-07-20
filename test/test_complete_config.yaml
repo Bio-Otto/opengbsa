@@ -1,0 +1,118 @@
+advanced_settings:
+  bootstrap_confidence: 0.95
+  bootstrap_samples: 1000
+  cache_directory: .cache
+  cache_expiration: 30
+  convergence_window: 10
+  hot_spot_threshold: -1.0
+  max_cache_size: 1000
+  max_minimization_steps: 10000
+  minimization_tolerance: 1.0e-06
+  nma_quality_threshold: Good
+  nma_tweak_ratio: 1.0e-12
+analysis_settings:
+  decomp_frames: 500
+  energy_decomposition: true
+  save_frame_by_frame_csv: true
+  frame_by_frame_csv_name: "frame_by_frame_decomposition"
+  include_residue_summary: true
+  frame_output_components: ["vdw", "electrostatic", "solvation", "total"]
+  frame_output_format: "csv"
+  frame_end: null
+  frame_selection: sequential
+  frame_start: null
+  frame_stride: null
+  gb_model: OBC2
+  max_frames: 500
+  max_workers: null
+  parallel_processing: false
+  random_seed: 42
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: true
+  verbose: 1
+  
+debug_settings:
+  debug_mode: false
+  save_energy_components: true
+  save_forcefield_params: true
+  save_intermediate_systems: false
+  save_snapshots: false
+  verbose_errors: false
+  
+forcefield_settings:
+  ion_forcefield: null
+  ligand_forcefield: openff-2.1.0.offxml
+  ligand_variant: null
+  protein_forcefield: amber14-all.xml
+  protein_variant: null
+  water_model: null
+  
+input_files:
+  additional_ligands: null
+  complex_pdb: test/complex.pdb
+  ligand_mol: test/ligand.sdf
+  ligand_pdb: test/ligand.pdb
+  reference_structure: null
+  trajectory: test/complex.dcd
+  
+output_settings:
+  analysis_name: sample_analysis
+  compress_output: false
+  output_directory: mmgbsa_results_v0.0.4
+  output_formats:
+  - csv
+  - txt
+  - yaml
+  plot_formats:
+  - png
+  - pdf
+  save_intermediate: false
+  save_logs: true
+  save_plots: true
+  save_trajectories: false
+  
+performance_settings:
+  batch_size: 10
+  cpu_affinity: null
+  gpu_memory_fraction: 0.8
+  memory_limit: null
+  optimize_memory: true
+  track_progress: true
+  
+platform_settings:
+  cuda_device: 0
+  cuda_precision: double
+  deterministic_forces: true
+  platform_properties: {}
+  preferred_platform: CUDA
+  
+reporting_settings:
+  generate_final_report: true
+  include_config_summary: true
+  include_convergence: true
+  include_hot_spots: true
+  include_per_residue: true
+  include_plots: true
+  include_statistics: true
+  include_timestamp: true
+  report_format: txt
+  
+reproducibility_settings:
+  global_random_seed: 42
+  save_configuration: true
+  save_environment: true
+  save_system_hashes: true
+  save_versions: true
+  strict_reproducibility: true
+  
+validation_settings:
+  check_convergence: true
+  generate_validation_report: true
+  max_std_dev: 10.0
+  min_successful_frames: 10
+  validate_inputs: true
+  validate_results: true
+  validation_tolerance: 1.0

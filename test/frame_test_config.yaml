@@ -1,0 +1,58 @@
+# Frame Selection Test Configuration
+# Tests frame selection functionality with simple runner
+
+input_files:
+  ligand_mol: "test/ligand.sdf"
+  complex_pdb: "test/complex.pdb"
+  ligand_pdb: "test/ligand.pdb"
+  trajectory: "test/complex.dcd"
+
+analysis_settings:
+  temperature: 300
+  gb_model: "OBC2"
+  salt_concentration: 0.15
+  
+  # Frame selection parameters
+  max_frames: 40
+  frame_start: 200        # Start from frame 50
+  frame_end: 1000         # End at frame 200
+  frame_stride: 5        # Every 5th frame
+  frame_selection: "sequential"
+  random_seed: 42
+  
+  verbose: 2
+  use_cache: true
+  parallel_processing: true
+  energy_decomposition: true
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  decomp_frames: 40
+
+output_settings:
+  output_directory: "mmgbsa_results"
+  save_plots: true
+  save_trajectories: false
+  save_intermediate: true
+  output_format: "csv"
+
+advanced_settings:
+  minimization_tolerance: 1e-6
+  nma_quality_threshold: "Good"
+  hot_spot_threshold: -1.0
+  bootstrap_confidence: 0.95
+  bootstrap_samples: 100
+  convergence_window: 10
+
+platform_settings:
+  preferred_platform: "CPU"
+  cuda_device: 0
+  cuda_precision: "double"
+  deterministic_forces: true
+
+validation_settings:
+  validate_inputs: true
+  validate_results: true
+  max_std_dev: 10.0
+  min_successful_frames: 10
+  check_convergence: true
+  generate_validation_report: true 

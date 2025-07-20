@@ -1,0 +1,483 @@
+# =============================================================================
+# COMPLETE MM/GBSA ANALYSIS CONFIGURATION
+# =============================================================================
+# This file contains all parameters for reproducible MM/GBSA analysis
+# Each parameter includes alternatives in comments
+# =============================================================================
+
+# =============================================================================
+# INPUT FILES SECTION
+# =============================================================================
+input_files:
+  # Ligand structure file (required)
+  # Alternatives: .sdf, .mol2, .pdb, .xyz
+  ligand_mol: "test/ligand.sdf"
+  
+  # Protein-ligand complex structure (required)
+  # Alternatives: .pdb, .pdbqt, .gro
+  complex_pdb: "test/complex.pdb"
+  
+  # Isolated ligand structure (required)
+  # Alternatives: .pdb, .mol2, .sdf
+  ligand_pdb: "test/ligand.pdb"
+  
+  # Molecular dynamics trajectory (required)
+  # Alternatives: .xtc, .dcd, .trr, .nc, .h5
+  trajectory: "test/complex.xtc"
+  
+  # Optional: Reference structure for alignment
+  # Alternatives: .pdb, .gro, null
+  reference_structure: null
+  
+  # Optional: Additional ligand files for comparison
+  # Alternatives: list of files, null
+  additional_ligands: null
+
+# =============================================================================
+# OUTPUT SETTINGS SECTION
+# =============================================================================
+output_settings:
+  # Main output directory (all results will be saved here)
+  # Alternatives: "results", "mmgbsa_output", "./output"
+  output_directory: "mmgbsa_results"
+  
+  # Analysis name for this run (will create subdirectory)
+  # Alternatives: "analysis_1", "protein_ligand_analysis", "binding_study"
+  analysis_name: "complete_analysis"
+  
+  # Output file formats
+  # Alternatives: ["csv", "json"], ["txt", "yaml"], ["csv", "txt", "json"]
+  output_formats: ["csv", "txt", "yaml"]
+  
+  # Save plots and visualizations
+  # Alternatives: true, false
+  save_plots: true
+  
+  # Plot formats
+  # Alternatives: ["png", "pdf"], ["svg", "jpg"], ["png", "svg", "pdf"]
+  plot_formats: ["png", "pdf"]
+  
+  # Save intermediate files (for debugging)
+  # Alternatives: true, false
+  save_intermediate: false
+  
+  # Save processed trajectories
+  # Alternatives: true, false
+  save_trajectories: false
+  
+  # Save detailed logs
+  # Alternatives: true, false
+  save_logs: true
+  
+  # Compression for large files
+  # Alternatives: true, false
+  compress_output: false
+
+# =============================================================================
+# ANALYSIS SETTINGS SECTION
+# =============================================================================
+analysis_settings:
+  # Temperature for analysis (Kelvin)
+  # Alternatives: 298.15, 310.0, 300.0
+  temperature: 300.0
+  
+  # GB (Generalized Born) model for implicit solvation
+  # Alternatives: "OBC1", "HCT", "GBn", "GBn2", "OBC2"
+  gb_model: "OBC2"
+  
+  # Salt concentration (Molar)
+  # Alternatives: 0.0, 0.1, 0.15, 0.2
+  salt_concentration: 0.15
+  
+  # =============================================================================
+  # FRAME SELECTION PARAMETERS
+  # =============================================================================
+  
+  # Maximum number of trajectory frames to analyze
+  # Alternatives: null (all frames), 50, 100, 200
+  max_frames: 50
+  
+  # Start frame (0-indexed, null = from beginning)
+  # Alternatives: null, 0, 100, 1000
+  frame_start: null
+  
+  # End frame (0-indexed, null = to end)
+  # Alternatives: null, 500, 1000, 2000
+  frame_end: null
+  
+  # Frame stride (every Nth frame, null = all frames)
+  # Alternatives: null, 1, 2, 5, 10
+  frame_stride: null
+  
+  # Frame selection method
+  # Alternatives: "sequential", "equidistant", "random"
+  frame_selection: "sequential"
+  
+  # Random seed for frame selection (if using random method)
+  # Alternatives: 42, 123, 456, null
+  random_seed: 42
+  
+  # =============================================================================
+  # ANALYSIS OPTIONS
+  # =============================================================================
+  
+  # Verbosity level
+  # Alternatives: 0 (quiet), 1 (normal), 2 (verbose), 3 (debug)
+  verbose: 1
+  
+  # Enable caching for faster repeated runs
+  # Alternatives: true, false
+  use_cache: true
+  
+  # Enable parallel processing
+  # Alternatives: true, false
+  parallel_processing: false
+  
+  # Number of parallel workers (null = auto-detect)
+  # Alternatives: null, 2, 4, 8, 16
+  max_workers: null
+  
+  # Enable energy decomposition
+  # Alternatives: true, false
+  energy_decomposition: false
+  
+  # Run entropy analysis using normal mode analysis
+  # Alternatives: true, false
+  run_entropy_analysis: false
+  
+  # Run per-residue energy decomposition
+  # Alternatives: true, false
+  run_per_residue_decomposition: true
+  
+  # Number of frames for per-residue decomposition
+  # Alternatives: 5, 10, 20, 50
+  decomp_frames: 10
+  
+  # =============================================================================
+  # PER-RESIDUE DECOMPOSITION OUTPUT SETTINGS
+  # =============================================================================
+  
+  # Save frame-by-frame per-residue decomposition results
+  # This creates a CSV file with energy values for each residue in each frame
+  # Alternatives: true, false
+  save_frame_by_frame_csv: true
+  
+  # Frame-by-frame CSV filename (without extension)
+  # Alternatives: "frame_decomposition", "per_residue_frames", "residue_energies"
+  frame_by_frame_csv_name: "frame_by_frame_decomposition"
+  
+  # Include residue summary in frame-by-frame output
+  # Creates additional CSV with residue information
+  # Alternatives: true, false
+  include_residue_summary: true
+  
+  # Energy components to include in frame-by-frame output
+  # Alternatives: ["vdw", "electrostatic", "solvation", "total"], ["total"], ["vdw", "electrostatic"]
+  frame_output_components: ["vdw", "electrostatic", "solvation", "total"]
+  
+  # Frame-by-frame output format
+  # Alternatives: "csv", "json", "hdf5"
+  frame_output_format: "csv"
+  
+  # =============================================================================
+  # ADVANCED VISUALIZATION SETTINGS
+  # =============================================================================
+  
+  # Compound name for plots and reports
+  # Alternatives: "Ligand", "Drug", "Inhibitor", "Compound-1"
+  compound_name: "Test Compound"
+  
+  # Ligand residue name in PDB (auto-detected if null)
+  # Alternatives: "LIG", "UNL", "UNK", "DRUG", null
+  ligand_resname: "LIG"
+
+# =============================================================================
+# FORCEFIELD SETTINGS SECTION
+# =============================================================================
+forcefield_settings:
+  # =============================================================================
+  # PROTEIN FORCEFIELD
+  # =============================================================================
+  
+  # Protein forcefield
+  # Alternatives: "amber14-all.xml", "amber99sb.xml", "charmm36.xml", "oplsaa.xml"
+  protein_forcefield: "amber14-all.xml"
+  
+  # Protein forcefield variant
+  # Alternatives: "ff14SB", "ff99SB", "ff03", null
+  protein_variant: null
+  
+  # =============================================================================
+  # LIGAND FORCEFIELD
+  # =============================================================================
+  
+  # Ligand forcefield (OpenFF)
+  # Alternatives: "openff-2.1.0.offxml", "openff-2.0.0.offxml", "openff-1.3.0.offxml"
+  ligand_forcefield: "openff-2.1.0.offxml"
+  
+  # Ligand forcefield variant
+  # Alternatives: "sage", "parsley", "smirnoff99Frosst", null
+  ligand_variant: null
+  
+  # =============================================================================
+  # WATER MODEL
+  # =============================================================================
+  
+  # Water model for explicit solvent (if used)
+  # Alternatives: "tip3p.xml", "tip4pew.xml", "spce.xml", null
+  water_model: null
+  
+  # =============================================================================
+  # ION FORCEFIELD
+  # =============================================================================
+  
+  # Ion forcefield
+  # Alternatives: "amber14-all.xml", "charmm36.xml", null
+  ion_forcefield: null
+
+# =============================================================================
+# ADVANCED SETTINGS SECTION
+# =============================================================================
+advanced_settings:
+  # =============================================================================
+  # MINIMIZATION SETTINGS
+  # =============================================================================
+  
+  # Minimization tolerance
+  # Alternatives: 1e-4, 1e-5, 1e-6, 1e-7
+  minimization_tolerance: 1e-6
+  
+  # Maximum minimization steps
+  # Alternatives: 1000, 5000, 10000, 50000
+  max_minimization_steps: 10000
+  
+  # =============================================================================
+  # NORMAL MODE ANALYSIS SETTINGS
+  # =============================================================================
+  
+  # NMA quality threshold
+  # Alternatives: "Poor", "Fair", "Good", "Excellent"
+  nma_quality_threshold: "Good"
+  
+  # NMA tweak energy ratio
+  # Alternatives: 1e-10, 1e-12, 1e-14, 1e-16
+  nma_tweak_ratio: 1e-12
+  
+  # =============================================================================
+  # HOT SPOT ANALYSIS SETTINGS
+  # =============================================================================
+  
+  # Hot spot energy threshold (kcal/mol)
+  # Alternatives: -0.5, -1.0, -2.0, -5.0
+  hot_spot_threshold: -1.0
+  
+  # =============================================================================
+  # STATISTICAL ANALYSIS SETTINGS
+  # =============================================================================
+  
+  # Bootstrap confidence level
+  # Alternatives: 0.90, 0.95, 0.99
+  bootstrap_confidence: 0.95
+  
+  # Number of bootstrap samples
+  # Alternatives: 100, 500, 1000, 5000
+  bootstrap_samples: 1000
+  
+  # Convergence window size
+  # Alternatives: 5, 10, 20, 50
+  convergence_window: 10
+  
+  # =============================================================================
+  # CACHING SETTINGS
+  # =============================================================================
+  
+  # Cache directory
+  # Alternatives: ".cache", "cache", "./cache"
+  cache_directory: ".cache"
+  
+  # Maximum cache size (MB)
+  # Alternatives: 100, 500, 1000, 5000
+  max_cache_size: 1000
+  
+  # Cache expiration time (days)
+  # Alternatives: 1, 7, 30, 365
+  cache_expiration: 30
+
+# =============================================================================
+# PLATFORM SETTINGS SECTION
+# =============================================================================
+platform_settings:
+  # Preferred platform
+  # Alternatives: "CUDA", "OpenCL", "CPU", "Reference"
+  preferred_platform: "CUDA"
+  
+  # CUDA device number (if using CUDA)
+  # Alternatives: 0, 1, 2, null
+  cuda_device: 0
+  
+  # CUDA precision
+  # Alternatives: "single", "double", "mixed"
+  cuda_precision: "double"
+  
+  # Enable deterministic forces (for reproducibility)
+  # Alternatives: true, false
+  deterministic_forces: true
+  
+  # Platform properties
+  platform_properties: {}
+
+# =============================================================================
+# VALIDATION SETTINGS SECTION
+# =============================================================================
+validation_settings:
+  # Validate input files
+  # Alternatives: true, false
+  validate_inputs: true
+  
+  # Validate results for reasonableness
+  # Alternatives: true, false
+  validate_results: true
+  
+  # Maximum allowed standard deviation (kcal/mol)
+  # Alternatives: 5.0, 10.0, 20.0, 50.0
+  max_std_dev: 10.0
+  
+  # Minimum successful frames required
+  # Alternatives: 5, 10, 20, 50
+  min_successful_frames: 10
+  
+  # Check for convergence
+  # Alternatives: true, false
+  check_convergence: true
+  
+  # Generate validation report
+  # Alternatives: true, false
+  generate_validation_report: true
+  
+  # Validation tolerance for energy differences
+  # Alternatives: 0.1, 0.5, 1.0, 5.0
+  validation_tolerance: 1.0
+
+# =============================================================================
+# REPORTING SETTINGS SECTION
+# =============================================================================
+reporting_settings:
+  # Generate comprehensive final report
+  # Alternatives: true, false
+  generate_final_report: true
+  
+  # Include plots in report
+  # Alternatives: true, false
+  include_plots: true
+  
+  # Include statistical analysis
+  # Alternatives: true, false
+  include_statistics: true
+  
+  # Include convergence analysis
+  # Alternatives: true, false
+  include_convergence: true
+  
+  # Include per-residue analysis
+  # Alternatives: true, false
+  include_per_residue: true
+  
+  # Include hot spot analysis
+  # Alternatives: true, false
+  include_hot_spots: true
+  
+  # Report format
+  # Alternatives: "txt", "md", "html", "pdf"
+  report_format: "txt"
+  
+  # Include timestamp in report
+  # Alternatives: true, false
+  include_timestamp: true
+  
+  # Include configuration summary
+  # Alternatives: true, false
+  include_config_summary: true
+
+# =============================================================================
+# DEBUGGING SETTINGS SECTION
+# =============================================================================
+debug_settings:
+  # Enable debug mode
+  # Alternatives: true, false
+  debug_mode: false
+  
+  # Save intermediate systems
+  # Alternatives: true, false
+  save_intermediate_systems: false
+  
+  # Save energy components
+  # Alternatives: true, false
+  save_energy_components: false
+  
+  # Save force field parameters
+  # Alternatives: true, false
+  save_forcefield_params: false
+  
+  # Verbose error reporting
+  # Alternatives: true, false
+  verbose_errors: false
+  
+  # Save trajectory snapshots
+  # Alternatives: true, false
+  save_snapshots: false
+
+# =============================================================================
+# REPRODUCIBILITY SETTINGS SECTION
+# =============================================================================
+reproducibility_settings:
+  # Set random seed for all random operations
+  # Alternatives: 42, 123, 456, null
+  global_random_seed: 42
+  
+  # Save exact configuration used
+  # Alternatives: true, false
+  save_configuration: true
+  
+  # Save version information
+  # Alternatives: true, false
+  save_versions: true
+  
+  # Save system hashes
+  # Alternatives: true, false
+  save_system_hashes: true
+  
+  # Enable strict reproducibility
+  # Alternatives: true, false
+  strict_reproducibility: true
+  
+  # Save environment information
+  # Alternatives: true, false
+  save_environment: true
+
+# =============================================================================
+# PERFORMANCE SETTINGS SECTION
+# =============================================================================
+performance_settings:
+  # Memory limit (GB)
+  # Alternatives: 1, 4, 8, 16, null
+  memory_limit: null
+  
+  # CPU affinity (list of CPU cores)
+  # Alternatives: [0,1,2,3], [0,2,4,6], null
+  cpu_affinity: null
+  
+  # GPU memory fraction
+  # Alternatives: 0.5, 0.8, 1.0
+  gpu_memory_fraction: 0.8
+  
+  # Enable memory optimization
+  # Alternatives: true, false
+  optimize_memory: true
+  
+  # Batch size for processing
+  # Alternatives: 1, 5, 10, 20
+  batch_size: 10
+  
+  # Enable progress tracking
+  # Alternatives: true, false
+  track_progress: true 

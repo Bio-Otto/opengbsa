@@ -1,0 +1,269 @@
+# MM/GBSA Configuration Templates
+# These are template configurations that can be used as starting points
+
+# =============================================================================
+# TEMPLATE 1: BASIC TEMPLATE (Minimal Configuration)
+# =============================================================================
+basic_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"      # Ligand structure file
+    complex_pdb: "path/to/complex.pdb"    # Protein-ligand complex
+    ligand_pdb: "path/to/ligand.pdb"      # Isolated ligand structure
+    trajectory: "path/to/trajectory.xtc"  # MD trajectory file
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300                      # Temperature in Kelvin
+    gb_model: "OBC2"                      # GB model: OBC2, OBC1, HCT, GBn, GBn2
+    salt_concentration: 0.15              # Salt concentration in M
+    
+    # Frame selection
+    max_frames: 50                        # Maximum frames to analyze
+    frame_start: null                     # Start frame (null = beginning)
+    frame_end: null                       # End frame (null = end)
+    frame_stride: null                    # Every Nth frame (null = all)
+    frame_selection: "sequential"         # sequential, equidistant, random
+    
+    # Analysis options
+    run_entropy_analysis: false           # Enable entropy calculation
+    run_per_residue_decomposition: false  # Enable residue analysis
+    decomp_frames: 10                     # Frames for decomposition
+    
+    # Performance
+    use_cache: true                       # Enable caching
+    parallel_processing: false            # Enable parallel processing
+
+# =============================================================================
+# TEMPLATE 2: STANDARD TEMPLATE (Balanced Configuration)
+# =============================================================================
+standard_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection
+    max_frames: 50
+    frame_start: 1000                     # Skip equilibration
+    frame_end: null
+    frame_stride: 5                       # Every 5th frame
+    frame_selection: "sequential"
+    
+    # Analysis options
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    energy_decomposition: false
+    
+    # Performance
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# TEMPLATE 3: ADVANCED TEMPLATE (Full Configuration)
+# =============================================================================
+advanced_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection
+    max_frames: 100
+    frame_start: 500
+    frame_end: null
+    frame_stride: 2                       # Every 2nd frame
+    frame_selection: "equidistant"        # Equidistant sampling
+    random_seed: 42                       # For random selection
+    
+    # Analysis options
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 20
+    energy_decomposition: true
+    
+    # Performance
+    use_cache: true
+    parallel_processing: true
+    use_gpu: false                        # GPU acceleration
+    gpu_platform: "CUDA"                  # GPU platform
+
+# =============================================================================
+# TEMPLATE 4: GPU TEMPLATE (GPU Accelerated)
+# =============================================================================
+gpu_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection
+    max_frames: 200
+    frame_start: 1000
+    frame_end: null
+    frame_stride: 1                       # Every frame
+    frame_selection: "sequential"
+    
+    # Analysis options
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 50
+    energy_decomposition: true
+    
+    # Performance
+    use_cache: true
+    parallel_processing: true
+    use_gpu: true                         # Enable GPU
+    gpu_platform: "CUDA"                  # CUDA platform
+
+# =============================================================================
+# TEMPLATE 5: DEBUG TEMPLATE (Minimal for Testing)
+# =============================================================================
+debug_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection (minimal)
+    max_frames: 5                         # Very few frames
+    frame_start: 100
+    frame_stride: 20                      # Large stride
+    frame_selection: "sequential"
+    
+    # Analysis options (disabled)
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+    use_cache: false                      # No caching
+    parallel_processing: false            # No parallel processing
+
+# =============================================================================
+# TEMPLATE 6: RESEARCH TEMPLATE (Comprehensive Analysis)
+# =============================================================================
+research_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection (comprehensive)
+    max_frames: 200
+    frame_start: 500
+    frame_end: null
+    frame_stride: 1                       # Every frame
+    frame_selection: "equidistant"
+    
+    # Analysis options (all enabled)
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 50
+    energy_decomposition: true
+    
+    # Performance
+    use_cache: true
+    parallel_processing: true
+    use_gpu: true
+    gpu_platform: "CUDA"
+
+# =============================================================================
+# TEMPLATE 7: PRODUCTION TEMPLATE (Optimized for Speed)
+# =============================================================================
+production_template:
+  # Input files - UPDATE THESE PATHS
+  input_files:
+    ligand_mol: "path/to/ligand.sdf"
+    complex_pdb: "path/to/complex.pdb"
+    ligand_pdb: "path/to/ligand.pdb"
+    trajectory: "path/to/trajectory.xtc"
+  
+  # Analysis settings
+  analysis_settings:
+    # Core parameters
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    
+    # Frame selection (optimized)
+    max_frames: 50
+    frame_start: 1000                     # Skip equilibration
+    frame_stride: 5                       # Every 5th frame
+    frame_selection: "sequential"
+    
+    # Analysis options (essential only)
+    run_entropy_analysis: false           # Skip entropy (slow)
+    run_per_residue_decomposition: true   # Keep residue analysis
+    decomp_frames: 10
+    energy_decomposition: false
+    
+    # Performance (optimized)
+    use_cache: true
+    parallel_processing: true
+    use_gpu: false
+
+# =============================================================================
+# USAGE INSTRUCTIONS
+# =============================================================================
+# To use these templates:
+#
+# 1. Copy the template you want:
+#    cp config/templates.yaml my_analysis.yaml
+#
+# 2. Edit the file and update:
+#    - File paths in input_files section
+#    - Parameters in analysis_settings section
+#    - Remove unused template sections
+#
+# 3. Run the analysis:
+#    python mmgbsa_runner.py my_analysis.yaml
+#
+# 4. For complete configuration:
+#    python complete_mmgbsa_runner.py my_analysis.yaml
+#
+# Note: These are templates only. All paths and parameters need to be updated. 

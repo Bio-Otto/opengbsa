@@ -1,0 +1,174 @@
+# Frame Selection Test Configurations
+# Demonstrates different frame selection strategies for MM/GBSA analysis
+
+# Configuration 1: Sequential with stride
+sequential_stride:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 50
+    frame_start: 100      # Start from frame 100
+    frame_end: 500        # End at frame 500
+    frame_stride: 5       # Every 5th frame
+    frame_selection: "sequential"
+    random_seed: 42
+    verbose: 1
+    use_cache: true
+    parallel_processing: false
+    energy_decomposition: false
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+
+# Configuration 2: Equidistant selection
+equidistant:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 30        # Select exactly 30 frames
+    frame_start: 50       # Start from frame 50
+    frame_end: 1000       # End at frame 1000
+    frame_stride: null    # Not used in equidistant
+    frame_selection: "equidistant"
+    random_seed: 42
+    verbose: 1
+    use_cache: true
+    parallel_processing: false
+    energy_decomposition: false
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+
+# Configuration 3: Random selection
+random:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 25        # Select 25 random frames
+    frame_start: 200      # Start from frame 200
+    frame_end: 800        # End at frame 800
+    frame_stride: 2       # Only consider every 2nd frame
+    frame_selection: "random"
+    random_seed: 123      # Different seed for reproducibility
+    verbose: 1
+    use_cache: true
+    parallel_processing: false
+    energy_decomposition: false
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+
+# Configuration 4: Full trajectory analysis
+full_trajectory:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: null      # Analyze all frames
+    frame_start: null     # From beginning
+    frame_end: null       # To end
+    frame_stride: 10      # Every 10th frame
+    frame_selection: "sequential"
+    random_seed: 42
+    verbose: 1
+    use_cache: true
+    parallel_processing: false
+    energy_decomposition: false
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+
+# Configuration 5: Production analysis with frame selection
+production:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 100       # Maximum 100 frames
+    frame_start: 1000     # Skip first 1000 frames (equilibration)
+    frame_end: null       # To end
+    frame_stride: 5       # Every 5th frame
+    frame_selection: "sequential"
+    random_seed: 42
+    verbose: 2
+    use_cache: true
+    parallel_processing: true
+    energy_decomposition: true
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 20
+
+  output_settings:
+    output_directory: "mmgbsa_results"
+    save_plots: true
+    save_trajectories: false
+    save_intermediate: true
+    output_format: "csv"
+
+  advanced_settings:
+    minimization_tolerance: 1e-6
+    nma_quality_threshold: "Good"
+    hot_spot_threshold: -1.0
+    bootstrap_confidence: 0.95
+    bootstrap_samples: 1000
+    convergence_window: 10
+
+# Configuration 6: Quick test with minimal frames
+quick_test:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.xtc"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 10        # Only 10 frames for quick test
+    frame_start: 500      # Start from frame 500
+    frame_end: 600        # End at frame 600
+    frame_stride: 10      # Every 10th frame
+    frame_selection: "sequential"
+    random_seed: 42
+    verbose: 1
+    use_cache: true
+    parallel_processing: false
+    energy_decomposition: false
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+
+  output_settings:
+    output_directory: "mmgbsa_results"
+    save_plots: false
+    save_trajectories: false
+    save_intermediate: false 

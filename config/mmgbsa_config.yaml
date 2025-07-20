@@ -1,0 +1,159 @@
+# MM/GBSA Analysis Configuration File
+# This file configures all aspects of the MM/GBSA analysis pipeline
+
+# Input Files Section
+# All file paths should be relative to the current directory or absolute paths
+input_files:
+  # Ligand molecule file (SDF, MOL2, etc.)
+  ligand_mol: "test/ligand.sdf"
+  
+  # Protein-ligand complex structure
+  complex_pdb: "test/complex.pdb"
+  
+  # Isolated ligand structure
+  ligand_pdb: "test/ligand.pdb"
+  
+  # Molecular dynamics trajectory
+  trajectory: "test/complex.dcd"
+  # Alternative trajectory formats: .dcd, .xtc, .trr, .nc
+
+# Analysis Settings Section
+# Core parameters for MM/GBSA calculation
+analysis_settings:
+  # Temperature for calculations (Kelvin)
+  temperature: 300
+  
+  # GB model to use for solvation
+  # Options: OBC2 (recommended), OBC1, HCT, GBn, GBn2
+  gb_model: "OBC2"
+  
+  # Salt concentration (Molar)
+  salt_concentration: 0.15
+  
+  # Frame selection parameters
+  # Maximum number of trajectory frames to analyze
+  # Set to null or 0 to analyze all frames
+  max_frames: null
+  
+  # Frame range selection (optional)
+  # If specified, only frames in this range will be analyzed
+  frame_start: 200  # Start frame (0-indexed), null = from beginning
+  frame_end: 1000    # End frame (0-indexed), null = to end
+  
+  # Frame stride (optional)
+  # If specified, only every Nth frame will be analyzed
+  # Example: stride=2 means frames 0,2,4,6,8...
+  frame_stride: null  # null = analyze all frames, 2 = every 2nd frame
+  
+  # Frame selection method
+  # Options: "sequential", "random", "equidistant"
+  frame_selection: "sequential"  # How to select frames
+  
+  # Random seed for frame selection (if using random method)
+  random_seed: 42
+  
+  # Verbosity level (0=quiet, 1=normal, 2=verbose)
+  verbose: 1
+  
+  # Enable caching for faster repeated runs
+  use_cache: true
+  
+  # Enable parallel processing (experimental)
+  parallel_processing: true
+  
+  # Number of parallel workers (if parallel_processing=true)
+  max_workers: 4  # null = auto-detect
+  
+  # Enable energy decomposition analysis
+  energy_decomposition: true
+  
+  # Enable entropy analysis using normal mode analysis
+  run_entropy_analysis: true
+  
+  # Enable per-residue energy decomposition
+  run_per_residue_decomposition: true
+  
+  # Number of frames for per-residue decomposition (computationally expensive)
+  decomp_frames: 1000
+
+# Output Settings Section
+# Control output files and directories
+output_settings:
+  # Base directory for all output files
+  output_directory: "mmgbsa_results"
+  
+  # Save generated plots
+  save_plots: true
+  
+  # Save processed trajectories
+  save_trajectories: false
+  
+  # Save intermediate files for debugging
+  save_intermediate: false
+  
+  # Output format for results
+  output_format: "csv"  # Options: csv, json, yaml
+
+# Advanced Settings Section
+# Expert-level parameters for fine-tuning
+advanced_settings:
+  # Energy minimization tolerance
+  minimization_tolerance: 1e-6
+  
+  # Normal mode analysis quality threshold
+  # Options: Excellent, Good, Fair, Poor
+  nma_quality_threshold: "Good"
+  
+  # Hot spot identification threshold (kcal/mol)
+  hot_spot_threshold: -1.0
+  
+  # Bootstrap confidence interval (0.95 = 95%)
+  bootstrap_confidence: 0.95
+  
+  # Number of bootstrap samples
+  bootstrap_samples: 1000
+  
+  # Convergence check window size
+  convergence_window: 10
+  
+  # Force field for ligand parameterization
+  ligand_forcefield: "openff-2.1.0.offxml"
+  
+  # Force field for protein parameterization
+  protein_forcefield: "amber14-all.xml"
+
+# Platform Settings Section
+# Hardware and platform-specific settings
+platform_settings:
+  # Preferred platform (CPU, CUDA, OpenCL)
+  preferred_platform: "CUDA"
+  
+  # CUDA device index (if using CUDA)
+  cuda_device: 0
+  
+  # CUDA precision (single, double, mixed)
+  cuda_precision: "double"
+  
+  # Enable deterministic forces
+  deterministic_forces: true
+
+# Validation Settings Section
+# Quality control and validation parameters
+validation_settings:
+  # Enable input file validation
+  validate_inputs: true
+  
+  # Enable result validation
+  validate_results: true
+  
+  # Maximum allowed standard deviation (kcal/mol)
+  max_std_dev: 5.0
+  
+  # Minimum number of successful frames
+  min_successful_frames: 10
+  
+  # Check for energy convergence
+  check_convergence: true
+  
+  # Generate validation report
+  generate_validation_report: true

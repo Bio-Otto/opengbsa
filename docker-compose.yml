@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  mmgbsa:
+    build: .
+    container_name: mmgbsa-analysis
+    volumes:
+      # Mount current directory for input/output
+      - .:/workspace
+      # Mount data directory (optional)
+      - ./data:/workspace/data:ro
+      # Mount results directory
+      - ./results:/workspace/results
+    environment:
+      # OpenMM settings
+      - OPENMM_DEFAULT_PLATFORM=CUDA
+      - CUDA_VISIBLE_DEVICES=0
+      # Python settings
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+    ports:
+      # Jupyter notebook (optional)
+      - "8888:8888"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["python", "mmgbsa_runner.py", "--help"]
+    
+  # CPU-only version (fallback)
+  mmgbsa-cpu:
+    build: .
+    container_name: mmgbsa-analysis-cpu
+    volumes:
+      - .:/workspace
+      - ./data:/workspace/data:ro
+      - ./results:/workspace/results
+    environment:
+      - OPENMM_DEFAULT_PLATFORM=CPU
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+    ports:
+      - "8889:8888"
+    command: ["python", "mmgbsa_runner.py", "--help"]
+    
+  # Jupyter notebook service
+  mmgbsa-jupyter:
+    build: .
+    container_name: mmgbsa-jupyter
+    volumes:
+      - .:/workspace
+      - ./data:/workspace/data:ro
+      - ./results:/workspace/results
+    environment:
+      - OPENMM_DEFAULT_PLATFORM=CUDA
+      - CUDA_VISIBLE_DEVICES=0
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+    ports:
+      - "8890:8888"
+    command: ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
+
+networks:
+  default:
+    name: mmgbsa-network 

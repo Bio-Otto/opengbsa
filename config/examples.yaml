@@ -1,0 +1,263 @@
+# MM/GBSA Configuration Examples
+# This file contains example configurations for different use cases
+
+# =============================================================================
+# EXAMPLE 1: QUICK ANALYSIS (Fast, Basic)
+# =============================================================================
+quick_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 20
+    frame_start: 500
+    frame_stride: 10
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+    use_cache: true
+    parallel_processing: false
+
+# =============================================================================
+# EXAMPLE 2: PRODUCTION ANALYSIS (Balanced)
+# =============================================================================
+production_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 50
+    frame_start: 1000
+    frame_end: null
+    frame_stride: 5
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    energy_decomposition: false
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# EXAMPLE 3: RESEARCH ANALYSIS (Comprehensive)
+# =============================================================================
+research_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 100
+    frame_start: 500
+    frame_end: null
+    frame_stride: 2
+    frame_selection: "equidistant"
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 20
+    energy_decomposition: true
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# EXAMPLE 4: GPU ACCELERATED ANALYSIS
+# =============================================================================
+gpu_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 200
+    frame_start: 1000
+    frame_stride: 1
+    frame_selection: "sequential"
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 50
+    energy_decomposition: true
+    use_cache: true
+    parallel_processing: true
+    use_gpu: true
+    gpu_platform: "CUDA"
+
+# =============================================================================
+# EXAMPLE 5: MINIMAL ANALYSIS (Debug/Test)
+# =============================================================================
+minimal_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 5
+    frame_start: 100
+    frame_stride: 20
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: false
+    use_cache: false
+    parallel_processing: false
+
+# =============================================================================
+# EXAMPLE 6: DIFFERENT GB MODELS
+# =============================================================================
+obc1_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC1"  # Different GB model
+    salt_concentration: 0.15
+    max_frames: 50
+    frame_start: 500
+    frame_stride: 5
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    use_cache: true
+    parallel_processing: true
+
+hct_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "HCT"  # HCT GB model
+    salt_concentration: 0.15
+    max_frames: 50
+    frame_start: 500
+    frame_stride: 5
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# EXAMPLE 7: RANDOM FRAME SELECTION
+# =============================================================================
+random_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 30
+    frame_start: 100
+    frame_end: 1000
+    frame_stride: null
+    frame_selection: "random"  # Random frame selection
+    random_seed: 42  # For reproducibility
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# EXAMPLE 8: HIGH TEMPERATURE ANALYSIS
+# =============================================================================
+high_temp_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 350  # Higher temperature
+    gb_model: "OBC2"
+    salt_concentration: 0.15
+    max_frames: 50
+    frame_start: 500
+    frame_stride: 5
+    frame_selection: "sequential"
+    run_entropy_analysis: true
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# EXAMPLE 9: HIGH SALT CONCENTRATION
+# =============================================================================
+high_salt_analysis:
+  input_files:
+    ligand_mol: "test/ligand.sdf"
+    complex_pdb: "test/complex.pdb"
+    ligand_pdb: "test/ligand.pdb"
+    trajectory: "test/complex.dcd"
+  
+  analysis_settings:
+    temperature: 300
+    gb_model: "OBC2"
+    salt_concentration: 0.5  # Higher salt concentration
+    max_frames: 50
+    frame_start: 500
+    frame_stride: 5
+    frame_selection: "sequential"
+    run_entropy_analysis: false
+    run_per_residue_decomposition: true
+    decomp_frames: 10
+    use_cache: true
+    parallel_processing: true
+
+# =============================================================================
+# USAGE INSTRUCTIONS
+# =============================================================================
+# To use these examples:
+#
+# 1. Copy the desired configuration to a new file:
+#    cp config/examples.yaml my_config.yaml
+#
+# 2. Extract the specific example you want:
+#    # Extract quick_analysis section
+#    sed -n '/quick_analysis:/,/^[a-z]/p' config/examples.yaml > quick.yaml
+#
+# 3. Use with the runner:
+#    python mmgbsa_runner.py quick.yaml
+#
+# Note: These are examples only. Modify file paths and parameters as needed. 
