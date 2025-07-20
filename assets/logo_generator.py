@@ -14,16 +14,14 @@ import os
 def create_svg_logo():
     """Create simple SVG logo for OpenGBSA"""
     
-    # Create figure with clean background
+    # Create figure with transparent background
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.set_xlim(0, 8)
     ax.set_ylim(0, 4)
     ax.set_aspect('equal')
     ax.axis('off')
     
-    # Simple background
-    rect = Rectangle((0, 0), 8, 4, facecolor='#1a1a1a', edgecolor='none')
-    ax.add_patch(rect)
+    # No background - transparent
     
     # Simple molecular representation - just a clean line
     x_line = np.linspace(1, 7, 30)
@@ -39,12 +37,12 @@ def create_svg_logo():
                           facecolor='#2196F3', edgecolor='none')
             ax.add_patch(circle)
     
-    # Simple text
-    ax.text(4, 3.2, 'OpenGBSA', fontsize=20, color='#FFFFFF', 
+    # Simple text with black color
+    ax.text(4, 3.2, 'OpenGBSA', fontsize=20, color='#000000', 
             weight='bold', ha='center', family='sans-serif')
     
-    # Simple subtitle
-    ax.text(4, 0.8, 'MM/GBSA Analysis', fontsize=10, color='#BDBDBD', 
+    # Simple subtitle with black color
+    ax.text(4, 0.8, 'MM/GBSA Analysis', fontsize=10, color='#333333', 
             ha='center', family='sans-serif')
     
     # Save as SVG
@@ -57,16 +55,14 @@ def create_svg_logo():
 def create_png_logo():
     """Create simple PNG logo for OpenGBSA"""
     
-    # Create figure with clean design
+    # Create figure with transparent background
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 5)
     ax.set_aspect('equal')
     ax.axis('off')
     
-    # Simple background
-    rect = Rectangle((0, 0), 10, 5, facecolor='#1a1a1a', edgecolor='none')
-    ax.add_patch(rect)
+    # No background - transparent
     
     # Simple molecular representation
     x_line = np.linspace(1.5, 8.5, 40)
@@ -82,12 +78,12 @@ def create_png_logo():
                           facecolor='#2196F3', edgecolor='none')
             ax.add_patch(circle)
     
-    # Simple text
-    ax.text(5, 3.8, 'OpenGBSA', fontsize=28, color='#FFFFFF', 
+    # Simple text with black color
+    ax.text(5, 3.8, 'OpenGBSA', fontsize=28, color='#000000', 
             weight='bold', ha='center', family='sans-serif')
     
-    # Simple subtitle
-    ax.text(5, 1.2, 'MM/GBSA Analysis', fontsize=12, color='#BDBDBD', 
+    # Simple subtitle with black color
+    ax.text(5, 1.2, 'MM/GBSA Analysis', fontsize=12, color='#333333', 
             ha='center', family='sans-serif')
     
     # Save as PNG
@@ -100,9 +96,9 @@ def create_png_logo():
 def create_simple_logo():
     """Create a very simple text-based logo"""
     
-    # Create image with simple background
+    # Create image with transparent background
     width, height = 800, 200
-    img = Image.new('RGBA', (width, height), (26, 26, 26, 255))  # Dark background
+    img = Image.new('RGBA', (width, height), (0, 0, 0, 0))  # Transparent background
     draw = ImageDraw.Draw(img)
     
     try:
@@ -112,7 +108,7 @@ def create_simple_logo():
         font_large = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
-    # Draw simple OpenGBSA text
+    # Draw simple OpenGBSA text with black color
     text = "OpenGBSA"
     bbox = draw.textbbox((0, 0), text, font=font_large)
     text_width = bbox[2] - bbox[0]
@@ -121,9 +117,9 @@ def create_simple_logo():
     x = (width - text_width) // 2
     y = (height - text_height) // 2 - 20
     
-    draw.text((x, y), text, font=font_large, fill=(255, 255, 255, 255))
+    draw.text((x, y), text, font=font_large, fill=(0, 0, 0, 255))  # Black text
     
-    # Simple subtitle
+    # Simple subtitle with dark gray color
     subtitle = "MM/GBSA Analysis"
     bbox_sub = draw.textbbox((0, 0), subtitle, font=font_small)
     sub_width = bbox_sub[2] - bbox_sub[0]
@@ -131,7 +127,7 @@ def create_simple_logo():
     x_sub = (width - sub_width) // 2
     y_sub = y + text_height + 10
     
-    draw.text((x_sub, y_sub), subtitle, font=font_small, fill=(189, 189, 189, 255))
+    draw.text((x_sub, y_sub), subtitle, font=font_small, fill=(51, 51, 51, 255))  # Dark gray
     
     # Save
     img.save('logo_simple.png', 'PNG')
@@ -154,7 +150,7 @@ def create_github_banner():
         font_medium = ImageFont.load_default()
         font_small = ImageFont.load_default()
     
-    # Draw simple OpenGBSA text
+    # Draw simple OpenGBSA text with white color (for dark background)
     text = "OpenGBSA"
     bbox = draw.textbbox((0, 0), text, font=font_large)
     text_width = bbox[2] - bbox[0]
@@ -163,7 +159,7 @@ def create_github_banner():
     x = (width - text_width) // 2
     y = (height - text_height) // 2 - 60
     
-    draw.text((x, y), text, font=font_large, fill=(255, 255, 255, 255))
+    draw.text((x, y), text, font=font_large, fill=(255, 255, 255, 255))  # White text for dark background
     
     # Simple subtitle
     subtitle = "Molecular Mechanics / Generalized Born Surface Area Analysis"
