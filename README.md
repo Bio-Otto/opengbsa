@@ -1,8 +1,6 @@
 <div align="center">
   <img src="assets/original_logo.png" alt="OpenGBSA Logo" width="400"/>
   
-  # OpenGBSA
-  
   **Molecular Mechanics / Generalized Born Surface Area Analysis**
   
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -13,7 +11,7 @@
 
 A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) analysis package with advanced features including entropy analysis, per-residue decomposition, and YAML-based configuration.
 
-**GitHub**: https://github.com/halilibrahimozdemir/opengbsa
+**GitHub**: https://github.com/Bio-Otto/opengbsa
 
 ## 🚀 Features
 
@@ -60,14 +58,14 @@ docker pull mmgbsa/analysis:latest
 
 ### 1. Create Configuration File
 ```bash
-python mmgbsa_runner.py --create-config
+python mmgbsa_cli.py --create-config
 ```
 
 This creates a sample `mmgbsa_config.yaml` file. Edit it with your specific parameters.
 
 ### 2. Run Analysis
 ```bash
-python mmgbsa_runner.py mmgbsa_config.yaml
+python mmgbsa_cli.py mmgbsa_config.yaml
 ```
 
 ### 3. View Results
@@ -96,10 +94,10 @@ For full control and reproducibility, use the complete configuration file:
 
 ```bash
 # Create complete configuration
-python complete_mmgbsa_runner.py --create-config
+python mmgbsa_cli.py --create-complete-config
 
 # Run with complete configuration
-python complete_mmgbsa_runner.py complete_mmgbsa_config.yaml
+python mmgbsa_cli.py complete_mmgbsa_config.yaml
 ```
 
 The complete configuration includes all parameters with alternatives in comments.
@@ -151,10 +149,10 @@ For full control and reproducibility, use the complete configuration:
 
 ```bash
 # Create complete configuration
-python complete_mmgbsa_runner.py --create-config
+python mmgbsa_cli.py --create-complete-config
 
 # Run with complete configuration
-python complete_mmgbsa_runner.py complete_mmgbsa_config.yaml
+python mmgbsa_cli.py complete_mmgbsa_config.yaml
 ```
 
 The complete configuration includes all parameters with alternatives in comments.
