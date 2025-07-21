@@ -43,7 +43,7 @@ class CompleteMMGBSARunner:
         Initialize runner with comprehensive YAML configuration
         
         Parameters:
-        -----------
+        -----------conda
         config_file : str or dict
             Path to comprehensive YAML configuration file or config dictionary
         output_dir : str, optional
@@ -542,7 +542,7 @@ class CompleteMMGBSARunner:
         try:
             report_file = self.output_dir / 'reports' / 'final_report.txt'
             
-            with open(report_file, 'w') as f:
+            with open(report_file, 'w', encoding='utf-8') as f:
                 f.write("COMPLETE MM/GBSA ANALYSIS FINAL REPORT\n")
                 f.write("=" * 60 + "\n\n")
                 
@@ -602,17 +602,17 @@ class CompleteMMGBSARunner:
         try:
             # Save results in YAML format
             results_file = self.output_dir / 'data' / 'results_summary.yaml'
-            with open(results_file, 'w') as f:
+            with open(results_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.results, f, default_flow_style=False, indent=2)
             
             # Save results in JSON format
             json_file = self.output_dir / 'data' / 'results_summary.json'
-            with open(json_file, 'w') as f:
+            with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(self.results, f, indent=2)
             
             # Save configuration used
             config_file = self.output_dir / 'data' / 'analysis_config.yaml'
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.config, f, default_flow_style=False, indent=2)
             
             print(f"Results saved in multiple formats:")

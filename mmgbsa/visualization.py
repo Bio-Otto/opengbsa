@@ -1971,23 +1971,23 @@ class AdvancedVisualization:
         # Save interaction data
         if self.interaction_data:
             interaction_file = self.output_dir / "interaction_analysis.json"
-            with open(interaction_file, 'w') as f:
+            with open(interaction_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     'interaction_frequencies': self.interaction_data['interaction_frequencies'].to_dict('records'),
                     'n_frames': self.interaction_data['n_frames'],
                     'ligand_resname': self.interaction_data['ligand_resname'],
                     'ligand_atoms': self.interaction_data['ligand_atoms']
-                }, f, indent=2)
+                }, f, indent=2, ensure_ascii=False)
         
         # Save comparison data
         if self.comparison_data:
             comparison_file = self.output_dir / "comparison_analysis.json"
-            with open(comparison_file, 'w') as f:
+            with open(comparison_file, 'w', encoding='utf-8') as f:
                 json.dump({
                     'comparison_data': self.comparison_data['comparison_df'].to_dict('records'),
                     'correlations': self.comparison_data['correlations'],
                     'n_residues_compared': self.comparison_data['n_residues_compared']
-                }, f, indent=2)
+                }, f, indent=2, ensure_ascii=False)
         
         # Save summary
         summary = {
@@ -1999,8 +1999,8 @@ class AdvancedVisualization:
         }
         
         summary_file = self.output_dir / "analysis_summary.json"
-        with open(summary_file, 'w') as f:
-            json.dump(summary, f, indent=2)
+        with open(summary_file, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
         
         print(f"  ✅ Results saved to {self.output_dir}")
 

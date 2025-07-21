@@ -383,7 +383,7 @@ class MMGBSARunner:
         try:
             report_file = output_dir / "final_report.txt"
             
-            with open(report_file, 'w') as f:
+            with open(report_file, 'w', encoding='utf-8') as f:
                 f.write("MM/GBSA ANALYSIS FINAL REPORT\n")
                 f.write("=" * 50 + "\n\n")
                 
@@ -427,12 +427,12 @@ class MMGBSARunner:
         try:
             # Save configuration
             config_file = output_dir / "analysis_config.yaml"
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.config, f, default_flow_style=False, indent=2)
             
             # Save results summary
             results_file = output_dir / "results_summary.yaml"
-            with open(results_file, 'w') as f:
+            with open(results_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.results, f, default_flow_style=False, indent=2)
             
             print(f"✅ Configuration saved: {config_file}")
@@ -491,7 +491,7 @@ def main():
     if args.create_config:
         # Create sample configuration
         sample_config = create_sample_config()
-        with open(args.config_name, 'w') as f:
+        with open(args.config_name, 'w', encoding='utf-8') as f:
             yaml.dump(sample_config, f, default_flow_style=False, indent=2)
         print(f"✅ Sample configuration created: {args.config_name}")
         print("Edit this file with your specific parameters and run:")

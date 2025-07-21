@@ -843,9 +843,9 @@ class PerResidueDecomposition:
             
             if output_dir:
                 # Save to output directory
-                df.to_csv(os.path.join(output_dir, 'per_residue_detailed.csv'), index=False)
-                hot_spots.to_csv(os.path.join(output_dir, 'binding_hot_spots.csv'), index=False)
-                summary_df.to_csv(os.path.join(output_dir, 'decomposition_summary.csv'), index=False)
+                df.to_csv(os.path.join(output_dir, 'per_residue_detailed.csv'), index=False, encoding='utf-8')
+                hot_spots.to_csv(os.path.join(output_dir, 'binding_hot_spots.csv'), index=False, encoding='utf-8')
+                summary_df.to_csv(os.path.join(output_dir, 'decomposition_summary.csv'), index=False, encoding='utf-8')
                 
                 print(f"Results saved to {output_dir}:")
                 print(f"    • per_residue_detailed.csv")
@@ -865,9 +865,9 @@ class PerResidueDecomposition:
                 print(f"    • per_residue_decomposition.png")
             else:
                 # Save to current directory
-                df.to_csv('per_residue_detailed.csv', index=False)
-                hot_spots.to_csv('binding_hot_spots.csv', index=False)
-                summary_df.to_csv('decomposition_summary.csv', index=False)
+                df.to_csv('per_residue_detailed.csv', index=False, encoding='utf-8')
+                hot_spots.to_csv('binding_hot_spots.csv', index=False, encoding='utf-8')
+                summary_df.to_csv('decomposition_summary.csv', index=False, encoding='utf-8')
                 
                 print(f"Results saved:")
                 print(f"    • per_residue_detailed.csv")
@@ -934,14 +934,14 @@ class PerResidueDecomposition:
             
             # Save based on format
             if frame_output_format == 'csv':
-                df.to_csv(output_path, index=False)
+                df.to_csv(output_path, index=False, encoding='utf-8')
             elif frame_output_format == 'json':
-                df.to_json(output_path, orient='records', indent=2)
+                df.to_json(output_path, orient='records', indent=2, force_ascii=False)
             elif frame_output_format == 'hdf5':
                 df.to_hdf(output_path, key='frame_decomposition', mode='w')
             else:
                 # Default to CSV
-                df.to_csv(output_path, index=False)
+                df.to_csv(output_path, index=False, encoding='utf-8')
             
             print(f"Frame-by-frame decomposition saved: {output_path}")
             print(f"    • {len(df)} frames")

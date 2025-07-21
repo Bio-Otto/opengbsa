@@ -857,7 +857,7 @@ class FixedEnhancedTrueForceFieldMMGBSA:
         
         # Generate report
         report_path = output_dir / 'mmgbsa_report.txt'
-        with open(report_path, 'w') as f:
+        with open(report_path, 'w', encoding='utf-8') as f:
             f.write("Fixed Enhanced MM/GBSA Analysis Report\n")
             f.write("=" * 50 + "\n\n")
             
