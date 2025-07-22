@@ -10,29 +10,16 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from ._version import __version__, __author__, __email__, __link__, __license__
+
 try:
-    from . import __version__, __author__, __email__
     from .config import ConfigManager
     from .runner import MMGBSARunner
     from .complete_runner import CompleteMMGBSARunner
     from .utils import setup_logging, create_output_directory, check_dependencies
 except ImportError:
     # Fallback for direct execution
-    __version__ = "0.0.2"
-    __author__ = "H. Ibrahim Özdemir"
-    __email__ = "halil.ibrahim.oozdemir@gmail.com"
-    __link__ = "https://github.com/bio-otto/opengbsa"
-    __license__ = "MIT"
-    
-    # Import modules directly
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    
-    from mmgbsa.config import ConfigManager
-    from mmgbsa.runner import MMGBSARunner
-    from mmgbsa.complete_runner import CompleteMMGBSARunner
-    from mmgbsa.utils import setup_logging, create_output_directory, check_dependencies
+    pass
 
 def create_parser() -> argparse.ArgumentParser:
     """Create command line argument parser."""

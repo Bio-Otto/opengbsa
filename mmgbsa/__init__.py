@@ -10,10 +10,7 @@ License: MIT
 Version: 0.0.2
 """
 
-__version__ = "0.0.2"
-__author__ = "H. Ibrahim Özdemir"
-__email__ = "halil.ibrahim.oozdemir@gmail.com"
-__license__ = "MIT"
+from ._version import __version__, __author__, __email__, __link__, __license__
 
 # Core modules
 from .runner import MMGBSARunner

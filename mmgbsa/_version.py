@@ -1,0 +1,5 @@
+__version__ = "0.0.2"
+__author__ = "H. Ibrahim Özdemir"
+__email__ = "halil.ibrahim.oozdemir@gmail.com"
+__link__ = "https://github.com/bio-otto/opengbsa"
+__license__ = "MIT" 
