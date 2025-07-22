@@ -21,6 +21,8 @@ except ImportError:
     __version__ = "0.0.2"
     __author__ = "H. Ibrahim Özdemir"
     __email__ = "halil.ibrahim.oozdemir@gmail.com"
+    __link__ = "https://github.com/bio-otto/opengbsa"
+    __license__ = "MIT"
     
     # Import modules directly
     import sys
@@ -214,8 +216,8 @@ def show_version():
     print(f"MM/GBSA Analysis Package v{__version__}")
     print(f"Author: {__author__}")
     print(f"Email: {__email__}")
-    print(f"License: MIT")
-    print(f"GitHub: https://github.com/halilibrahimozdemir/mmgbsa")
+    print(f"License: {__license__}")
+    print(f"GitHub: {__link__}")
 
 def main():
     """Main CLI function."""
