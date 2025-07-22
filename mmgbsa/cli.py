@@ -18,7 +18,7 @@ try:
     from .utils import setup_logging, create_output_directory, check_dependencies
 except ImportError:
     # Fallback for direct execution
-    __version__ = "0.0.1"
+    __version__ = "0.0.2"
     __author__ = "H. Ibrahim Özdemir"
     __email__ = "halil.ibrahim.oozdemir@gmail.com"
     
