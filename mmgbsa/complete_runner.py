@@ -97,34 +97,26 @@ class CompleteMMGBSARunner:
         """Setup comprehensive output directory structure"""
         if self.output_dir is None:
             output_settings = self.config['output_settings']
-            
             # Create main output directory
             main_dir = Path(output_settings.get('output_directory', 'mmgbsa_results'))
             main_dir.mkdir(parents=True, exist_ok=True)
-            
             # Create analysis-specific subdirectory
             analysis_name = output_settings.get('analysis_name', 'analysis')
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
             if self.config.get('reproducibility_settings', {}).get('include_timestamp', True):
                 analysis_dir = main_dir / f"{analysis_name}_{timestamp}"
             else:
                 analysis_dir = main_dir / analysis_name
-            
             self.output_dir = analysis_dir
         else:
             # Use provided output directory
             analysis_dir = Path(self.output_dir)
-        
         analysis_dir.mkdir(parents=True, exist_ok=True)
-        
         # Create subdirectories
         subdirs = ['plots', 'data', 'logs', 'reports', 'cache', 'debug']
         for subdir in subdirs:
             (analysis_dir / subdir).mkdir(exist_ok=True)
-        
         print(f"Output directory: {self.output_dir}")
-        
         return analysis_dir
     
     def _save_environment_info(self):

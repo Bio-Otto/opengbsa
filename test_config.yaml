@@ -1,0 +1,25 @@
+advanced_settings:
+  hot_spot_threshold: -1.0
+  minimization_tolerance: 1.0e-06
+  nma_quality_threshold: Good
+analysis_settings:
+  decomp_frames: 10
+  energy_decomposition: false
+  gb_model: OBC2
+  max_frames: 50
+  parallel_processing: false
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+  salt_concentration: 0.15
+  temperature: 300
+  use_cache: true
+  verbose: 1
+input_files:
+  complex_pdb: test/complex.pdb
+  ligand_mol: test/ligand.sdf
+  ligand_pdb: test/ligand.pdb
+  trajectory: test/complex.xtc
+output_settings:
+  output_directory: mmgbsa_results
+  save_plots: true
+  save_trajectories: false

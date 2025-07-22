@@ -91,7 +91,7 @@ def create_svg_logo():
     
     # Deep matte black background
     rect = Rectangle((0, 0), 8, 8, facecolor='#0A0A0A', edgecolor='none')
-    ax.add_patch(rect)
+        ax.add_patch(rect)
     
     # Faint hexagonal grid
     create_hexagonal_grid(ax, 0, 8, 0, 8, hex_size=0.4, alpha=0.05)
@@ -151,7 +151,7 @@ def create_png_logo():
     
     # Deep matte black background
     rect = Rectangle((0, 0), 10, 10, facecolor='#0A0A0A', edgecolor='none')
-    ax.add_patch(rect)
+        ax.add_patch(rect)
     
     # Faint hexagonal grid
     create_hexagonal_grid(ax, 0, 10, 0, 10, hex_size=0.5, alpha=0.05)

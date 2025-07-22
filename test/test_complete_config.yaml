@@ -61,7 +61,7 @@ input_files:
 output_settings:
   analysis_name: sample_analysis
   compress_output: false
-  output_directory: mmgbsa_results_v0.0.4
+  output_directory: mmgbsa_results_v0.0.1
   output_formats:
   - csv
   - txt
