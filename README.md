@@ -16,10 +16,11 @@ A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) anal
 ## 🚀 Features
 
 - **Multiple GB Models**: OBC2, OBC1, HCT, GBn, GBn2
-- **Normal Mode Analysis**: Entropy calculations with ultra-robust minimization
+- **Entropy Analysis**: Normal Mode Analysis (NMA) and Quasi-Harmonic Analysis (QHA)
 - **Per-Residue Decomposition**: Detailed residue-ligand interaction analysis
+- **Professional Logging**: Color-coded, icon-enhanced command line output
 - **YAML Configuration**: Single configuration file for all parameters
-- **Advanced Validation**: Input validation and result quality checks
+- **Advanced Validation**: Input validation, Mol2 auto-conversion, and result quality checks
 - **Parallel Processing**: Multi-core support for faster analysis
 - **Caching System**: Reuse prepared systems for efficiency
 - **Comprehensive Reporting**: Detailed analysis reports with plots
@@ -29,6 +30,7 @@ A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) anal
 - Python 3.8+
 - OpenMM 8.0+
 - CUDA support (optional, for GPU acceleration)
+- MDTraj, OpenFF-Toolkit, RDKit, Pandas, NumPy
 
 ## 🛠️ Installation
 
@@ -44,7 +46,7 @@ conda create -n mmgbsa python=3.9
 conda activate mmgbsa
 
 # Install dependencies
-conda install -c conda-forge openmm mdtraj openff-toolkit
+conda install -c conda-forge openmm mdtraj openff-toolkit rdkit
 pip install -r requirements.txt
 ```
 
@@ -127,7 +129,9 @@ analysis_settings:
 ### Advanced Features
 ```yaml
 analysis_settings:
+  entropy_method: "interaction"      # "interaction", "quasiharmonic", "normal_mode"
   run_entropy_analysis: true         # Enable entropy calculation
+  qha_analyze_complex: true          # Use full Delta S = S_complex - S_protein - S_ligand
   run_per_residue_decomposition: true # Enable per-residue analysis
   decomp_frames: 10                  # Frames for decomposition
   energy_decomposition: false        # Energy component analysis
@@ -173,6 +177,7 @@ analysis_settings:
 ```yaml
 analysis_settings:
   max_frames: 100
+  entropy_method: "quasiharmonic"
   run_entropy_analysis: true
   run_per_residue_decomposition: true
   decomp_frames: 20
@@ -200,7 +205,10 @@ analysis_settings:
 Calculates binding free energy using molecular mechanics and implicit solvation.
 
 ### 2. Entropy Analysis
-Uses normal mode analysis to calculate vibrational entropy contributions.
+Calculates entropic contributions using one of three methods:
+- **Interaction Entropy (IE)**: Fast, suitable for large systems.
+- **Normal Mode Analysis (NMA)**: Rigorous, computationally expensive.
+- **Quasi-Harmonic Analysis (QHA)**: Derived from covariance matrix of fluctuations.
 
 ### 3. Per-Residue Decomposition
 Identifies which protein residues contribute most to binding.
@@ -254,6 +262,15 @@ frame_selection: "sequential"
 - **`per_residue_contributions.csv`**: Per-residue energy contributions
 - **`hot_spots.csv`**: Identified binding hot spots
 
+## 🧪 Testing
+
+OpenGBSA comes with a comprehensive test suite.
+
+```bash
+# Run the verification test script
+python test/run_analysis_test.py test/configs/verification_test.yaml
+```
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -284,18 +301,18 @@ The package includes comprehensive validation:
 ### Command Line Options
 ```bash
 # Create sample configuration
-python mmgbsa_runner.py --create-config
+python mmgbsa_cli.py --create-config
 
 # Create custom named configuration
-python mmgbsa_runner.py --create-config --config-name my_config.yaml
+python mmgbsa_cli.py --create-config --config-name my_config.yaml
 
 # Run with specific configuration
-python mmgbsa_runner.py my_config.yaml
+python mmgbsa_cli.py my_config.yaml
 ```
 
 ### Programmatic Usage
 ```python
-from mmgbsa_runner import MMGBSARunner
+from mmgbsa.runner import MMGBSARunner
 
 # Create runner
 runner = MMGBSARunner('config.yaml')
@@ -304,7 +321,7 @@ runner = MMGBSARunner('config.yaml')
 results = runner.run_analysis()
 
 # Access results
-binding_energy = results['mmgbsa']['mean_binding_energy']
+binding_energy = results['mean_binding_energy']
 ```
 
 ## 📚 API Reference
@@ -351,6 +368,7 @@ For issues and questions:
 
 ## 🔄 Version History
 
+- **v0.0.5**: Logging overhaul, Test reorganization, Configurable Entropy (NMA/QHA/IE), Mol2 fixes
 - **v0.0.4**: YAML configuration system, comprehensive runner
 - **v0.0.3**: Per-residue decomposition, hot spot identification
 - **v0.0.2**: Entropy analysis, ultra-robust NMA
