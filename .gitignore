@@ -223,3 +223,6 @@ Thumbs.db
 *.bak
 *.backup
 *~ 
+# Exclude installer and root CSVs
+miniconda.sh
+*.csv

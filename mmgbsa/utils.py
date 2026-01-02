@@ -422,4 +422,144 @@ def estimate_computation_time(n_atoms: int, n_frames: int, gb_model: str = "OBC2
     gb_factor = gb_factors.get(gb_model, 1.0)
     
     estimated_time = base_time_per_frame * n_frames * atom_factor * gb_factor
-    return estimated_time 
+    return estimated_time
+
+def convert_mol2_to_sdf(mol2_path: str, sdf_path: str) -> bool:
+    """
+    Convert a Mol2 file to SDF using manual parsing and RDKit reconstruction.
+    This bypasses RDKit's strict Mol2 parser and OpenFF's implicit protonation issues.
+    
+    Args:
+        mol2_path: Path to input Mol2 file
+        sdf_path: Path to output SDF file
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    import logging
+    from rdkit import Chem
+    
+    logger = logging.getLogger(__name__)
+    
+    try:
+        def parse_mol2_atom_line(line):
+            parts = line.split()
+            # atom_id, name, x, y, z, Type, ...
+            # Mol2 format usually: atom_id atom_name x y z atom_type [subst_id [subst_name [charge [status_bit]]]]
+            atom_id = int(parts[0])
+            name = parts[1]
+            x = float(parts[2])
+            y = float(parts[3])
+            z = float(parts[4])
+            atom_type = parts[5]
+            # Infer element from name or type
+            # Simple heuristic: First one or two chars of type (e.g., C.3 -> C, N.ar -> N)
+            symbol = atom_type.split('.')[0]
+            # Handle numbers in symbol if any (rare in Mol2 types but possible)
+            symbol = ''.join([c for c in symbol if c.isalpha()])
+            return atom_id, symbol, (x, y, z)
+
+        def parse_mol2_bond_line(line):
+            parts = line.split()
+            # bond_id, atom1, atom2, type
+            atom1 = int(parts[1])
+            atom2 = int(parts[2])
+            bond_type_str = parts[3]
+            
+            if bond_type_str == '1':
+                btype = Chem.BondType.SINGLE
+            elif bond_type_str == '2':
+                btype = Chem.BondType.DOUBLE
+            elif bond_type_str == '3':
+                btype = Chem.BondType.TRIPLE
+            elif bond_type_str == 'ar':
+                btype = Chem.BondType.AROMATIC
+            elif bond_type_str == 'am': # Amide
+                btype = Chem.BondType.SINGLE # Treat amide as single for now, RDKit handles resonance
+            else:
+                btype = Chem.BondType.SINGLE
+                
+            return atom1, atom2, btype
+
+        with open(mol2_path, 'r') as f:
+            lines = f.readlines()
+
+        atoms = {}
+        bonds = []
+        
+        section = None
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            if line.startswith('@<TRIPOS>'):
+                section = line
+                continue
+                
+            if section == '@<TRIPOS>ATOM':
+                try:
+                    atom_id, symbol, coords = parse_mol2_atom_line(line)
+                    atoms[atom_id] = (symbol, coords)
+                except (ValueError, IndexError):
+                    continue
+            elif section == '@<TRIPOS>BOND':
+                try:
+                    bonds.append(parse_mol2_bond_line(line))
+                except (ValueError, IndexError):
+                    continue
+
+        if not atoms:
+            logger.error(f"No atoms found in {mol2_path}")
+            return False
+
+        # Build RDKit Mol
+        mw = Chem.RWMol()
+        atom_mapping = {} # Mol2 ID -> RDKit Index
+        
+        sorted_ids = sorted(atoms.keys())
+        for aid in sorted_ids:
+            symbol, coords = atoms[aid]
+            a = Chem.Atom(symbol)
+            idx = mw.AddAtom(a)
+            atom_mapping[aid] = idx
+
+        # Add bonds
+        for a1, a2, btype in bonds:
+            if a1 in atom_mapping and a2 in atom_mapping:
+                idx1 = atom_mapping[a1]
+                idx2 = atom_mapping[a2]
+                mw.AddBond(idx1, idx2, btype)
+
+        mol = mw.GetMol()
+        
+        # Add Conformer
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for aid in sorted_ids:
+            idx = atom_mapping[aid]
+            coords = atoms[aid][1]
+            conf.SetAtomPosition(idx, coords)
+        mol.AddConformer(conf)
+        
+        try:
+            Chem.SanitizeMol(mol)
+        except Exception as e:
+            logger.warning(f"Sanitization warning during Mol2 conversion: {e}")
+            # Continue anyway, as we want to preserve atom count
+        
+        writer = Chem.SDWriter(sdf_path)
+        # We might want to set Kekulize to False if aromaticity is tricky, 
+        # but usually it's better to let RDKit try unless it fails.
+        # If previous manual tests showed failure, we can set False.
+        # But let's try default first, catching exception if needed.
+        try:
+            writer.write(mol)
+        except Exception:
+             writer.SetKekulize(False)
+             writer.write(mol)
+             
+        writer.close()
+        logger.info(f"Successfully converted {mol2_path} to {sdf_path} ({mol.GetNumAtoms()} atoms)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error converting Mol2 to SDF: {e}")
+        return False 

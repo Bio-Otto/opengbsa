@@ -111,6 +111,7 @@ class CompleteMMGBSARunner:
         else:
             # Use provided output directory
             analysis_dir = Path(self.output_dir)
+            self.output_dir = analysis_dir
         analysis_dir.mkdir(parents=True, exist_ok=True)
         # Create subdirectories
         subdirs = ['plots', 'data', 'logs', 'reports', 'cache', 'debug']
@@ -207,7 +208,8 @@ class CompleteMMGBSARunner:
             'salt_concentration': analysis_settings.get('salt_concentration', 0.15),
             'use_cache': analysis_settings.get('use_cache', True),
             'parallel_processing': analysis_settings.get('parallel_processing', False),
-            'max_workers': analysis_settings.get('max_workers', None)
+            'max_workers': analysis_settings.get('max_workers', None),
+            'protein_forcefield': forcefield_settings.get('protein_forcefield', 'amber')
         }
         
         if OPENMM_AVAILABLE:

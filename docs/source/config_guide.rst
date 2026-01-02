@@ -33,7 +33,8 @@ Example: Minimal Complete YAML
      gb_model: "OBC2"
      max_frames: 50
      run_per_residue_decomposition: false
-     run_entropy_analysis: false
+     run_entropy_analysis: true
+     entropy_method: "interaction"
 
    output_settings:
      output_directory: "mmgbsa_results"
@@ -56,6 +57,7 @@ analysis_settings
 - ``run_per_residue_decomposition``: Enable per-residue decomposition (true/false)
 - ``decomp_frames``: Number of frames for decomposition (optional)
 - ``run_entropy_analysis``: Enable entropy analysis (true/false)
+- ``entropy_method``: Method for entropy calculation ('interaction', 'quasiharmonic', 'normal_mode')
 - ``save_frame_by_frame_csv``: Save frame-by-frame decomposition (true/false)
 - ``frame_output_format``: 'csv', 'json', or 'hdf5'
 - ``random_seed``: Random seed for reproducibility

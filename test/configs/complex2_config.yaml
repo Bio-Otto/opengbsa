@@ -1,0 +1,21 @@
+input_files:
+  ligand_mol: analysis_6xj3/ligand.sdf
+  complex_pdb: analysis_6xj3/6xj3_mdtraj_clean.pdb
+  ligand_pdb: analysis_6xj3/ligand.pdb
+  trajectory: analysis_6xj3/6xj3_repaired.xtc
+
+output_settings:
+  output_directory: mmgbsa_results/complex2_analysis_final
+  analysis_name: complex2_gbn2
+  save_plots: true
+  save_logs: true
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: GBn2
+  salt_concentration: 0.15
+  max_frames: 100        # Run 100 frames for robust statistics
+  frame_stride: 100      # Traj has 10000 frames -> 100 frames selected
+  frame_selection: sequential
+  use_cache: true
+  charge_method: gasteiger

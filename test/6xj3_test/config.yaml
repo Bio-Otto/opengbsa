@@ -1,0 +1,26 @@
+input_files:
+  complex_pdb: "test/6xj3_test/6xj3.pdb"
+  trajectory: "test/6xj3_test/6xj3.xtc"
+  ligand_pdb: "test/6xj3_test/ligand.pdb"
+  ligand_mol: "test/6xj3_test/ligand.sdf"
+
+output_settings:
+  output_directory: "mmgbsa_results/6xj3_analysis"
+  analysis_name: "6xj3_gbn2_gasteiger"
+  save_plots: true
+
+analysis_settings:
+  gb_model: "GBn2"
+  charge_method: "gasteiger"
+  salt_concentration: 0.15
+  solute_dielectric: 1.0 # Internal dielectric (protein) - User Request
+  entropy_method: "interaction" # Options: "interaction", "normal_mode", "quasiharmonic", "none"
+  run_entropy_analysis: true # Required to trigger the NMA step in runner
+  qha_analyze_complex: false
+  run_per_residue_decomposition: true
+  decomp_frames: 500
+  temperature: 300.0
+  nmode_cutoff_frequency: 10.0 # cm^-1 (User Request: only for entropy_method: "normal_mode")
+  max_frames: 500
+  frame_stride: 1
+  frame_selection: "sequential"

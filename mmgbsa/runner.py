@@ -21,6 +21,10 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 from .core import FixedEnhancedTrueForceFieldMMGBSA
 from .entropy import run_ultra_robust_nma
 from .decomposition import PerResidueDecomposition
+from .logger import ToolLogger
+
+# Initialize global logger
+log = ToolLogger()
 
 class MMGBSARunner:
     """
@@ -69,7 +73,7 @@ class MMGBSARunner:
             return config
             
         except Exception as e:
-            print(f"❌ Error loading configuration: {e}")
+            log.error(f"Error loading configuration: {e}")
             sys.exit(1)
     
     def _validate_input_files(self):
@@ -86,26 +90,17 @@ class MMGBSARunner:
                 missing_files.append(f"{file_type}: {file_path}")
         
         if missing_files:
-            print("ERROR: Missing input files:")
+            log.error("Missing input files:")
             for missing in missing_files:
-                print(f"  • {missing}")
+                log.error(f"  • {missing}")
             return False
         
-        print("All required input files found")
+        log.success("All required input files found")
         return True
     
     def _select_frames(self, trajectory_length):
         """
         Select frames based on configuration parameters
-        
-        Parameters:
-        -----------
-        trajectory_length : int
-            Total number of frames in trajectory
-            
-        Returns:
-        --------
-        list : Selected frame indices
         """
         analysis_settings = self.config['analysis_settings']
         
@@ -127,23 +122,20 @@ class MMGBSARunner:
         frame_start = max(0, min(frame_start, trajectory_length - 1))
         frame_end = max(frame_start + 1, min(frame_end, trajectory_length))
         
-        print(f"📊 Frame selection parameters:")
-        print(f"  • Trajectory length: {trajectory_length}")
-        print(f"  • Frame range: {frame_start} to {frame_end}")
-        print(f"  • Frame stride: {frame_stride}")
-        print(f"  • Selection method: {frame_selection}")
-        print(f"  • Max frames: {max_frames}")
+        log.info("Frame selection parameters:")
+        log.result("Trajectory length", trajectory_length)
+        log.result("Frame range", f"{frame_start} to {frame_end}")
+        log.result("Selection method", frame_selection)
         
+        # ... (Selection logic remains same) ...
         # Generate frame indices based on selection method
         if frame_selection == "sequential":
-            # Sequential selection with stride
             if frame_stride is None or frame_stride <= 0:
                 frame_indices = list(range(frame_start, frame_end))
             else:
                 frame_indices = list(range(frame_start, frame_end, frame_stride))
                 
         elif frame_selection == "equidistant":
-            # Equidistant selection
             if max_frames is None or max_frames <= 0:
                 max_frames = frame_end - frame_start
             
@@ -152,7 +144,6 @@ class MMGBSARunner:
             frame_indices = [min(idx, frame_end - 1) for idx in frame_indices]
             
         elif frame_selection == "random":
-            # Random selection
             if max_frames is None or max_frames <= 0:
                 max_frames = frame_end - frame_start
             
@@ -175,9 +166,7 @@ class MMGBSARunner:
         # Remove duplicates and sort
         frame_indices = sorted(list(set(frame_indices)))
         
-        print(f"✅ Selected {len(frame_indices)} frames:")
-        print(f"  • Frame indices: {frame_indices[:10]}{'...' if len(frame_indices) > 10 else ''}")
-        print(f"  • Frame range: {min(frame_indices)} to {max(frame_indices)}")
+        log.success(f"Selected {len(frame_indices)} frames for analysis")
         
         return frame_indices
     
@@ -192,12 +181,13 @@ class MMGBSARunner:
         
         output_path.mkdir(parents=True, exist_ok=True)
         
-        print(f"Output directory: {output_path}")
+        log.info(f"Output directory established: {output_path}")
         return output_path
     
     def _setup_mmgbsa_calculator(self):
         """Setup MM/GBSA calculator with configuration"""
         analysis_settings = self.config['analysis_settings']
+        forcefield_settings = self.config.get('forcefield_settings', {})
         
         calculator = FixedEnhancedTrueForceFieldMMGBSA(
             temperature=analysis_settings.get('temperature', 300),
@@ -206,7 +196,11 @@ class MMGBSARunner:
             salt_concentration=analysis_settings.get('salt_concentration', 0.15),
             use_cache=analysis_settings.get('use_cache', True),
             parallel_processing=analysis_settings.get('parallel_processing', False),
-            max_workers=analysis_settings.get('max_workers', None)
+            max_workers=analysis_settings.get('max_workers', None),
+            protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
+            charge_method=analysis_settings.get('charge_method', 'am1bcc'),
+            solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
+            entropy_method=analysis_settings.get('entropy_method', 'none')
         )
         
         return calculator
@@ -214,34 +208,28 @@ class MMGBSARunner:
     def run_analysis(self):
         """Run complete MM/GBSA analysis pipeline"""
         
-        print("="*80)
-        print("🚀 MM/GBSA ANALYSIS RUNNER")
-        print("="*80)
+        log.header("MM/GBSA ANALYSIS RUNNER")
         
         start_time = time.time()
         
         # Step 1: Validate configuration
-        print("\n📋 STEP 1: Configuration Validation")
-        print("-" * 50)
+        log.section("STEP 1: Configuration Validation")
         
         if not self._validate_input_files():
             return None
         
         # Step 2: Create output directory
-        print("\n📁 STEP 2: Output Setup")
-        print("-" * 50)
+        log.section("STEP 2: Output Setup")
         
         output_dir = self._create_output_directory()
         
         # Step 3: Setup calculator
-        print("\n⚙️  STEP 3: Calculator Setup")
-        print("-" * 50)
+        log.section("STEP 3: Calculator Setup")
         
         calculator = self._setup_mmgbsa_calculator()
         
         # Step 4: Run MM/GBSA analysis
-        print("\n🧮 STEP 4: MM/GBSA Analysis")
-        print("-" * 50)
+        log.section("STEP 4: MM/GBSA Analysis")
         
         input_files = self.config['input_files']
         analysis_settings = self.config['analysis_settings']
@@ -261,30 +249,30 @@ class MMGBSARunner:
             xtc_file=input_files['trajectory'],
             ligand_pdb=input_files['ligand_pdb'],
             max_frames=analysis_settings.get('max_frames', 50),
-            energy_decomposition=analysis_settings.get('energy_decomposition', False)
+            energy_decomposition=analysis_settings.get('energy_decomposition', False),
+            qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
+            output_dir=output_dir
         )
         
         if not mmgbsa_results:
-            print("❌ MM/GBSA analysis failed!")
+            log.error("MM/GBSA analysis failed!")
             return None
         
         self.results['mmgbsa'] = mmgbsa_results
-        print(f"✅ MM/GBSA completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
+        log.success(f"MM/GBSA completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
         
         # Step 5: Run entropy analysis (if enabled)
         if analysis_settings.get('run_entropy_analysis', False):
-            print("\n🌡️  STEP 5: Entropy Analysis")
-            print("-" * 50)
+            log.section("STEP 5: Entropy Analysis")
             
             entropy_results = self._run_entropy_analysis(calculator, input_files)
             if entropy_results:
                 self.results['entropy'] = entropy_results
-                print(f"✅ Entropy analysis completed")
+                log.success("Entropy analysis completed")
         
         # Step 6: Run per-residue decomposition (if enabled)
-        if analysis_settings.get('run_per_residue_decomposition', False):
-            print("\n🔬 STEP 6: Per-Residue Decomposition")
-            print("-" * 50)
+        if analysis_settings.get('run_per_residue_decomposition', False) or analysis_settings.get('per_residue_decomposition', False):
+            log.section("STEP 6: Per-Residue Decomposition")
             
             # Get frame parameters for per-residue decomposition
             frame_params = {
@@ -296,56 +284,125 @@ class MMGBSARunner:
             }
             
             decomp_results = self._run_per_residue_decomposition(
-                calculator, input_files, analysis_settings, frame_params
+                calculator, input_files, analysis_settings, frame_params, output_dir
             )
             if decomp_results:
                 self.results['decomposition'] = decomp_results
-                print(f"✅ Per-residue decomposition completed")
+                log.success("Per-residue decomposition completed")
         
         # Step 7: Generate final report
-        print("\n📊 STEP 7: Final Report Generation")
-        print("-" * 50)
+        log.section("STEP 7: Final Report Generation")
         
         self._generate_final_report(output_dir)
         
         # Step 8: Save configuration and results
-        print("\n💾 STEP 8: Save Results")
-        print("-" * 50)
+        log.section("STEP 8: Save Results")
         
         self._save_results(output_dir)
         
         total_time = time.time() - start_time
         
-        print("\n" + "="*80)
-        print("🎉 ANALYSIS COMPLETE!")
-        print("="*80)
-        print(f"⏱️  Total time: {total_time:.1f} seconds")
-        print(f"📁 Results saved to: {output_dir}")
-        print(f"🔗 Final binding energy: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
+        log.header("ANALYSIS COMPLETE")
+        log.result("Total time", f"{total_time:.1f}", "seconds")
+        log.result("Results saved to", output_dir)
+        log.result("Mean Binding Energy", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
         
         return self.results
     
     def _run_entropy_analysis(self, calculator, input_files):
-        """Run entropy analysis using normal mode analysis"""
+        """
+        Run entropy analysis using specified method
+        """
         try:
-            # This would integrate with your entropy analysis
-            # For now, return a placeholder
-            return {
-                'status': 'completed',
-                'method': 'normal_mode_analysis',
-                'note': 'Entropy analysis integration pending'
-            }
+            analysis_settings = self.config['analysis_settings']
+            method = analysis_settings.get('entropy_method', 'interaction')
+            
+            log.info(f"Using entropy method: {method}")
+            
+            if method == 'interaction':
+                # Calculate Interaction Entropy (IE)
+                if 'mmgbsa' not in self.results or 'binding_energies' not in self.results['mmgbsa']:
+                    log.warning("Interaction Entropy requires binding energies from MM/GBSA run")
+                    return None
+                
+                binding_energies = self.results['mmgbsa']['binding_energies']
+                temperature = analysis_settings.get('temperature', 300)
+                
+                entropy_penalty = calculator.calculate_interaction_entropy(binding_energies, temperature)
+                
+                log.result("Interaction Entropy (-TΔS)", f"{entropy_penalty:.2f}", "kcal/mol")
+                log.info("(Positive value indicates entropic penalty)")
+                
+                return {
+                    'status': 'completed',
+                    'method': 'interaction_entropy',
+                    'entropy_penalty': entropy_penalty,
+                    'T': temperature
+                }
+                
+            elif method in ['nmode', 'normal_mode']:
+                # Run Normal Mode Analysis
+                log.warning("Running Normal Mode Analysis (Computationally Expensive)")
+                
+                from .normal_mode import NormalModeAnalysis
+                from openmm import unit
+                import openmm
+                
+                try:
+                    ligand_mol = self.config['input_files']['ligand_mol']
+                    temperature = analysis_settings.get('temperature', 300)
+                    
+                    log.process("Parameterizing ligand for NMA...")
+                    ligand_system, ligand_top, ligand_mol_obj = calculator.parameterize_ligand_openff(ligand_mol)
+                    
+                    integrator = openmm.VerletIntegrator(1.0 * unit.femtoseconds)
+                    
+                    conf = ligand_mol_obj.conformers[0]
+                    if hasattr(conf, 'magnitude'):
+                         positions = conf.magnitude * unit.angstrom
+                    elif hasattr(conf, 'value_in_unit'):
+                         positions = conf.value_in_unit(unit.angstrom) * unit.angstrom
+                    else:
+                         positions = conf * unit.angstrom
+                    
+                    log.process("Initializing NormalModeAnalysis...")
+                    nma = NormalModeAnalysis(ligand_top, ligand_system, integrator, positions)
+                    
+                    log.process("Running Minimization (CUDA/CPU)...")
+                    nma.CUDAMinimizationCycle(MaxMiniCycle=100)
+                    
+                    log.process("Calculating Normal Modes...")
+                    cutoff_freq = analysis_settings.get('nmode_cutoff_frequency', 10.0)
+                    nma.CalculateNormalModes(cutoff_frequency=cutoff_freq)
+                    
+                    log.process("Calculating Vibrational Entropy...")
+                    nma.getVibrationalEntropyQM(Temperature=temperature*unit.kelvin)
+                    
+                    entropy_val = nma.VibrationalEntropyQM.value_in_unit(unit.kilocalories_per_mole)
+                    
+                    log.result("Vibrational Entropy Term (TS)", f"{entropy_val:.2f}", "kcal/mol")
+                    log.result("Entropic Contribution (-TS)", f"{-entropy_val:.2f}", "kcal/mol")
+                    
+                    return {
+                        'status': 'completed',
+                        'method': 'normal_mode',
+                        'entropy_term': entropy_val,
+                        'contribution': -entropy_val
+                    }
+                except Exception as e:
+                    log.error(f"NMA Failed: {e}")
+
         except Exception as e:
-            print(f"⚠️  Entropy analysis failed: {e}")
+            log.error(f"Entropy analysis failed: {e}")
             return None
     
-    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None):
+    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None):
         """Run per-residue energy decomposition"""
         try:
             decomp_analyzer = PerResidueDecomposition(
                 calculator, 
                 temperature=analysis_settings.get('temperature', 300),
-                output_dir=self.output_dir
+                output_dir=output_dir
             )
             
             # Extract frame parameters
@@ -369,13 +426,14 @@ class MMGBSARunner:
                 frame_end=frame_params.get('frame_end'),
                 frame_stride=frame_params.get('frame_stride'),
                 frame_selection=frame_params.get('frame_selection', 'sequential'),
-                random_seed=frame_params.get('random_seed', 42)
+                random_seed=frame_params.get('random_seed', 42),
+                output_dir=output_dir
             )
             
             return decomp_results
             
         except Exception as e:
-            print(f"⚠️  Per-residue decomposition failed: {e}")
+            log.error(f"Per-residue decomposition failed: {e}")
             return None
     
     def _generate_final_report(self, output_dir):
@@ -417,10 +475,10 @@ class MMGBSARunner:
                     f.write("-" * 30 + "\n")
                     f.write("Analysis completed successfully\n\n")
             
-            print(f"✅ Final report saved: {report_file}")
+            log.success(f"Final report saved: {report_file}")
             
         except Exception as e:
-            print(f"⚠️  Report generation failed: {e}")
+            log.error(f"Report generation failed: {e}")
     
     def _save_results(self, output_dir):
         """Save all results and configuration to output directory"""
@@ -435,11 +493,11 @@ class MMGBSARunner:
             with open(results_file, 'w', encoding='utf-8') as f:
                 yaml.dump(self.results, f, default_flow_style=False, indent=2)
             
-            print(f"✅ Configuration saved: {config_file}")
-            print(f"✅ Results summary saved: {results_file}")
+            log.success(f"Configuration saved: {config_file}")
+            log.success(f"Results summary saved: {results_file}")
             
         except Exception as e:
-            print(f"⚠️  Results saving failed: {e}")
+            log.error(f"Results saving failed: {e}")
 
 
 def create_sample_config():
@@ -493,13 +551,13 @@ def main():
         sample_config = create_sample_config()
         with open(args.config_name, 'w', encoding='utf-8') as f:
             yaml.dump(sample_config, f, default_flow_style=False, indent=2)
-        print(f"✅ Sample configuration created: {args.config_name}")
+        log.success(f"Sample configuration created: {args.config_name}")
         print("Edit this file with your specific parameters and run:")
         print(f"python mmgbsa_runner.py {args.config_name}")
         return
     
     if not args.config_file:
-        print("❌ Please provide a configuration file or use --create-config")
+        log.error("Please provide a configuration file or use --create-config")
         print("Usage:")
         print("  python mmgbsa_runner.py config.yaml")
         print("  python mmgbsa_runner.py --create-config")
@@ -510,11 +568,12 @@ def main():
     results = runner.run_analysis()
     
     if results:
-        print("\n🎯 Analysis completed successfully!")
+        pass # Already logged by runner
     else:
-        print("\n❌ Analysis failed!")
+        log.error("Analysis failed!")
         sys.exit(1)
 
 
 if __name__ == '__main__':
-    main() 
+    main()
+ 

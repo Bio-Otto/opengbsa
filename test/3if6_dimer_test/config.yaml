@@ -1,0 +1,21 @@
+input_files:
+  complex_pdb: "test/3if6_test/snapshot.pdb"
+  trajectory: "test/3if6_test/3if6.xtc"
+  ligand_pdb: "test/3if6_test/ligand.pdb"
+  ligand_mol: "test/3if6_test/ligand.sdf"
+
+output_settings:
+  output_directory: "mmgbsa_results/3if6_analysis"
+  analysis_name: "3if6_gbn2_gasteiger"
+  save_plots: true
+
+analysis_settings:
+  gb_model: "GBn2"
+  charge_method: "gasteiger"
+  salt_concentration: 0.15
+  solute_dielectric: 4.0 # Internal dielectric (protein) - User Request
+  temperature: 300.0
+  max_frames: 25
+  frame_stride: 1
+  frame_selection: "sequential"
+  per_residue_decomposition: false

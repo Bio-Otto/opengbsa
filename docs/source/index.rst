@@ -10,10 +10,13 @@ OpenGBSA is a comprehensive MM/GBSA analysis package for protein-ligand binding 
    :caption: Contents
 
    installation
+   theory
    usage
    advanced
    config_guide
    outputs
+   api_reference
+   testing
    troubleshooting
    contributing
    changelog

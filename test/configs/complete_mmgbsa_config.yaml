@@ -1,0 +1,58 @@
+analysis_settings:
+  decomp_frames: 10
+  energy_decomposition: true
+  frame_end: null
+  frame_selection: sequential
+  frame_start: null
+  frame_stride: null
+  gb_model: OBC2
+  gpu_platform: null
+  max_frames: 50
+  parallel_processing: true
+  random_seed: null
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: true
+  use_gpu: false
+input_files:
+  complex_pdb: path/to/complex.pdb
+  ligand_mol: path/to/ligand.sdf
+  ligand_pdb: path/to/ligand.pdb
+  trajectory: path/to/trajectory.xtc
+output_settings:
+  output_directory: mmgbsa_results
+  analysis_name: complete_analysis
+  output_formats: [csv, json, yaml]
+  save_plots: true
+forcefield_settings:
+  protein_forcefield: auto  # Options: auto, amber, charmm
+  ligand_forcefield: gaff-2.11
+  water_model: tip3p
+advanced_settings:
+  minimization_tolerance: 1.0e-5
+  nma_quality_threshold: Good
+  hot_spot_threshold: -1.0
+platform_settings:
+  preferred_platform: CPU
+  cuda_device: 0
+  cuda_precision: mixed
+validation_settings:
+  validate_inputs: true
+  validate_results: true
+  max_std_dev: 5.0
+reporting_settings:
+  generate_final_report: true
+  include_plots: true
+  include_statistics: true
+debug_settings:
+  verbose: true
+reproducibility_settings:
+  global_random_seed: 42
+  save_configuration: true
+  save_environment: false
+performance_settings:
+  memory_limit: 8
+  gpu_memory_fraction: 0.8
+  batch_size: 1

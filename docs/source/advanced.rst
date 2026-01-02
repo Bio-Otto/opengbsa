@@ -45,14 +45,33 @@ To save per-residue decomposition for each frame:
 
 - Output files: ``frame_by_frame_decomposition.csv``, ``frame_by_frame_decomposition_residue_summary.csv``
 
-Entropy Analysis (Normal Mode Analysis)
----------------------------------------
-To include vibrational entropy in your binding free energy calculation:
+Entropy Analysis
+----------------
+
+OpenGBSA supports multiple methods for estimating the entropic contribution ($$-T\Delta S$$) to binding.
 
 .. code-block:: yaml
 
    analysis_settings:
      run_entropy_analysis: true
+     entropy_method: "interaction"  # Options: "interaction", "quasiharmonic", "normal_mode"
+
+Available Methods:
+
+1. **Interaction Entropy (`interaction`)**:
+   - Uses the fluctuation of the interaction energy.
+   - computationally efficient (O(N)).
+   - Good for relative ranking.
+
+2. **Quasi-Harmonic Analysis (`quasiharmonic`)**:
+   - derives entropy from the covariance matrix of atomic fluctuations.
+   - Captures anharmonicity better than NMA.
+   - Requires a trajectory with sufficient sampling.
+
+3. **Normal Mode Analysis (`normal_mode`)**:
+   - Standard harmonic approximation.
+   - Computationally expensive (O(N^3)).
+   - Uses minimized snapshots.
 
 - Entropy results are included in the final report and results summary.
 

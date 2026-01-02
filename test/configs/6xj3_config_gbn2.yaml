@@ -1,0 +1,21 @@
+input_files:
+  ligand_mol: analysis_6xj3/ligand.sdf
+  complex_pdb: analysis_6xj3/6xj3_mdtraj_clean.pdb
+  ligand_pdb: analysis_6xj3/ligand.pdb
+  trajectory: analysis_6xj3/6xj3_repaired.xtc
+
+output_settings:
+  output_directory: mmgbsa_results/6xj3_analysis_gbn2
+  analysis_name: 6xj3_gbn2
+  save_plots: true
+  save_logs: true
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: GBn2
+  salt_concentration: 0.15 # Keep strictly comparable first, or reduce? Maybe 0.05
+  max_frames: 1 # Quick check
+  frame_stride: 20
+  frame_selection: sequential
+  use_cache: true
+  charge_method: gasteiger

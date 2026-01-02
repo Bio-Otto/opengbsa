@@ -1,0 +1,31 @@
+input_files:
+  ligand_mol: analysis_6xj3/ligand.sdf
+  complex_pdb: analysis_6xj3/6xj3_mdtraj_clean.pdb
+  ligand_pdb: analysis_6xj3/ligand.pdb
+  trajectory: analysis_6xj3/6xj3_repaired.xtc
+
+output_settings:
+  output_directory: mmgbsa_results/6xj3_analysis
+  analysis_name: 6xj3_zinc000062237144
+  save_plots: true
+  save_logs: true
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  max_frames: 1
+  frame_stride: 20
+  frame_selection: sequential
+  use_cache: true
+  verbose: 1
+  entropy_method: nmode
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  decomp_frames: 10
+
+platform_settings:
+  preferred_platform: CUDA
+
+forcefield_settings:
+  protein_forcefield: charmm  # Use CHARMM36 for this simulation

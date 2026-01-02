@@ -1,0 +1,23 @@
+analysis_settings:
+  decomp_frames: 10
+  energy_decomposition: false
+  frame_end: null
+  frame_selection: sequential
+  frame_start: null
+  frame_stride: null
+  gb_model: OBC2
+  gpu_platform: null
+  max_frames: 10
+  parallel_processing: true
+  random_seed: null
+  run_entropy_analysis: false
+  run_per_residue_decomposition: true
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: true
+  use_gpu: false
+input_files:
+  complex_pdb: test/complex.pdb
+  ligand_mol: test/ligand.sdf
+  ligand_pdb: test/ligand.pdb
+  trajectory: test/complex.dcd

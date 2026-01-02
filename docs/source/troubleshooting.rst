@@ -76,6 +76,40 @@ Installation & Environment Issues
    **Solution:**
      - Double-check all paths in your config file
 
+Science & Validation Issues
+---------------------------
+
+.. warning::
+   **Problem:** Unrealistic Binding Energies (> +1000 or < -10000 kcal/mol)
+
+   **Cause:**
+   1. **Trajectory Wrapping:** If atoms jump across periodic boundaries, bonds stretch infinitely.
+   2. **Internal Energy:** Including internal energy ( bond/angle/torsion) adds noise.
+
+   **Solution:**
+   - Use ``test/utils/repair_trajectory.py`` to unwrap and image your trajectory.
+   - Use ``gb_model: GBn2`` which is generally more stable.
+
+.. warning::
+   **Problem:** "System preparation failed: All Forces must agree on whether to use a cutoff"
+
+   **Cause:** OpenMM system generator conflict between Periodic (Cutoff) and Non-Periodic (NoCutoff) settings.
+
+   **Solution:**
+   - Ensure you are using the latest version of OpenGBSA (Fixed in v0.0.4+).
+   - Verify input PDB does not have weird CRYST1 records if running non-periodic GBSA.
+
+.. warning::
+   **Problem:** Decomposition sum does not match Total Binding Energy
+
+   **Cause:**
+   - **Solvation Model:** Decomposition uses an approximation (distance-based burial) for speed.
+   - **Entropy:** Global binding energy includes entropy terms not decomposed per-residue.
+   
+   **Solution:**
+   - Use Global Energy for absolute affinity.
+   - Use Decomposition only for ranking residues.
+
 General Tips
 ------------
 .. tip::

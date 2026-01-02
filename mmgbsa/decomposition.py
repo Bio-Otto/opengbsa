@@ -23,6 +23,11 @@ from openmm import app, openmm, unit
 import mdtraj as md
 from .core import FixedEnhancedTrueForceFieldMMGBSA
 
+from .logger import ToolLogger
+
+# Initialize logger
+log = ToolLogger()
+
 class PerResidueDecomposition:
     """
     Advanced per-residue energy decomposition for MM/GBSA analysis
@@ -53,6 +58,7 @@ class PerResidueDecomposition:
         
     def run_per_residue_analysis(self, ligand_mol, complex_pdb, xtc_file, 
                                 ligand_pdb, max_frames=50, decomp_frames=10,
+                                output_dir=None,
                                 frame_start=None, frame_end=None, frame_stride=None,
                                 frame_selection='sequential', random_seed=42):
         """
@@ -64,28 +70,27 @@ class PerResidueDecomposition:
             Number of frames to use for decomposition (computationally expensive)
         """
         
-        print("="*60)
-        print("MM/GBSA WITH PER-RESIDUE DECOMPOSITION")
-        print("="*60)
+        if output_dir:
+            self.report_dir = output_dir
+            
+        log.section("MM/GBSA WITH PER-RESIDUE DECOMPOSITION")
         
         # Step 1: Run standard MM/GBSA analysis
-        print("STEP 1: Standard MM/GBSA Analysis")
-        print("-" * 40)
+        log.info("Running Baseline MM/GBSA Analysis...")
         
         mmgbsa_results = self.mmgbsa_calculator.run_enhanced(
             ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames
         )
         
         if not mmgbsa_results:
-            print("ERROR: MM/GBSA analysis failed!")
+            log.error("MM/GBSA analysis failed!")
             return None
         
-        print(f"MM/GBSA: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
+        log.result("Baseline MM/GBSA Binding", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
         
         # Step 2: Per-residue decomposition
-        print(f"\nSTEP 2: Per-Residue Energy Decomposition")
-        print("-" * 40)
-        print(f"Analyzing {decomp_frames} frames for detailed decomposition...")
+        log.section("Per-Residue Energy Decomposition")
+        log.process(f"Analyzing {decomp_frames} frames for detailed decomposition...")
         
         decomp_results = self._perform_per_residue_decomposition(
             ligand_mol, complex_pdb, xtc_file, ligand_pdb, decomp_frames,
@@ -94,8 +99,7 @@ class PerResidueDecomposition:
         
         if decomp_results:
             # Step 3: Analyze and visualize results
-            print(f"\nSTEP 3: Analysis and Visualization")
-            print("-" * 40)
+            log.section("Analysis and Visualization")
             
             analysis_results = self._analyze_decomposition_results(decomp_results)
             self._generate_decomposition_plots(analysis_results)
@@ -138,17 +142,32 @@ class PerResidueDecomposition:
             
             print(f"  Selected {len(decomp_traj)} frames for decomposition")
             
-            # Get system information
-            pdb = app.PDBFile(complex_pdb)
-            ligand_resname = self.mmgbsa_calculator.find_ligand_resname(pdb.topology)
+            # FIX: Strip solvent/ions from trajectory to match OpenMM system
+            # The system builder removes these, so the trajectory must match.
+            topology = decomp_traj.topology
+            # Select atoms to keep (Protein + Ligand generally)
+            # Use 'not (water or resname ...)' consistent with core.py build_complex_system
+            selection_query = "not (water or resname NA CL K MG ZN CA HOH WAT TIP3 SOL)"
+            keep_indices = topology.select(selection_query)
             
-            # Build mapping of atoms to residues
-            residue_map, ligand_indices = self._build_residue_mapping(pdb.topology, ligand_resname)
-            
-            print(f"  Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
+            if len(keep_indices) < topology.n_atoms:
+                log.process(f"Stripping {topology.n_atoms - len(keep_indices)} solvent/ion atoms from trajectory to match system...")
+                decomp_traj = decomp_traj.atom_slice(keep_indices)
             
             # Prepare systems for decomposition
             systems = self._prepare_decomposition_systems(ligand_mol, complex_pdb, ligand_pdb)
+            
+            if not systems:
+                return None
+            
+            log.process("Building residue mapping from prepared system...")
+            # Use the topology from the prepared system (stripped of solvent/ions)
+            # to ensure indices match the OpenMM system and stripped trajectory
+            complex_topology = systems['complex_topology']
+            ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
+            residue_map, ligand_indices = self._build_residue_mapping(complex_topology, ligand_resname)
+            
+            log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
             
             if not systems:
                 return None
@@ -159,7 +178,7 @@ class PerResidueDecomposition:
             
             for i, frame in enumerate(decomp_traj):
                 if i % 5 == 0:
-                    print(f"  Processing frame {i+1}/{len(decomp_traj)}...")
+                    log.process(f"Processing frame {i+1}/{len(decomp_traj)}...")
                 
                 frame_result = self._decompose_single_frame(
                     frame, systems, residue_map, ligand_indices, ligand_resname
@@ -196,16 +215,13 @@ class PerResidueDecomposition:
                     frame_by_frame_data.append(frame_data)
             
             if not residue_energies:
-                print("  ERROR: No successful frame decompositions")
+                log.error("No successful frame decompositions")
                 return None
             
-            print(f"  Decomposed {len(residue_energies)} frames successfully")
+            log.success(f"Decomposed {len(residue_energies)} frames successfully")
             
-            # Save frame-by-frame CSV output if enabled
-            if hasattr(self, 'frame_by_frame_settings') and self.frame_by_frame_settings.get('save_frame_csv', True):
-                self._save_frame_by_frame_csv(frame_by_frame_data, residue_map)
-            else:
-                print("  ℹ️  Frame-by-frame CSV output disabled in config")
+            # Save frame-by-frame output
+            self._save_frame_by_frame_csv(frame_by_frame_data, residue_map)
             
             # Average across frames
             averaged_results = self._average_residue_energies(residue_energies)
@@ -213,7 +229,7 @@ class PerResidueDecomposition:
             return averaged_results
             
         except Exception as e:
-            print(f"  ERROR: Decomposition failed: {e}")
+            log.error(f"Decomposition failed: {e}")
             return None
     
     def _build_residue_mapping(self, topology, ligand_resname):
@@ -680,8 +696,8 @@ class PerResidueDecomposition:
             
             # Save plot to output directory if available
             plot_filename = 'per_residue_decomposition.png'
-            if hasattr(self, 'output_dir') and self.output_dir:
-                plot_path = os.path.join(self.output_dir, plot_filename)
+            if hasattr(self, 'report_dir') and self.report_dir:
+                plot_path = os.path.join(self.report_dir, plot_filename)
             else:
                 plot_path = plot_filename
             

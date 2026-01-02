@@ -40,7 +40,7 @@ def ultra_robust_minimization(nma, target_force=1e-6):
         print(f"    Stage 2.{i+1}: CUDA minimization (tolerance={tolerance:.0e})...")
         
         nma.CUDAMinimizationCycle(
-            MiniTolerance=tolerance * unit.kilojoule/unit.mole,
+            MiniTolerance=tolerance,
             MaxMiniCycle=200,           # Sufficient cycles
             NumMiniStepPerCycle=10000,  # Many steps
             MiniForceRatio=tolerance    # Match tolerance

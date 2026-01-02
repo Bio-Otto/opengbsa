@@ -1,0 +1,27 @@
+input_files:
+  ligand_mol: test/ligand.sdf
+  complex_pdb: test/complex.pdb
+  ligand_pdb: test/ligand.pdb
+  trajectory: test/complex.dcd
+
+output_settings:
+  output_directory: mmgbsa_results/dcd_test
+  analysis_name: dcd_test
+  save_plots: true
+  save_logs: true
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  max_frames: 10
+  frame_selection: sequential
+  use_cache: true
+  verbose: 1
+  # Disable expensive calculations for quick test
+  run_entropy_analysis: false
+  run_per_residue_decomposition: true
+  decomp_frames: 5
+
+platform_settings:
+  preferred_platform: CPU
