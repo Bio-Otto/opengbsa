@@ -9,6 +9,28 @@ copyright = '2025, Ozbek Lab'
 author = 'H. Ibrahim Ozdemir'
 release = '0.0.5'
 
+# -- Mock Imports ------------------------------------------------------------
+autodoc_mock_imports = [
+    'openmm', 
+    'openmm.app', 
+    'openmm.unit',
+    'simtk',
+    'simtk.openmm',
+    'simtk.unit',
+    'mdtraj',
+    'openff',
+    'openff.toolkit',
+    'rdkit',
+    'rdkit.Chem',
+    'prolif',
+    'MDAnalysis',
+    'numpy',
+    'pandas',
+    'scipy',
+    'matplotlib',
+    'seaborn'
+]
+
 # -- General configuration ---------------------------------------------------
 extensions = [
     'myst_parser',

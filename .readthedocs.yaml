@@ -9,6 +9,6 @@ build:
 sphinx:
   configuration: docs/source/conf.py
 
-# We want to build a conda environment from our environment.yml
-conda:
-  environment: docs/environment.yml
+python:
+  install:
+    - requirements: requirements.txt
