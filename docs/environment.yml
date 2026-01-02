@@ -1,0 +1,16 @@
+name: opengbsa_docs
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - sphinx
+  - furo
+  - myst-parser
+  - openmm
+  - mdtraj
+  - openff-toolkit
+  - rdkit
+  - pandas
+  - numpy
+  - pyyaml
