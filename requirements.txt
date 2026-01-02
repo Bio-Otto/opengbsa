@@ -35,4 +35,9 @@ pathlib2>=2.3.0
 # Development dependencies (optional)
 # pytest>=6.0.0
 # black>=21.0.0
-# flake8>=3.8.0 
+# flake8>=3.8.0
+
+# Documentation
+sphinx>=4.0.0
+furo
+myst-parser 

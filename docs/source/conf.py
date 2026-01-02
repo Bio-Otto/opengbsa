@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 project = 'OpenGBSA'
 copyright = '2025, Ozbek Lab'
 author = 'H. Ibrahim Ozdemir'
-release = '0.0.2'
+release = '0.0.5'
 
 # -- General configuration ---------------------------------------------------
 extensions = [
