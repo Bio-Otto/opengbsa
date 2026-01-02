@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opengbsa"
-version = "0.0.2"
+version = "0.0.5"
 description = "OpenGBSA - A comprehensive MM/GBSA analysis package with advanced features"
 readme = "README.md"
 license = {text = "MIT"}
