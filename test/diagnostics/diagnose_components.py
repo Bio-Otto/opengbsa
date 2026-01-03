@@ -9,14 +9,14 @@ import sys
 import numpy as np
 
 sys.path.append('.')
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 
 pdb_file = 'test/complex2_fixed.pdb'
 ligand_sdf = 'test/ligand2.sdf'
 ligand_resname = 'UNL'
 
 print("Initializing Calculator...")
-calc = FixedEnhancedTrueForceFieldMMGBSA(charge_method='gasteiger')
+calc = GBSACalculator(charge_method='gasteiger')
 
 print("Parameterizing Ligand...")
 ligand_system, ligand_top, ligand_mol = calc.parameterize_ligand_openff(ligand_sdf)

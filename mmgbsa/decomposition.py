@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 from openmm import app, openmm, unit
 
 import mdtraj as md
-from .core import FixedEnhancedTrueForceFieldMMGBSA
+from .core import GBSACalculator
 
 from .logger import ToolLogger
 
@@ -31,7 +31,7 @@ log = ToolLogger()
 class PerResidueDecomposition:
     """
     Advanced per-residue energy decomposition for MM/GBSA analysis
-    Integrates seamlessly with your existing FixedEnhancedTrueForceFieldMMGBSA class
+    Integrates seamlessly with your existing GBSACalculator class
     """
     
     def __init__(self, mmgbsa_calculator, temperature=300.0, output_dir=None):
@@ -40,7 +40,7 @@ class PerResidueDecomposition:
         
         Parameters:
         -----------
-        mmgbsa_calculator : FixedEnhancedTrueForceFieldMMGBSA
+        mmgbsa_calculator : GBSACalculator
             Your existing MM/GBSA calculator
         temperature : float
             Temperature in Kelvin
@@ -420,7 +420,7 @@ class PerResidueDecomposition:
             system = systems['complex_system']
             context = systems['complex_context']
             
-            # Find NonbondedForce for vdW and electrostatics
+            # GBSAForceManager vdW and electrostatics
             nonbonded_force = None
             for force in system.getForces():
                 if isinstance(force, openmm.NonbondedForce):
@@ -1010,7 +1010,7 @@ def test_per_residue_decomposition():
     print("This adds advanced per-residue analysis to your MM/GBSA package!")
     
     # Your existing MM/GBSA calculator
-    mmgbsa_calc = FixedEnhancedTrueForceFieldMMGBSA(
+    mmgbsa_calc = GBSACalculator(
         temperature=300,
         gb_model='OBC2',
         salt_concentration=0.15,

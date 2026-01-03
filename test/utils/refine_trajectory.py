@@ -26,22 +26,22 @@ traj = mdtraj.load(xtc_file, top=pdb_file)
 # But MMGBSA needs combined system. The ligand might also be clashing.
 
 # Actually, the quickest way to robustify this:
-# Use the `FixedEnhancedTrueForceFieldMMGBSA.parameterize_protein_amber` logic which uses OpenFF for ligand.
+# Use the `GBSACalculator.parameterize_protein_amber` logic which uses OpenFF for ligand.
 # But that's heavy.
 # Alternative: Since we know the ligand charges are gasteiger and it's small, we can just use GAFF if available?
 # No, sticking to OpenFF is better.
 
 # Let's import our `runner` code or `core` code to build the system easily?
 # `core.py` has `parameterize_protein_amber` and `parameterize_ligand_openff`.
-# We can reuse the `FixedEnhancedTrueForceFieldMMGBSA` class to create the system ONCE,
+# We can reuse the `GBSACalculator` class to create the system ONCE,
 # then iterate frames, set positions, minimize, save positions.
 
 import sys
 sys.path.append('.')
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 
 print("Initializing System builder...")
-calc = FixedEnhancedTrueForceFieldMMGBSA(charge_method='gasteiger')
+calc = GBSACalculator(charge_method='gasteiger')
 
 # Load ligand mol
 ligand_sdf = 'test/ligand2.sdf'

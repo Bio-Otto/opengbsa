@@ -6,7 +6,7 @@ Test creating a combined protein+ligand system using Gasteiger charges
 import sys
 sys.path.insert(0, '/home/bio-otto/Desktop/ATHENA-BACKUP/Desktop/mmpbsa/mmgbsa_v0.0.4')
 
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 from openff.toolkit.topology import Molecule
 import openmm
 from openmm import app, unit
@@ -14,7 +14,7 @@ import time
 
 # Create calculator with explicit gasteiger method
 print("Initializing calculator with charge_method='gasteiger'...")
-calc = FixedEnhancedTrueForceFieldMMGBSA(
+calc = GBSACalculator(
     temperature=300,
     verbose=1,
     gb_model='OBC2',

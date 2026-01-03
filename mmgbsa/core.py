@@ -82,7 +82,7 @@ from .logger import ToolLogger
 log = ToolLogger()
 from openmmforcefields.generators import SystemGenerator
 
-class FixedEnhancedGBSAForceManager:
+class GBSAForceManager:
     """Fixed Enhanced GBSA force implementation that properly handles exceptions"""
     
     def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0):
@@ -528,7 +528,7 @@ class FixedEnhancedGBSAForceManager:
         return energy_decomposition
 
 
-class FixedEnhancedTrueForceFieldMMGBSA:
+class GBSACalculator:
     """Fixed Enhanced True Force Field MMGBSA Calculator"""
     
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
@@ -576,7 +576,7 @@ class FixedEnhancedTrueForceFieldMMGBSA:
         self.entropy_method = entropy_method
         
         # Initialize fixed enhanced GBSA manager
-        self.gbsa_manager = FixedEnhancedGBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric)
+        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric)
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []
@@ -2665,7 +2665,7 @@ def fixed_enhanced_main():
     print(f"Max frames: {max_frames}")
     
     # Run with fixed enhanced OBC2 model
-    calculator = FixedEnhancedTrueForceFieldMMGBSA(
+    calculator = GBSACalculator(
         temperature=300,
         verbose=1,
         gb_model='OBC2',              # Most popular and well-validated
@@ -2724,10 +2724,10 @@ if __name__ == '__main__':
         if option == 'test':
             print("Fixed Enhanced GBSA Quick Test - All features working!")
         elif option == 'cache':
-            calculator = FixedEnhancedTrueForceFieldMMGBSA()
+            calculator = GBSACalculator()
             calculator.list_cache()
         elif option == 'clear':
-            calculator = FixedEnhancedTrueForceFieldMMGBSA()
+            calculator = GBSACalculator()
             calculator.clear_cache()
         else:
             fixed_enhanced_main()

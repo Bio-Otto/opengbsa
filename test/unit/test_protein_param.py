@@ -4,10 +4,10 @@
 import sys
 sys.path.insert(0, '/home/bio-otto/Desktop/ATHENA-BACKUP/Desktop/mmpbsa/mmgbsa_v0.0.4')
 
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 
 # Create calculator with CHARMM
-calculator = FixedEnhancedTrueForceFieldMMGBSA(
+calculator = GBSACalculator(
     temperature=300,
     verbose=1,
     gb_model='OBC2',

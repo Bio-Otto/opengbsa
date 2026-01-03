@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 
 # Import your existing modules
 try:
-    from .core import FixedEnhancedTrueForceFieldMMGBSA
+    from .core import GBSACalculator
     from .entropy import run_ultra_robust_nma
     from .decomposition import PerResidueDecomposition
     OPENMM_AVAILABLE = True
@@ -43,7 +43,7 @@ class CompleteMMGBSARunner:
         Initialize runner with comprehensive YAML configuration
         
         Parameters:
-        -----------conda
+        -----------
         config_file : str or dict
             Path to comprehensive YAML configuration file or config dictionary
         output_dir : str, optional
@@ -213,7 +213,7 @@ class CompleteMMGBSARunner:
         }
         
         if OPENMM_AVAILABLE:
-            calculator = FixedEnhancedTrueForceFieldMMGBSA(**calculator_params)
+            calculator = GBSACalculator(**calculator_params)
             
             # Set forcefield parameters if available
             if hasattr(calculator, 'set_forcefield_settings'):
@@ -223,7 +223,7 @@ class CompleteMMGBSARunner:
             if hasattr(calculator, 'set_platform_settings'):
                 calculator.set_platform_settings(platform_settings)
             
-            # Set advanced parameters if available
+            # Set advanced settings if available
             if hasattr(calculator, 'set_advanced_settings'):
                 calculator.set_advanced_settings(advanced_settings)
             

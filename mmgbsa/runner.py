@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", message="Unable to load toolkit 'OpenEye Toolk
 warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecated")
 
 # Import your existing modules
-from .core import FixedEnhancedTrueForceFieldMMGBSA
+from .core import GBSACalculator
 from .entropy import run_ultra_robust_nma
 from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
@@ -189,7 +189,7 @@ class MMGBSARunner:
         analysis_settings = self.config['analysis_settings']
         forcefield_settings = self.config.get('forcefield_settings', {})
         
-        calculator = FixedEnhancedTrueForceFieldMMGBSA(
+        calculator = GBSACalculator(
             temperature=analysis_settings.get('temperature', 300),
             verbose=analysis_settings.get('verbose', 1),
             gb_model=analysis_settings.get('gb_model', 'OBC2'),

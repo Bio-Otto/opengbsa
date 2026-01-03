@@ -5,7 +5,7 @@ import yaml
 import numpy as np
 import mdtraj as md
 from mmgbsa.runner import MMGBSARunner
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 from openmm import unit, app
 
 def diagnose_frame(config_file):
@@ -33,7 +33,7 @@ def diagnose_frame(config_file):
 
 
     # Setup calculator directly
-    calculator = FixedEnhancedTrueForceFieldMMGBSA(
+    calculator = GBSACalculator(
         temperature=float(config['analysis_settings'].get('temperature', 300)) * unit.kelvin,
         gb_model=config['analysis_settings'].get('gb_model', 'OBC2'),
         salt_concentration=float(config['analysis_settings'].get('salt_concentration', 0.15)) * unit.molar

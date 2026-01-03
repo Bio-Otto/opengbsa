@@ -6,7 +6,7 @@ Core Analysis Engine
 
 .. module:: mmgbsa.core
 
-.. class:: FixedEnhancedTrueForceFieldMMGBSA(system_generator, complex_topology, complex_positions, temperature=300*unit.kelvin, ...)
+.. class:: GBSACalculator(system_generator, complex_topology, complex_positions, temperature=300*unit.kelvin, ...)
 
    The main engine for performing fixed-trajectory MM/GBSA calculations with enhanced force group handling.
 
@@ -57,6 +57,6 @@ Running the Analysis
 
 .. function:: run_analysis(config_file)
 
-   Main entry point. Parses the YAML configuration, builds the system using `FixedEnhancedTrueForceFieldMMGBSA`, and executes the specific analysis protocol (e.g., Single Trajectory Protocol).
+   Main entry point. Parses the YAML configuration, builds the system using `GBSACalculator`, and executes the specific analysis protocol (e.g., Single Trajectory Protocol).
 
    :param config_file: Path to the YAML configuration file.

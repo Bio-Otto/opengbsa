@@ -6,13 +6,13 @@ Test creating a combined protein+ligand system for MM/GBSA
 import sys
 sys.path.insert(0, '/home/bio-otto/Desktop/ATHENA-BACKUP/Desktop/mmpbsa/mmgbsa_v0.0.4')
 
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 from openff.toolkit.topology import Molecule
 import openmm
 from openmm import app, unit
 
 # Create calculator
-calc = FixedEnhancedTrueForceFieldMMGBSA(
+calc = GBSACalculator(
     temperature=300,
     verbose=1,
     gb_model='OBC2',

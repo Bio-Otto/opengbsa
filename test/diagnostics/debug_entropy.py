@@ -1,7 +1,7 @@
 
 import pandas as pd
 import numpy as np
-from mmgbsa.core import FixedEnhancedTrueForceFieldMMGBSA
+from mmgbsa.core import GBSACalculator
 
 def test_entropy():
     print("Loading results...")
@@ -11,7 +11,7 @@ def test_entropy():
         print(f"Binding energies: {binding_energies}")
         print(f"Shape: {binding_energies.shape}")
         
-        calculator = FixedEnhancedTrueForceFieldMMGBSA(temperature=300)
+        calculator = GBSACalculator(temperature=300)
         
         print("Calculating entropy...")
         entropy = calculator.calculate_interaction_entropy(binding_energies, 300.0)

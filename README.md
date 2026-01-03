@@ -329,7 +329,7 @@ binding_energy = results['mean_binding_energy']
 ### Main Classes
 
 - `MMGBSARunner`: Main analysis runner
-- `FixedEnhancedTrueForceFieldMMGBSA`: Core MM/GBSA calculator
+- `GBSACalculator`: Core MM/GBSA calculator
 - `PerResidueDecomposition`: Per-residue analysis
 - `NormalModeAnalysis`: Entropy calculations
 
