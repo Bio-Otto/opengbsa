@@ -1,0 +1,110 @@
+# MM/GBSA Analysis Configuration File (Master Template)
+# ======================================================
+# This file contains all necessary parameters and settings for MM/GBSA analysis.
+# Compatible with GROMACS and Amber files.
+
+# =================================================================================================
+# 1. INPUT FILES
+# =================================================================================================
+input:
+  # [MANDATORY] Topology File
+  # Defines the atomic structure and connectivity of the system.
+  # E.g., 'topol.top' (Gromacs) or 'complex.prmtop' (Amber)
+  topology: topol.top
+
+  # [MANDATORY] Trajectory File
+  # Coordinate file from the simulation.
+  # E.g., 'md_complex_prod.xtc'
+  # ERROR CONDITION: If atom count does not match topology, analysis will fail.
+  trajectory: md_complex_prod.xtc
+
+  # [CRITICAL - SPECIAL NOTE FOR GROMACS USERS]
+  # If using a Gromacs .top file:
+  # 1. Enter your main .top file in the 'topology' parameter.
+  # 2. ALL included files referenced in your .top file (e.g., #include "topol_Protein_chain_A.itp" 
+  #    or "ligand.itp") MUST be present in the WORK DIRECTORY (or same folder as .top file).
+  #    If missing, you will get a "File not found" error and conversion will fail.
+  # 3. The system will be automatically converted to Amber format.
+
+  # [OPTIONAL] Ligand PDB File
+  # Isolated ligand structure (if Gaussian/Amber parameterization is needed).
+  ligand_pdb: ligand.pdb
+
+  # [OPTIONAL] Ligand Mol File (.mol / .sdf)
+  # Recommended for precise definition of ligand connectivity and charges.
+  # If not provided, connectivity is guessed from PDB (High error rate).
+  ligand_mol: ligand.mol
+
+  # [MANDATORY / OPTIONAL] Ligand Residue Name
+  # 3-letter code defining the ligand in the system (E.g., 'LIG').
+  # If ligand name is NOT 'LIG', 'UNL', or 'UNK', it is MANDATORY to specify it here.
+  # If specified incorrectly, the ligand may be detected as "Protein" or "Water".
+  ligand_resname: LIG
+
+  # [ADVANCED] Custom Selections (Only if Automatic Selection Fails)
+  # ligand_selection: "resname LIG"
+  # receptor_selection: "protein"
+
+# =================================================================================================
+# 2. GENERAL PARAMETERS (PARAMS)
+# =================================================================================================
+params:
+  # [OPTIONAL] Output Directory (Default: 'results')
+  output_directory: results_analysis
+
+  # [OPTIONAL] Forcefields
+  # If your system is already parameterized (Gromacs .top or Amber .prmtop), these settings
+  # are used only to fill missing parameters or re-generate components.
+  # 'amber' and 'gaff'/'openff' are standard.
+  protein_forcefield: amber  # Options: amber, charmm, amber03
+  ligand_forcefield: gaff    # Options: gaff, openff (Recommended), gaff2
+
+# =================================================================================================
+# 3. ANALYSIS SETTINGS
+# =================================================================================================
+analysis_settings:
+  # [MANDATORY] GB Model (Implicit Solvent)
+  # Model used for binding energy calculation.
+  # 'OBC2': Most common, balanced model. (Default)
+  gb_model: OBC2
+
+  # [OPTIONAL] Physical Conditions
+  salt_concentration: 0.15  # Molar (Default: 0.15)
+  temperature: 300          # Kelvin (Default: 300)
+
+  # [IMPORTANT] Analysis Performance
+  # max_frames: Number of frames to analyze.
+  #   - 50-100: Suitable for fast preliminary analysis.
+  #   - 500+: For publication-quality statistical reliability.
+  # ERROR CONDITION: If trajectory is shorter than this, all frames are used.
+  max_frames: 50
+
+  # [ADVANCED] Residue Decomposition
+  # Set to 'true' to see which amino acids contribute to the energy.
+  # decomposition_method: 'fast' (Recommended) or 'full' (Very slow).
+  run_per_residue_decomposition: true
+  decomposition_method: fast
+
+  # [ADVANCED] Entropy Calculation (-TdS)
+  # Adds entropy contribution to binding energy. Required if you want 'Delta G' (Gibbs).
+  # Options:
+  #   - 'interaction': Fast and stable. (Recommended)
+  #   - 'quasiharmonic': Requires significant memory and time.
+  #   - 'none': Entropy is not calculated (Output is Enthalpy only).
+  entropy_method: interaction
+
+  # [OPTIONAL] System Settings
+  verbose: 1      # 1: Standard info, 2: Detailed debug.
+  use_cache: true # Reuse previous calculations (Speeds up re-runs).
+
+# =================================================================================================
+# 4. VISUALIZATION
+# =================================================================================================
+visualization:
+  generate_report: true    # HTML report (Includes charts).
+  generate_pymol: true     # PyMOL session file (.pml).
+  
+  # PyMOL Settings
+  pymol:
+    energy_threshold: -1.0 # Show bonds stronger than -1.0 kcal/mol.
+    distance_cutoff: 5.0   # Consider interactions within 5 Angstroms.

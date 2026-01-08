@@ -19,31 +19,9 @@ import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch
 import matplotlib.patheffects as path_effects
 
-# ProLIF imports
-try:
-    import prolif
-    PROLIF_AVAILABLE = True
-    
-    # ProLIF plotting imports (handle different versions)
-    try:
-        # Try ProLIF 2.0.3+ plotting structure
-        from prolif.plotting import residues, utils, barcode, complex3d
-        PROLIF_PLOTTING_AVAILABLE = True
-        print("  • ProLIF Plotting: ✅ (v2.0.3+)")
-    except ImportError:
-        try:
-            # Try older ProLIF plotting structure
-            from prolif import plotting
-            from prolif.plotting.network import LigNetwork
-            PROLIF_PLOTTING_AVAILABLE = True
-            print("  • ProLIF Plotting: ✅ (legacy)")
-        except ImportError:
-            PROLIF_PLOTTING_AVAILABLE = False
-            print("  ⚠️  ProLIF plotting not available - using basic functionality")
-except ImportError:
-    PROLIF_AVAILABLE = False
-    PROLIF_PLOTTING_AVAILABLE = False
-    print("⚠️  ProLIF not available - interaction analysis will be limited")
+# ProLIF Removed
+PROLIF_AVAILABLE = False
+PROLIF_PLOTTING_AVAILABLE = False
 
 # RDKit imports
 try:
@@ -109,216 +87,11 @@ class AdvancedVisualization:
     def analyze_protein_ligand_interactions(self, complex_pdb, ligand_mol, trajectory_file=None, 
                                           frame_indices=None, ligand_resname=None):
         """
-        Analyze protein-ligand interactions using ProLIF (tutorial-based approach)
-        
-        Parameters:
-        -----------
-        complex_pdb : str
-            Path to protein-ligand complex PDB file
-        ligand_mol : str
-            Path to ligand molecule file (.sdf, .mol2, .pdb)
-        trajectory_file : str, optional
-            Path to trajectory file for time-dependent analysis
-        frame_indices : list, optional
-            Specific frame indices to analyze
-        ligand_resname : str, optional
-            Ligand residue name in PDB
-            
-        Returns:
-        --------
-        dict : Interaction analysis results
+        Analyze protein-ligand interactions (Placeholder - ProLIF removed)
         """
-        if not self.prolif_available:
-            print("❌ ProLIF not available for interaction analysis")
-            return None
-        
-        print(f"🔍 Analyzing protein-ligand interactions...")
-        
-        try:
-            # Load complex structure
-            if self.openmm_available:
-                pdb = app.PDBFile(complex_pdb)
-                topology = pdb.topology
-                
-                # Find ligand residue name if not provided
-                if ligand_resname is None:
-                    ligand_resname = self._find_ligand_resname(topology)
-                
-                print(f"  • Ligand residue: {ligand_resname}")
-                
-                # Load ligand molecule
-                if self.rdkit_available:
-                    if ligand_mol.endswith('.sdf'):
-                        mol = Chem.SDMolSupplier(ligand_mol)[0]
-                    elif ligand_mol.endswith('.mol2'):
-                        mol = Chem.MolFromMol2File(ligand_mol)
-                    else:
-                        mol = Chem.MolFromPDBFile(ligand_mol)
-                    
-                    if mol is None:
-                        print(f"  ❌ Could not load ligand from {ligand_mol}")
-                        return None
-                    
-                    print(f"  • Ligand loaded: {mol.GetNumAtoms()} atoms")
-                else:
-                    print(f"  ❌ RDKit not available for ligand processing")
-                    return None
-                
-                # Load trajectory if provided
-                if trajectory_file and self.mdtraj_available:
-                    print(f"  • Loading trajectory: {trajectory_file}")
-                    traj = md.load(trajectory_file, top=complex_pdb)
-                    
-                    if frame_indices is None:
-                        # Analyze every 10th frame for efficiency
-                        frame_indices = list(range(0, len(traj), 10))
-                    
-                    print(f"  • Analyzing {len(frame_indices)} frames")
-                    
-                                    # Initialize ProLIF fingerprint using tutorial approach
-                try:
-                    # Try ProLIF tutorial approach with MDAnalysis
-                    fp = self._create_prolif_fingerprint_tutorial(complex_pdb, ligand_mol, ligand_resname)
-                    
-                    if fp is not None:
-                        # Store the fingerprint for native plotting
-                        self.prolif_fingerprint = fp
-                        
-                        # Analyze interactions for each frame
-                        interaction_results = []
-                        
-                        for i, frame_idx in enumerate(frame_indices):
-                            if i % 10 == 0:
-                                print(f"    Frame {i+1}/{len(frame_indices)}")
-                            
-                            # Get frame
-                            frame = traj[frame_idx]
-                            
-                            # Calculate interactions using ProLIF fingerprint
-                            try:
-                                interactions = fp.generate(frame, lig_resname=ligand_resname)
-                                interactions = interactions.to_dataframe()
-                            except Exception:
-                                # Fallback to basic method
-                                interactions = self._analyze_frame_basic(frame, mol, ligand_resname)
-                            
-                            interactions['frame'] = frame_idx
-                            interaction_results.append(interactions)
-                    else:
-                        # Fallback to basic ProLIF approach
-                        fp = prolif.Fingerprint()
-                        interaction_results = []
-                        
-                        for i, frame_idx in enumerate(frame_indices):
-                            if i % 10 == 0:
-                                print(f"    Frame {i+1}/{len(frame_indices)}")
-                            
-                            # Get frame
-                            frame = traj[frame_idx]
-                            
-                            # Calculate interactions (ProLIF 2.0.3+ method)
-                            try:
-                                # ProLIF 2.0.3+ API
-                                fp.run_from_trajectory(frame, mol, lig_resname=ligand_resname)
-                                interactions = fp.to_dataframe()
-                            except (AttributeError, TypeError):
-                                try:
-                                    # Fallback to older API
-                                    fp.run(frame, mol, lig_resname=ligand_resname)
-                                    interactions = fp.to_dataframe()
-                                except Exception:
-                                    try:
-                                        # Try basic ProLIF method
-                                        interactions = fp.generate(frame, mol, lig_resname=ligand_resname)
-                                        interactions = interactions.to_dataframe()
-                                    except Exception:
-                                        # Fallback to basic method
-                                        interactions = self._analyze_frame_basic(frame, mol, ligand_resname)
-                            
-                            interactions['frame'] = frame_idx
-                            interaction_results.append(interactions)
-                        
-                        # Store the fingerprint for native plotting
-                        self.prolif_fingerprint = fp
-                        
-                except Exception as e:
-                    print(f"  ⚠️  ProLIF analysis failed: {e}")
-                    print("  📝 Using simplified interaction analysis")
-                    # Create simplified interaction data
-                    interaction_results = self._create_simplified_interactions(frame_indices, ligand_resname)
-                    self.prolif_fingerprint = None
-                    
-                    # Combine results
-                    all_interactions = pd.concat(interaction_results, ignore_index=True)
-                    
-                    # Calculate interaction frequencies
-                    interaction_freq = self._calculate_interaction_frequencies(all_interactions)
-                    
-                    # Store results
-                    self.interaction_data = {
-                        'raw_interactions': all_interactions,
-                        'interaction_frequencies': interaction_freq,
-                        'n_frames': len(frame_indices),
-                        'ligand_resname': ligand_resname,
-                        'ligand_atoms': mol.GetNumAtoms()
-                    }
-                    
-                    print(f"  ✅ Interaction analysis completed")
-                    print(f"    • {len(interaction_freq)} unique interactions")
-                    print(f"    • {len(frame_indices)} frames analyzed")
-                    
-                    return self.interaction_data
-                    
-                else:
-                    # Single structure analysis
-                    print(f"  • Single structure analysis")
-                    
-                    # Load structure with MDTraj
-                    if self.mdtraj_available:
-                        traj = md.load(complex_pdb)
-                        
-                        # Initialize ProLIF fingerprint
-                        fp = prolif.Fingerprint()
-                        
-                        # Calculate interactions
-                        try:
-                            fp.run_from_trajectory(traj, mol, lig_resname=ligand_resname)
-                            interactions = fp.to_dataframe()
-                        except (AttributeError, TypeError):
-                            try:
-                                fp.run(traj, mol, lig_resname=ligand_resname)
-                                interactions = fp.to_dataframe()
-                            except Exception:
-                                try:
-                                    interactions = fp.generate(traj, mol, lig_resname=ligand_resname)
-                                    interactions = interactions.to_dataframe()
-                                except Exception:
-                                    # Fallback to basic method
-                                    interactions = self._analyze_frame_basic(traj, mol, ligand_resname)
-                        
-                        # Calculate interaction frequencies
-                        interaction_freq = self._calculate_interaction_frequencies(interactions)
-                        
-                        # Store results
-                        self.interaction_data = {
-                            'raw_interactions': interactions,
-                            'interaction_frequencies': interaction_freq,
-                            'n_frames': 1,
-                            'ligand_resname': ligand_resname,
-                            'ligand_atoms': mol.GetNumAtoms()
-                        }
-                        
-                        print(f"  ✅ Single structure analysis completed")
-                        print(f"    • {len(interaction_freq)} unique interactions")
-                        
-                        return self.interaction_data
-                    else:
-                        print(f"  ❌ MDTraj not available for structure analysis")
-                        return None
-                        
-        except Exception as e:
-            print(f"  ❌ Interaction analysis failed: {e}")
-            return None
+        print("ℹ️  Interaction analysis is currently disabled (ProLIF removed).")
+        return None
+
     
     def _analyze_frame_basic(self, frame, mol, ligand_resname):
         """
@@ -464,6 +237,10 @@ class AdvancedVisualization:
         if 'decomposition_results' in mmgbsa_results:
             decomp = mmgbsa_results['decomposition_results']
             if 'dataframe' in decomp:
+                # Normalize column names (Fast: 'residue' -> Full: 'residue_id')
+                if 'residue' in decomp['dataframe'].columns and 'residue_id' not in decomp['dataframe'].columns:
+                    decomp['dataframe']['residue_id'] = decomp['dataframe']['residue']
+                
                 self.mmgbsa_data['per_residue'] = decomp['dataframe']
                 print(f"  ✅ Per-residue MM/GBSA data loaded")
         
@@ -551,7 +328,7 @@ class AdvancedVisualization:
             print(f"  ❌ Comparison failed: {e}")
             return None
     
-    def generate_comprehensive_plots(self, compound_name="Ligand"):
+    def generate_comprehensive_plots(self, compound_name="Ligand", generate_report=True):
         """
         Generate comprehensive visualization plots
         
@@ -559,6 +336,8 @@ class AdvancedVisualization:
         -----------
         compound_name : str
             Name of the compound for plot titles
+        generate_report : bool
+            Whether to generate HTML report
         """
         print(f"📊 Generating comprehensive visualization plots...")
         
@@ -577,12 +356,27 @@ class AdvancedVisualization:
         # 3. Combined analysis
         if self.interaction_data and self.mmgbsa_data:
             self._plot_combined_analysis(plots_dir, compound_name)
+            
+        # 4. Energy Heatmap (Robust fallback)
+        if self.mmgbsa_data and 'per_residue' in self.mmgbsa_data:
+            self._plot_energy_heatmap(plots_dir, compound_name)
         
         # 4. Generate 2D interaction plot
         self.generate_2d_interaction_plot(compound_name, plots_dir)
         
+        # 4. Generate Statistical Plots
+        print("  📊 Generating statistical plots...")
+        self.plot_rolling_average(compound_name)
+        self.plot_convergence(compound_name)
+        self.plot_energy_components_pie(compound_name)
+        self.plot_entropy_convergence(compound_name)
+        
+        # Print success
+        print(f"  ✅ Comprehensive plots generated in {self.output_dir}/plots")
+        
         # 5. Generate HTML report
-        self._generate_html_report(compound_name)
+        if generate_report:
+            self._generate_html_report(compound_name)
         
         print(f"  ✅ All plots generated in {plots_dir}")
     
@@ -703,6 +497,48 @@ class AdvancedVisualization:
         plt.tight_layout()
         plt.savefig(plots_dir / f'comparison_analysis_{compound_name}.png', 
                    dpi=300, bbox_inches='tight')
+        plt.close()
+        
+    def _plot_energy_heatmap(self, plots_dir, compound_name):
+        """Plot energy contribution heatmap"""
+        print(f"  📊 Generating energy heatmap...")
+        df = self.mmgbsa_data['per_residue'].copy()
+        
+        # Filter for significant residues (e.g. Total < -0.5)
+        # Handle column names robustly
+        total_col = 'total' if 'total' in df.columns else 'total_mean'
+        if total_col not in df.columns:
+            return
+
+        df_sig = df[df[total_col] < -0.1].sort_values(by=total_col, ascending=True).head(20)
+        
+        if df_sig.empty:
+            return
+
+        # Prepare data for heatmap
+        # Columns: vdw, electrostatic, solvation (if exists), total
+        # Normalize columns
+        cols_map = {
+            'vdw': 'Van der Waals', 'vdw_mean': 'Van der Waals',
+            'electrostatic': 'Electrostatic', 'ele_mean': 'Electrostatic',
+            'solvation': 'Solvation', 'sol_mean': 'Solvation', # 'solvation' might be GB+SA
+            'total': 'Total', 'total_mean': 'Total'
+        }
+        
+        plot_data = pd.DataFrame()
+        plot_data['Residue'] = df_sig['residue_id']
+        
+        for orig, new in cols_map.items():
+            if orig in df_sig.columns:
+                plot_data[new] = df_sig[orig]
+        
+        plot_data = plot_data.set_index('Residue')
+        
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(plot_data, annot=True, cmap="coolwarm_r", center=0, fmt=".2f")
+        plt.title(f"Top Energy Contributors: {compound_name}")
+        plt.tight_layout()
+        plt.savefig(plots_dir / f'energy_heatmap_{compound_name}.png', dpi=300)
         plt.close()
     
     def _plot_combined_analysis(self, plots_dir, compound_name):
@@ -838,74 +674,11 @@ class AdvancedVisualization:
     
     def generate_2d_interaction_plot(self, compound_name="Ligand", output_dir=None):
         """
-        Generate ProLIF native 2D ligand-residue interaction plots ONLY (no matplotlib fallback)
-        
-        Parameters:
-        -----------
-        compound_name : str
-            Name of the compound
-        output_dir : str, optional
-            Output directory for the plot
+        Generate ProLIF native 2D ligand-residue interaction plots (Placeholder - ProLIF removed)
         """
-        if output_dir is None:
-            output_dir = self.output_dir / "plots"
-        
-        # Ensure output directory exists
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        print(f"  🎨 Generating ProLIF native interaction plots...")
-        
-        try:
-            # Get interaction data
-            if not hasattr(self, 'prolif_fingerprint') or self.prolif_fingerprint is None:
-                print(f"  ❌ ProLIF fingerprint not available. Cannot plot.")
-                return None
-            
-            results = []
-            # 1. Generate Barcode plot
-            try:
-                from prolif.plotting.barcode import Barcode
-                df = self.prolif_fingerprint.to_dataframe()
-                plot = Barcode(df)
-                fig, ax = plot.display(figsize=(10, 8), dpi=300)
-                png_file = output_dir / f"prolif_barcode_{compound_name.replace(' ', '_')}.png"
-                fig.savefig(png_file, bbox_inches='tight', dpi=300)
-                plt.close(fig)
-                print(f"  ✅ ProLIF Barcode plot saved: {png_file}")
-                results.append(png_file)
-            except Exception as e:
-                print(f"  ⚠️  Barcode plot generation failed: {e}")
-            # 2. Generate Residues plot
-            try:
-                from prolif.plotting.residues import display_residues
-                ligand = self.prolif_fingerprint.ligand
-                html_content = display_residues(ligand)
-                html_file = output_dir / f"prolif_residues_{compound_name.replace(' ', '_')}.html"
-                with open(html_file, 'w') as f:
-                    f.write(html_content)
-                print(f"  ✅ ProLIF Residues plot saved: {html_file}")
-                results.append(html_file)
-            except Exception as e:
-                print(f"  ⚠️  Residues plot generation failed: {e}")
-            # 3. Generate Complex3D plot
-            try:
-                from prolif.plotting.complex3d import Complex3D
-                ligand = self.prolif_fingerprint.ligand
-                protein = self.prolif_fingerprint.protein
-                plot3d = Complex3D.from_fingerprint(self.prolif_fingerprint, ligand, protein, frame=0)
-                png_file = output_dir / f"prolif_complex3d_{compound_name.replace(' ', '_')}.png"
-                plot3d.save_png(str(png_file))
-                print(f"  ✅ ProLIF Complex3D plot saved: {png_file}")
-                results.append(png_file)
-            except Exception as e:
-                print(f"  ⚠️  Complex3D plot generation failed: {e}")
-            if not results:
-                print(f"  ❌ No ProLIF plot could be generated.")
-                return None
-            return results[0]  # Return first successful plot
-        except Exception as e:
-            print(f"  ❌ ProLIF plotting failed: {e}")
-            return None
+        print("ℹ️  2D interaction plotting is disabled (ProLIF removed).") 
+        return None
+
     
     def _generate_prolif_html_plot(self, compound_name, output_dir):
         """
@@ -916,32 +689,240 @@ class AdvancedVisualization:
     
     def _generate_prolif_complex3d_plot(self, interactions, compound_name, output_dir):
         """
-        Generate ProLIF Complex3D plot using native ProLIF methods
+        Generate ProLIF Complex3D plot (Placeholder - ProLIF removed)
         """
+        return None
+    
+    def plot_rolling_average(self, compound_name="Ligand", window_pct=0.1):
+        """
+        Plot Binding Energy Stabilization (Raw + Rolling Average)
+        """
+        if not self.mmgbsa_data or 'binding_data' not in self.mmgbsa_data:
+            print("  ⚠️  No binding data available for rolling average plot")
+            return None
+            
         try:
-            # Try to use ProLIF's native plotting methods
-            if hasattr(self, 'prolif_fingerprint') and self.prolif_fingerprint is not None:
-                # Use ProLIF's native Complex3D plotting
-                from prolif.plotting.complex3d import Complex3D
-                
-                # Get the fingerprint DataFrame
-                df = self.prolif_fingerprint.to_dataframe()
-                
-                # Create Complex3D plot
-                plot = Complex3D(df)
-                
-                # Save as PNG
-                png_file = output_dir / f"prolif_complex3d_{compound_name.replace(' ', '_')}.png"
-                plot.save_png(str(png_file))
-                
-                print(f"  ✅ ProLIF Complex3D plot saved: {png_file}")
-                return png_file
-            else:
-                print(f"  ⚠️  No ProLIF fingerprint available for Complex3D plotting")
+            df = self.mmgbsa_data['binding_data']
+            if df is None or len(df) < 2:
                 return None
+                
+            output_dir = self.output_dir / "plots"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            plt.figure(figsize=(10, 6))
+            
+            # Raw data
+            plt.plot(df['frame'], df['binding_energy'], 'o-', color='lightgray', alpha=0.5, label='Raw ΔG', markersize=3)
+            
+            # Rolling Average
+            window = max(1, int(len(df) * window_pct))
+            rolling_mean = df['binding_energy'].rolling(window=window, min_periods=1).mean()
+            
+            plt.plot(df['frame'], rolling_mean, '-', color='#2c3e50', linewidth=2, label=f'Rolling Avg ({window} frames)')
+            
+            plt.axhline(y=df['binding_energy'].mean(), color='red', linestyle='--', alpha=0.5, label='Overall Mean')
+            
+            plt.xlabel('Frame')
+            plt.ylabel('Binding Free Energy (kcal/mol)')
+            plt.title(f'Energy Stabilization Analysis: {compound_name}')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            output_file = output_dir / f"rolling_average_{compound_name}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"  ✅ Rolling average plot saved: {output_file}")
+            return output_file
             
         except Exception as e:
-            print(f"  ⚠️  Complex3D plot generation failed: {e}")
+            print(f"  ❌ Rolling average plot failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def plot_convergence(self, compound_name="Ligand"):
+        """
+        Plot Binding Energy Convergence (Cumulative Mean + SEM)
+        """
+        if not self.mmgbsa_data or 'binding_data' not in self.mmgbsa_data:
+            return None
+            
+        try:
+            df = self.mmgbsa_data['binding_data']
+            if df is None or len(df) < 2:
+                return None
+                
+            output_dir = self.output_dir / "plots"
+            
+            # Calculate cumulative mean and std error
+            cumulative_mean = df['binding_energy'].expanding().mean()
+            cumulative_std = df['binding_energy'].expanding().std()
+            cumulative_n = np.arange(1, len(df) + 1)
+            cumulative_sem = cumulative_std / np.sqrt(cumulative_n)
+            
+            plt.figure(figsize=(10, 6))
+            
+            plt.plot(df['frame'], cumulative_mean, '-', color='#16a085', linewidth=2, label='Cumulative Mean ΔG')
+            plt.fill_between(df['frame'], 
+                           cumulative_mean - cumulative_sem, 
+                           cumulative_mean + cumulative_sem, 
+                           color='#16a085', alpha=0.2, label='Standard Error')
+            
+            plt.xlabel('Frame')
+            plt.ylabel('Cumulative Mean ΔG (kcal/mol)')
+            plt.title(f'Binding Energy Convergence: {compound_name}')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            output_file = output_dir / f"convergence_plot_{compound_name}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"  ✅ Convergence plot saved: {output_file}")
+            return output_file
+            
+        except Exception as e:
+            print(f"  ❌ Convergence plot failed: {e}")
+            return None
+
+    def plot_energy_components_pie(self, compound_name="Ligand"):
+        """
+        Plot Pie Chart of Mean Energy Components (Delta)
+        """
+        if not self.mmgbsa_data or 'binding_data' not in self.mmgbsa_data:
+            return None
+            
+        try:
+            df = self.mmgbsa_data['binding_data']
+            if df is None or len(df) == 0:
+                return None
+                
+            required_cols = ['delta_nb', 'delta_gb', 'delta_sa']
+            if not all(col in df.columns for col in required_cols):
+                print(f"  ⚠️  Missing component columns for pie chart")
+                return None
+            
+            output_dir = self.output_dir / "plots"
+            
+            # Mean values over trajectory
+            means = {
+                'VDW + Elec': df['delta_nb'].mean(),
+                'Polar Sol (GB)': df['delta_gb'].mean(),
+                'Non-polar (SA)': df['delta_sa'].mean(),
+                'Entropy (-TΔS)': self.mmgbsa_data.get('entropy_penalty', 0.0)
+            }
+            
+            # Filter out near-zero (entropy might be 0 if not calculated)
+            data = {k: v for k, v in means.items() if abs(v) > 0.1}
+            
+            if not data:
+                return None
+                
+            # For pie chart, usually we show relative MAGNITUDE of contributions?
+            # Or just values? With binding energy, some are positive (penalty) and some negative (favorable).
+            # A pie chart of signed values is confusing.
+            # Standard practice: Bar Chart is better for signed components. Pie chart for "Contribution to Stability"?
+            # User specifically asked for Pie Chart.
+            # Strategy: Two half-pies or separate sections for Favorable vs Unfavorable?
+            # BETTER: Pie chart of Absolute Contributions to show "Importance".
+            
+            abs_values = [abs(v) for v in data.values()]
+            labels = [f"{k}\n({v:.2f})" for k, v in data.items()]
+            colors = ['#3498db', '#e74c3c', '#f1c40f', '#9b59b6']
+            
+            plt.figure(figsize=(8, 8))
+            plt.pie(abs_values, labels=labels, autopct='%1.1f%%', startangle=90, colors=colors[:len(data)])
+            plt.title(f'Mean Energy Component Magnitude\n(Absolute Contribution)', fontsize=14)
+            
+            output_file = output_dir / f"components_pie_{compound_name}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"  ✅ Components Pie Chart saved: {output_file}")
+            return output_file
+            
+        except Exception as e:
+            print(f"  ❌ Pie chart generation failed: {e}")
+            return None
+
+    def plot_entropy_convergence(self, compound_name="Ligand"):
+        """
+        Plot Interaction Entropy Convergence (TdS vs dH)
+        This is expensive, so we might skip it if N is large, or do stride.
+        """
+        if not self.mmgbsa_data or 'binding_data' not in self.mmgbsa_data:
+            return None
+        
+        # Only if Interaction Entropy was requested/calculated
+        if self.mmgbsa_data.get('entropy_penalty', 0.0) == 0.0:
+            return None
+
+        try:
+            df = self.mmgbsa_data['binding_data']
+            if len(df) < 10:
+                return None
+                
+            output_dir = self.output_dir / "plots"
+            
+            # Calculate IE on expanding windows [0..N]
+            # IE Formula: -kT * ln < exp(beta * dE) >
+            # We need to replicate the calculation here
+            
+            T = 298.15 # Default/Approx (User didn't pass temp to viz, assuming 298)
+            # Use gas constant from core
+            R = 0.0019872041
+            beta = 1.0 / (R * T)
+            
+            ie_values = []
+            frames = []
+            
+            # Stride to avoid re-calculating every frame for long traj
+            stride = max(1, len(df) // 50) 
+            
+            energies = df['binding_energy'].values
+            
+            for i in range(10, len(df) + 1, stride):
+                subset = energies[:i]
+                mean_E = np.mean(subset)
+                dE = subset - mean_E
+                
+                # Safe Exp Mean
+                try:
+                    avg_exp = np.mean(np.exp(beta * dE))
+                    if avg_exp > 0:
+                        ts = (1.0/beta) * np.log(avg_exp)
+                        ie_values.append(ts) # This is TS (Entropy Term, usually negative)
+                        # Wait, formula returns "Entropy contribution (-TdS)". 
+                        # core.py returns: penalty_tds = (1.0/beta) * np.log(avg_val).
+                        # IE term is typically POSITIVE penalty for binding.
+                        frames.append(i)
+                except OverflowError:
+                    continue
+
+            if not ie_values:
+                return None
+
+            plt.figure(figsize=(10, 6))
+            plt.plot(frames, ie_values, 'o-', color='#8e44ad', label='Interaction Entropy (-TΔS)')
+            
+            plt.xlabel('Number of Frames Included')
+            plt.ylabel('Entropy Penalty (kcal/mol)')
+            plt.title(f'Interaction Entropy Convergence: {compound_name}')
+            plt.grid(True, alpha=0.3)
+            plt.legend()
+            
+            output_file = output_dir / f"entropy_convergence_{compound_name}.png"
+            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            print(f"  ✅ Entropy convergence plot saved: {output_file}")
+            return output_file
+            
+        except Exception as e:
+            print(f"  ❌ Entropy plot failed: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _generate_prolif_barcode_plot(self, interactions, compound_name, output_dir):
@@ -1794,62 +1775,9 @@ class AdvancedVisualization:
     
     def _create_prolif_fingerprint_tutorial(self, complex_pdb, ligand_mol, ligand_resname):
         """
-        Create ProLIF fingerprint using tutorial approach with MDAnalysis
+        Create ProLIF fingerprint (Placeholder - ProLIF removed)
         """
-        try:
-            # Try to use MDAnalysis for protein preparation (as recommended in tutorial)
-            try:
-                import MDAnalysis as mda
-                from prolif import Molecule
-                
-                print(f"  📚 Using ProLIF tutorial approach with MDAnalysis...")
-                
-                # Load protein with MDAnalysis
-                protein = mda.Universe(complex_pdb)
-                
-                # Prepare protein (remove waters, ions, etc.)
-                protein = protein.select_atoms("protein")
-                
-                # Load ligand with RDKit first, then convert to ProLIF Molecule
-                if self.rdkit_available:
-                    if ligand_mol.endswith('.sdf'):
-                        mol = Chem.SDMolSupplier(ligand_mol)[0]
-                    elif ligand_mol.endswith('.mol2'):
-                        mol = Chem.MolFromMol2File(ligand_mol)
-                    else:
-                        mol = Chem.MolFromPDBFile(ligand_mol)
-                    
-                    if mol is not None:
-                        # Convert RDKit mol to ProLIF Molecule
-                        ligand = Molecule.from_rdkit(mol)
-                    else:
-                        print(f"  ⚠️  Could not load ligand with RDKit")
-                        return None
-                else:
-                    print(f"  ⚠️  RDKit not available for ligand processing")
-                    return None
-                
-                # Create ProLIF fingerprint
-                fp = prolif.Fingerprint()
-                
-                # Run the fingerprint on the first frame to initialize it
-                try:
-                    # Use MDAnalysis universe directly
-                    fp.run(protein, ligand)
-                    
-                    print(f"  ✅ ProLIF fingerprint created and initialized using tutorial approach")
-                    return fp
-                except Exception as e:
-                    print(f"  ⚠️  Could not initialize fingerprint: {e}")
-                    return None
-                
-            except ImportError:
-                print(f"  ⚠️  MDAnalysis not available, using basic approach")
-                return None
-                
-        except Exception as e:
-            print(f"  ⚠️  Tutorial approach failed: {e}")
-            return None
+        return None
     
     def _create_sample_interaction_data(self):
         """Create sample interaction data for demonstration"""
@@ -1875,80 +1803,116 @@ class AdvancedVisualization:
         <head>
             <title>Advanced MM/GBSA Analysis: {compound_name}</title>
             <style>
-                body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                .header {{ background-color: #f0f0f0; padding: 20px; border-radius: 10px; }}
-                .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; background-color: #f5f7fa; color: #333; }}
+                .header {{ background-color: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                .section {{ background: white; margin: 25px 0; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }}
+                h1 {{ margin: 0; font-size: 24px; }}
+                h2 {{ margin: 5px 0 0 0; font-size: 18px; font-weight: normal; opacity: 0.9; }}
+                h3 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 0; }}
                 .plot {{ text-align: center; margin: 20px 0; }}
-                .plot img {{ max-width: 100%; height: auto; }}
-                table {{ border-collapse: collapse; width: 100%; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; }}
-                .correlation {{ font-weight: bold; color: #0066cc; }}
+                .plot img {{ max-width: 100%; height: auto; border-radius: 4px; border: 1px solid #eee; }}
+                table {{ border-collapse: collapse; width: 100%; margin-top: 15px; }}
+                th, td {{ border: 1px solid #eee; padding: 12px; text-align: left; }}
+                th {{ background-color: #f8f9fa; font-weight: 600; color: #2c3e50; }}
+                tr:hover {{ background-color: #f8f9fa; }}
+                .correlation {{ font-weight: bold; color: #2980b9; }}
+                .metric-value {{ font-family: monospace; font-weight: bold; }}
             </style>
         </head>
         <body>
             <div class="header">
                 <h1>Advanced MM/GBSA Analysis Report</h1>
                 <h2>Compound: {compound_name}</h2>
-                <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+                <p style="font-size: 12px; opacity: 0.7; margin-top: 10px;">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
             </div>
             
             <div class="section">
                 <h3>📊 Analysis Summary</h3>
                 <table>
                     <tr><th>Metric</th><th>Value</th></tr>
-                    <tr><td>Total Interactions</td><td>{len(self.interaction_data.get('interaction_frequencies', []))}</td></tr>
-                    <tr><td>Frames Analyzed</td><td>{self.interaction_data.get('n_frames', 0)}</td></tr>
-                    <tr><td>Ligand Atoms</td><td>{self.interaction_data.get('ligand_atoms', 0)}</td></tr>
-                    <tr><td>MM/GBSA Binding Energy</td><td>{self.mmgbsa_data.get('mean_binding_energy', 0):.2f} kcal/mol</td></tr>
-                    <tr><td>Residues Compared</td><td>{self.comparison_data.get('n_residues_compared', 0)}</td></tr>
+                    <tr><td>Total Interactions</td><td class="metric-value">{len(self.interaction_data.get('interaction_frequencies', []))}</td></tr>
+                    <tr><td>Frames Analyzed</td><td class="metric-value">{max(self.interaction_data.get('n_frames', 0), self.mmgbsa_data.get('n_frames', 0))}</td></tr>
+                    <tr><td>MM/GBSA Binding Energy</td><td class="metric-value">{self.mmgbsa_data.get('mean_binding_energy', 0):.2f} kcal/mol</td></tr>
                 </table>
             </div>
-            
+        """
+        
+        # Check for plots existence
+        plots_path = self.output_dir / "plots"
+        interaction_plot = plots_path / f"interaction_analysis_{compound_name}.png"
+        comparison_plot = plots_path / f"comparison_analysis_{compound_name}.png"
+        combined_plot = plots_path / f"comprehensive_analysis_{compound_name}.png"
+        heatmap_plot = plots_path / f"energy_heatmap_{compound_name}.png"
+        
+        # Interaction Analysis Section
+        if interaction_plot.exists():
+            html_content += f"""
             <div class="section">
                 <h3>🔍 Interaction Analysis</h3>
                 <div class="plot">
                     <img src="plots/interaction_analysis_{compound_name}.png" alt="Interaction Analysis">
                 </div>
             </div>
+            """
             
+        # MM/GBSA Heatmap Section (New)
+        if heatmap_plot.exists():
+            html_content += f"""
+            <div class="section">
+                <h3>🔥 Energy Contribution Heatmap</h3>
+                <p>Top residues contributing to binding energy (Lower values indicate stronger binding).</p>
+                <div class="plot">
+                    <img src="plots/energy_heatmap_{compound_name}.png" alt="Energy Heatmap">
+                </div>
+            </div>
+            """
+            
+        # Comparison Section
+        if comparison_plot.exists():
+            html_content += f"""
             <div class="section">
                 <h3>⚖️ MM/GBSA vs Interaction Comparison</h3>
                 <div class="plot">
                     <img src="plots/comparison_analysis_{compound_name}.png" alt="Comparison Analysis">
                 </div>
             </div>
+            """
             
+        # Comprehensive Section
+        if combined_plot.exists():
+            html_content += f"""
             <div class="section">
                 <h3>📈 Comprehensive Analysis</h3>
                 <div class="plot">
                     <img src="plots/comprehensive_analysis_{compound_name}.png" alt="Comprehensive Analysis">
                 </div>
             </div>
-        """
+            """
+
+        # Statistical Plots Section
+        rolling_plot = plots_path / f"rolling_average_{compound_name}.png"
+        convergence_plot = plots_path / f"convergence_plot_{compound_name}.png"
+        pie_plot = plots_path / f"components_pie_{compound_name}.png"
+        entropy_plot = plots_path / f"entropy_convergence_{compound_name}.png"
         
-        # Add correlation information
-        if self.comparison_data and 'correlations' in self.comparison_data:
-            html_content += """
+        if any(p.exists() for p in [rolling_plot, convergence_plot, pie_plot, entropy_plot]):
+            html_content += f"""
             <div class="section">
-                <h3>📊 Correlation Analysis</h3>
-                <table>
-                    <tr><th>Correlation Type</th><th>Value</th><th>Interpretation</th></tr>
+                <h3>📉 Energy Statistics & Convergence</h3>
+                <div class="plot">
             """
             
-            correlations = self.comparison_data['correlations']
-            for corr_type, value in correlations.items():
-                interpretation = "Strong" if abs(value) > 0.7 else "Moderate" if abs(value) > 0.3 else "Weak"
-                html_content += f"""
-                    <tr>
-                        <td>{corr_type.replace('_', ' ').title()}</td>
-                        <td class="correlation">{value:.3f}</td>
-                        <td>{interpretation}</td>
-                    </tr>
-                """
-            
+            if rolling_plot.exists():
+                html_content += f'<img src="plots/{rolling_plot.name}" style="width: 48%; margin: 5px;">\n'
+            if convergence_plot.exists():
+                html_content += f'<img src="plots/{convergence_plot.name}" style="width: 48%; margin: 5px;">\n'
+            if pie_plot.exists():
+                html_content += f'<img src="plots/{pie_plot.name}" style="width: 45%; margin: 5px;">\n'
+            if entropy_plot.exists():
+                html_content += f'<img src="plots/{entropy_plot.name}" style="width: 45%; margin: 5px;">\n'
+                
             html_content += """
-                </table>
+                </div>
             </div>
             """
         

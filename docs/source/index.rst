@@ -1,37 +1,41 @@
-.. OpenGBSA documentation master file, created by sphinx-quickstart
+.. OpenGBSA documentation master file
 
-Welcome to OpenGBSA's documentation!
-====================================
+OpenGBSA Documentation
+======================
 
-OpenGBSA is a comprehensive MM/GBSA analysis package for protein-ligand binding free energy calculations, featuring YAML-based configuration, advanced decomposition, entropy analysis, and CUDA/CPU support.
+OpenGBSA is a modern, open-source, and easy-to-use MM/GBSA analysis tool for protein-ligand complexes.
+
+This documentation provides detailed information on installation, usage, and advanced features of the project.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
+   :caption: Getting Started
 
    installation
-   theory
-   usage
-   advanced
-   config_guide
+   gromacs_guide
+   multi_engine_guide
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Usage and Settings
+   
+   configuration
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Analysis and Results
+   
    outputs
+
+.. toctree::
+   :maxdepth: 2
+   :caption: References
+   
    api_reference
-   testing
-   troubleshooting
    contributing
    changelog
 
+Contact and Support
+===================
 
-Getting Started
----------------
-- **Installation:** How to install OpenGBSA with conda (recommended) and environment requirements.
-- **Basic Usage:** Quick start for running an analysis with YAML configuration.
-- **Advanced Analysis:** Frame selection, per-residue decomposition, entropy, and frame-by-frame output.
-- **Configuration Guide:** All YAML parameters and best practices.
-- **Output Files:** Explanation of all result files and formats.
-- **Troubleshooting:** Common issues and solutions (Python/numpy/openmm/cuda).
-- **Contributing:** How to contribute, code style, and developer setup.
-
-.. note::
-   For the latest updates, see the `GitHub repository <https://github.com/Bio-Otto/opengbsa>`_.
-
+You can visit the GitHub repository for questions and suggestions.

@@ -120,6 +120,65 @@ class PerResidueDecomposition:
         else:
             print("ERROR: Per-residue decomposition failed")
             return mmgbsa_results
+
+    def execute_decomposition(self, trajectory, systems_dict):
+        """
+        Execute decomposition on an already loaded trajectory and system
+        """
+        try:
+            log.process("Executing Decomposition on provided trajectory...")
+            
+            # Build residue map
+            complex_topology = systems_dict['complex_topology'] # OpenMM Topology
+            ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
+            residue_map, ligand_indices = self._build_residue_mapping(complex_topology, ligand_resname)
+            
+            log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
+            
+            residue_energies = []
+            frame_by_frame_data = [] 
+            
+            for i, frame in enumerate(trajectory):
+                if i % 10 == 0:
+                    log.process(f"Decomposing frame {i+1}/{len(trajectory)}...")
+                
+                frame_result = self._decompose_single_frame(
+                    frame, systems_dict, residue_map, ligand_indices, ligand_resname
+                )
+                
+                if frame_result:
+                    residue_energies.append(frame_result)
+                    
+                    # Store frame-by-frame data
+                    frame_data = {'frame_index': i, 'frame_number': i + 1}
+                    for res_id, energies in frame_result.items():
+                        parts = res_id.split('_')
+                        res_key = f"{parts[0]}{parts[1]}"
+                        frame_data[f'{res_key}_total'] = energies['total']
+                    frame_by_frame_data.append(frame_data)
+
+            if not residue_energies:
+                return None
+                
+            averaged = self._average_residue_energies(residue_energies)
+            
+            # Visualization/Saving
+            analysis = self._analyze_decomposition_results(averaged)
+            self._generate_decomposition_plots(analysis)
+            
+            # Save CSV
+            if self.output_dir:
+                 df = analysis['dataframe']
+                 df.to_csv(os.path.join(self.output_dir, "final_decomposition.csv"), index=False)
+                 print(f"✓ Decomposition saved to: final_decomposition.csv")
+                 
+            return averaged
+
+        except Exception as e:
+            log.error(f"Decomposition execution failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def _perform_per_residue_decomposition(self, ligand_mol, complex_pdb, 
                                          xtc_file, ligand_pdb, n_frames,
@@ -135,6 +194,7 @@ class PerResidueDecomposition:
             if len(traj) < n_frames:
                 n_frames = len(traj)
             
+            # Select frames based on parameters
             # Select frames based on parameters
             selected_frames = self._select_frames(len(traj), n_frames, frame_start, frame_end,
                                                 frame_stride, frame_selection, random_seed)
@@ -153,7 +213,7 @@ class PerResidueDecomposition:
             if len(keep_indices) < topology.n_atoms:
                 log.process(f"Stripping {topology.n_atoms - len(keep_indices)} solvent/ion atoms from trajectory to match system...")
                 decomp_traj = decomp_traj.atom_slice(keep_indices)
-            
+
             # Prepare systems for decomposition
             systems = self._prepare_decomposition_systems(ligand_mol, complex_pdb, ligand_pdb)
             
@@ -422,13 +482,35 @@ class PerResidueDecomposition:
             
             # GBSAForceManager vdW and electrostatics
             nonbonded_force = None
-            for force in system.getForces():
-                if isinstance(force, openmm.NonbondedForce):
-                    nonbonded_force = force
-                    break
+            pdb_params = None
             
-            if nonbonded_force is None:
-                return interaction_energies
+            # Check for ParmEd Structure first (Robust Fallback)
+            if 'parmed_structure' in systems:
+                pdb_params = {}
+                struct = systems['parmed_structure']
+                # Pre-process parameters
+                for i, atom in enumerate(struct.atoms):
+                    # Convert Rmin/2 to Sigma (nm)
+                    # Sigma = (Rmin/2) * 2 / 1.12246 = Rmin * 1.7818 / 1.122 = No.
+                    # Rmin = 2^(1/6) * Sigma.
+                    # Rmin/2 (ParmEd) = 0.5 * 2^(1/6) * Sigma.
+                    # Sigma = (Rmin/2) / (0.5 * 2^(1/6)) = (Rmin/2) * 1.781797
+                    sigma = atom.rmin * 1.781797697 * 0.1 # Angstrom -> nm
+                    # Epsilon
+                    epsilon = atom.epsilon # kcal/mol
+                    # Charge
+                    charge = atom.charge
+                    pdb_params[i] = (charge, sigma, epsilon)
+            
+            # Fallback to NonbondedForce if no ParmEd
+            if pdb_params is None:
+                for force in system.getForces():
+                    if isinstance(force, openmm.NonbondedForce):
+                        nonbonded_force = force
+                        break
+                
+                if nonbonded_force is None:
+                    return interaction_energies
             
             # Calculate interactions for each residue
             for res_id, res_atoms in residue_map.items():
@@ -439,9 +521,21 @@ class PerResidueDecomposition:
                 for res_atom in res_atoms:
                     for lig_atom in ligand_indices:
                         # Get parameters
-                        charge1, sigma1, epsilon1 = nonbonded_force.getParticleParameters(res_atom)
-                        charge2, sigma2, epsilon2 = nonbonded_force.getParticleParameters(lig_atom)
-                        
+                        if pdb_params:
+                             q1, sig1, eps1 = pdb_params[res_atom]
+                             q2, sig2, eps2 = pdb_params[lig_atom]
+                             
+                             charge1 = q1 * unit.elementary_charge
+                             charge2 = q2 * unit.elementary_charge
+                             sigma_combined = (sig1 + sig2) * 0.5 * unit.nanometer
+                             epsilon_combined = (eps1 * eps2)**0.5 * unit.kilocalorie_per_mole
+                             
+                        else:
+                             charge1, sigma1, epsilon1 = nonbonded_force.getParticleParameters(res_atom)
+                             charge2, sigma2, epsilon2 = nonbonded_force.getParticleParameters(lig_atom)
+                             sigma_combined = (sigma1 + sigma2) * 0.5
+                             epsilon_combined = (epsilon1 * epsilon2) ** 0.5
+
                         # Calculate distance
                         pos1 = positions[res_atom]
                         pos2 = positions[lig_atom]
@@ -449,13 +543,15 @@ class PerResidueDecomposition:
                         
                         if r > 0.001:  # Avoid division by zero
                             # Electrostatic energy (Coulomb)
-                            k_e = 138.935485  # kcal·Å/(mol·e²)
+                            # k_e = 332.0522 kcal·Å/(mol·e²)
+                            k_e = 332.0522
                             charge_product = charge1.value_in_unit(unit.elementary_charge) * charge2.value_in_unit(unit.elementary_charge)
-                            elec_energy += k_e * charge_product / (r * 10)  # Convert nm to Å
+                            r_angstrom = r * 10.0
+                            elec_energy += k_e * charge_product / r_angstrom
                             
                             # van der Waals energy (Lennard-Jones)
-                            sigma_combined = (sigma1 + sigma2) * 0.5
-                            epsilon_combined = (epsilon1 * epsilon2) ** 0.5
+                            # (sigma_combined and epsilon_combined calculated above)
+                            
                             
                             sigma_val = sigma_combined.value_in_unit(unit.nanometer)
                             epsilon_val = epsilon_combined.value_in_unit(unit.kilocalorie_per_mole)
@@ -465,7 +561,8 @@ class PerResidueDecomposition:
                                 if sigma_over_r < 10:  # Avoid numerical overflow
                                     sr6 = sigma_over_r ** 6
                                     sr12 = sr6 ** 2
-                                    vdw_energy += 4 * epsilon_val * (sr12 - sr6)
+                                    term = 4 * epsilon_val * (sr12 - sr6)
+                                    vdw_energy += term
                 
                 interaction_energies[res_id] = {
                     'vdw': vdw_energy,
@@ -718,7 +815,12 @@ class PerResidueDecomposition:
         """
         try:
             # Try to import advanced visualization
-            from advanced_visualization import AdvancedVisualization
+            # Try to import advanced visualization
+            try:
+                from mmgbsa.visualization import AdvancedVisualization
+            except ImportError:
+                # Fallback purely for local testing / dev environment
+                from visualization import AdvancedVisualization
             
             print("  Generating advanced visualization with ProLIF integration...")
             

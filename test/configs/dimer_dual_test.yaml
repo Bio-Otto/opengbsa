@@ -1,0 +1,29 @@
+analysis_settings:
+  dimer_mode: true
+  energy_decomposition: false
+  frame_end: null
+  frame_selection: sequential
+  frame_start: 0
+  frame_stride: 1
+  max_frames: 2
+  qha_analyze_complex: false
+  random_seed: 42
+  receptor_subunits:
+    unit_a: residue 0 to 98
+    unit_b: residue 99 to 197
+input_files:
+  complex_pdb: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/3if6_fixed.pdb
+  ligand_mol: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/ligand.sdf
+  ligand_pdb: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/ligand.pdb
+  trajectory: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/3if6.xtc
+parameter_settings:
+  charge_method: gasteiger
+  entropy_method: none
+  gb_model: OBC2
+  protein_forcefield: amber
+  salt_concentration: 0.15
+  solute_dielectric: 2.0
+  solvent_dielectric: 80.0
+  verbose: 1
+output_settings:
+  output_directory: /home/bio-otto/Desktop/opengbsa/test/results/dimer_dual_test

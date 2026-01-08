@@ -1,406 +1,120 @@
-<div align="center">
-  <img src="assets/original_logo.png" alt="OpenGBSA Logo" width="400"/>
-  
-  **Molecular Mechanics / Generalized Born Surface Area Analysis**
+# OpenGBSA: Advanced MM/GBSA Analysis Tool
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![OpenMM 8.0+](https://img.shields.io/badge/OpenMM-8.0+-green.svg)](https://openmm.org/)
-  [![Version](https://img.shields.io/badge/version-0.0.1-blue.svg)](https://github.com/Bio-Otto/opengbsa)
-</div>
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)
+![OpenMM](https://img.shields.io/badge/OpenMM-8.0+-green.svg)
 
-A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) analysis package with advanced features including entropy analysis, per-residue decomposition, and YAML-based configuration.
+OpenGBSA is a comprehensive and automated tool for **Binding Free Energy**, **Energy Decomposition**, and **Entropy** calculations for protein-ligand complexes derived from molecular dynamics simulations.
 
-**GitHub**: https://github.com/Bio-Otto/opengbsa
-
-## 🚀 Features
-
-- **Multiple GB Models**: OBC2, OBC1, HCT, GBn, GBn2
-- **Entropy Analysis**: Normal Mode Analysis (NMA) and Quasi-Harmonic Analysis (QHA)
-- **Per-Residue Decomposition**: Detailed residue-ligand interaction analysis
-- **Professional Logging**: Color-coded, icon-enhanced command line output
-- **YAML Configuration**: Single configuration file for all parameters
-- **Advanced Validation**: Input validation, Mol2 auto-conversion, and result quality checks
-- **Parallel Processing**: Multi-core support for faster analysis
-- **Caching System**: Reuse prepared systems for efficiency
-- **Comprehensive Reporting**: Detailed analysis reports with plots
-
-## 📋 Requirements
-
-- Python 3.8+
-- OpenMM 8.0+
-- CUDA support (optional, for GPU acceleration)
-- MDTraj, OpenFF-Toolkit, RDKit, Pandas, NumPy
-
-## 🛠️ Installation
-
-### Option 1: Using pip
-```bash
-pip install -r requirements.txt
-```
-
-### Option 2: Using conda/mamba
-```bash
-# Create new environment
-conda create -n mmgbsa python=3.9
-conda activate mmgbsa
-
-# Install dependencies
-conda install -c conda-forge openmm mdtraj openff-toolkit rdkit
-pip install -r requirements.txt
-```
-
-### Option 3: Docker (coming soon)
-```bash
-# Docker image will be available soon
-docker pull mmgbsa/analysis:latest
-```
-
-## 🎯 Quick Start
-
-### 1. Create Configuration File
-```bash
-python mmgbsa_cli.py --create-config
-```
-
-This creates a sample `mmgbsa_config.yaml` file. Edit it with your specific parameters.
-
-### 2. Run Analysis
-```bash
-python mmgbsa_cli.py mmgbsa_config.yaml
-```
-
-### 3. View Results
-Results are saved in `mmgbsa_results/analysis_YYYYMMDD_HHMMSS/` with:
-- `final_report.txt`: Comprehensive analysis report
-- `results_summary.yaml`: Summary of all results
-- `analysis_config.yaml`: Copy of used configuration
-- Various plots and data files
-
-## 📁 Input Files
-
-Your YAML configuration should specify these input files:
-
-```yaml
-input_files:
-  ligand_mol: "path/to/ligand.sdf"      # Ligand structure (SDF, MOL2)
-  complex_pdb: "path/to/complex.pdb"    # Protein-ligand complex
-  ligand_pdb: "path/to/ligand.pdb"      # Isolated ligand structure
-  trajectory: "path/to/trajectory.xtc"  # MD trajectory (.xtc, .dcd, .trr)
-```
-
-## ⚙️ Configuration Options
-
-### Complete Configuration (Recommended)
-For full control and reproducibility, use the complete configuration file:
-
-```bash
-# Create complete configuration
-python mmgbsa_cli.py --create-complete-config
-
-# Run with complete configuration
-python mmgbsa_cli.py complete_mmgbsa_config.yaml
-```
-
-The complete configuration includes all parameters with alternatives in comments.
-
-### Basic Analysis
-```yaml
-analysis_settings:
-  temperature: 300                    # Temperature (K)
-  gb_model: "OBC2"                   # GB model (OBC2, OBC1, HCT, GBn, GBn2)
-  salt_concentration: 0.15           # Salt concentration (M)
-  max_frames: 50                     # Number of trajectory frames
-  use_cache: true                    # Enable caching
-```
-
-### Frame Selection
-```yaml
-analysis_settings:
-  # Frame selection parameters
-  max_frames: 50                     # Maximum frames to analyze
-  frame_start: 100                   # Start frame (0-indexed), null = beginning
-  frame_end: 1000                    # End frame (0-indexed), null = end
-  frame_stride: 5                    # Every Nth frame, null = all frames
-  frame_selection: "sequential"      # "sequential", "equidistant", "random"
-  random_seed: 42                    # Random seed for random selection
-```
-
-### Advanced Features
-```yaml
-analysis_settings:
-  entropy_method: "interaction"      # "interaction", "quasiharmonic", "normal_mode"
-  run_entropy_analysis: true         # Enable entropy calculation
-  qha_analyze_complex: true          # Use full Delta S = S_complex - S_protein - S_ligand
-  run_per_residue_decomposition: true # Enable per-residue analysis
-  decomp_frames: 10                  # Frames for decomposition
-  energy_decomposition: false        # Energy component analysis
-  parallel_processing: true          # Enable parallel processing
-```
-
-### Output Control
-```yaml
-output_settings:
-  output_directory: "mmgbsa_results" # Output directory
-  save_plots: true                   # Save generated plots
-  save_trajectories: false           # Save processed trajectories
-```
-
-## 📊 Example Configurations
-
-### Complete Configuration (Recommended)
-For full control and reproducibility, use the complete configuration:
-
-```bash
-# Create complete configuration
-python mmgbsa_cli.py --create-complete-config
-
-# Run with complete configuration
-python mmgbsa_cli.py complete_mmgbsa_config.yaml
-```
-
-The complete configuration includes all parameters with alternatives in comments.
-
-### Quick Analysis (Fast)
-```yaml
-analysis_settings:
-  max_frames: 20
-  frame_start: 500                   # Skip equilibration
-  frame_stride: 10                   # Every 10th frame
-  frame_selection: "sequential"
-  run_entropy_analysis: false
-  run_per_residue_decomposition: false
-  use_cache: true
-```
-
-### Comprehensive Analysis (Detailed)
-```yaml
-analysis_settings:
-  max_frames: 100
-  entropy_method: "quasiharmonic"
-  run_entropy_analysis: true
-  run_per_residue_decomposition: true
-  decomp_frames: 20
-  energy_decomposition: true
-```
-
-### Production Analysis (Balanced)
-```yaml
-analysis_settings:
-  max_frames: 50
-  frame_start: 1000                  # Skip equilibration
-  frame_end: null                    # To end of trajectory
-  frame_stride: 5                    # Every 5th frame
-  frame_selection: "sequential"
-  run_entropy_analysis: false
-  run_per_residue_decomposition: true
-  decomp_frames: 10
-  use_cache: true
-  parallel_processing: true
-```
-
-## 🔬 Analysis Types
-
-### 1. Standard MM/GBSA
-Calculates binding free energy using molecular mechanics and implicit solvation.
-
-### 2. Entropy Analysis
-Calculates entropic contributions using one of three methods:
-- **Interaction Entropy (IE)**: Fast, suitable for large systems.
-- **Normal Mode Analysis (NMA)**: Rigorous, computationally expensive.
-- **Quasi-Harmonic Analysis (QHA)**: Derived from covariance matrix of fluctuations.
-
-### 3. Per-Residue Decomposition
-Identifies which protein residues contribute most to binding.
-
-### 4. Hot Spot Identification
-Finds key binding hot spots for drug design.
-
-## 📊 Frame Selection Strategies
-
-### Sequential Selection
-```yaml
-frame_selection: "sequential"
-frame_stride: 5                      # Every 5th frame
-frame_start: 100                     # Start from frame 100
-frame_end: 1000                      # End at frame 1000
-```
-
-### Equidistant Selection
-```yaml
-frame_selection: "equidistant"
-max_frames: 30                       # Select exactly 30 frames
-frame_start: 50                      # From frame 50
-frame_end: 1000                      # To frame 1000
-```
-
-### Random Selection
-```yaml
-frame_selection: "random"
-max_frames: 25                       # Select 25 random frames
-frame_start: 200                     # From frame 200
-frame_end: 800                       # To frame 800
-frame_stride: 2                      # Only consider every 2nd frame
-random_seed: 123                     # For reproducibility
-```
-
-### Production Analysis
-```yaml
-frame_start: 1000                    # Skip equilibration
-frame_stride: 5                      # Every 5th frame
-max_frames: 100                      # Maximum 100 frames
-frame_selection: "sequential"
-```
-
-## 📈 Output Files
-
-- **`final_report.txt`**: Comprehensive text report
-- **`results_summary.yaml`**: Structured results data
-- **`binding_energy_plot.png`**: Binding energy over time
-- **`energy_distribution.png`**: Energy distribution histogram
-- **`convergence_plot.png`**: Convergence analysis
-- **`per_residue_contributions.csv`**: Per-residue energy contributions
-- **`hot_spots.csv`**: Identified binding hot spots
-
-## 🧪 Testing
-
-OpenGBSA comes with a comprehensive test suite.
-
-```bash
-# Run the verification test script
-python test/run_analysis_test.py test/configs/verification_test.yaml
-```
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-1. **Missing CUDA**: If CUDA is not available, the system will automatically fall back to CPU
-2. **Memory Issues**: Reduce `max_frames` or `decomp_frames` for large systems
-3. **File Format Issues**: Ensure trajectory files are compatible with MDTraj
-
-### Warning Suppression
-
-The package automatically suppresses common warnings:
-- **OpenEye Toolkit warnings**: Normal if OpenEye is not installed (uses RDKit instead)
-- **OpenMM deprecation warnings**: Handles both new and old OpenMM import styles
-- **Other warnings**: General warning suppression for cleaner output
-
-If you see warnings, they are informational and don't affect functionality.
-
-### Validation Errors
-
-The package includes comprehensive validation:
-- Input file existence and format
-- System preparation success
-- Energy calculation convergence
-- Result quality checks
-
-## 🔧 Advanced Usage
-
-### Command Line Options
-```bash
-# Create sample configuration
-python mmgbsa_cli.py --create-config
-
-# Create custom named configuration
-python mmgbsa_cli.py --create-config --config-name my_config.yaml
-
-# Run with specific configuration
-python mmgbsa_cli.py my_config.yaml
-```
-
-### Programmatic Usage
-```python
-from mmgbsa.runner import MMGBSARunner
-
-# Create runner
-runner = MMGBSARunner('config.yaml')
-
-# Run analysis
-results = runner.run_analysis()
-
-# Access results
-binding_energy = results['mean_binding_energy']
-```
-
-## 📚 API Reference
-
-### Main Classes
-
-- `MMGBSARunner`: Main analysis runner
-- `GBSACalculator`: Core MM/GBSA calculator
-- `PerResidueDecomposition`: Per-residue analysis
-- `NormalModeAnalysis`: Entropy calculations
-
-### Key Methods
-
-- `run_analysis()`: Run complete analysis pipeline
-- `run_enhanced()`: Run MM/GBSA with validation
-- `run_per_residue_analysis()`: Run per-residue decomposition
-- `run_ultra_robust_nma()`: Run entropy analysis
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🙏 Acknowledgments
-
-- OpenMM development team
-- OpenFF consortium
-- MDTraj developers
-- Scientific Python community
-
-## 📞 Support
-
-For issues and questions:
-- Check the troubleshooting section
-- Review the configuration examples
-- Open an issue on GitHub
-
-## 🔄 Version History
-
-- **v0.0.5**: Logging overhaul, Test reorganization, Configurable Entropy (NMA/QHA/IE), Mol2 fixes
-- **v0.0.4**: YAML configuration system, comprehensive runner
-- **v0.0.3**: Per-residue decomposition, hot spot identification
-- **v0.0.2**: Entropy analysis, ultra-robust NMA
-- **v0.0.1**: Basic MM/GBSA implementation
-
-## 🎨 Logo and Branding
-
-OpenGBSA includes professional logos and branding materials:
-
-- **Main Logo**: `assets/logo.png` - High-resolution logo for documentation
-- **Vector Logo**: `assets/logo.svg` - Scalable vector format for web use
-- **Simple Logo**: `assets/logo_simple.png` - Clean text-based logo
-- **GitHub Banner**: `assets/github_banner.png` - Repository banner (1280x640)
-
-### Logo Usage
-
-The logos are available under the same MIT license as the software. You can use them for:
-- Documentation and presentations
-- Academic publications
-- Conference materials
-- Educational resources
-
-### Custom Logo Generation
-
-To generate custom logo variants, use the included logo generator:
-
-```bash
-python assets/logo_generator.py
-```
-
-This creates all logo variants with customizable colors and styles.
+It is particularly optimized for **GROMACS** and **Amber** users.
 
 ---
 
-**Note**: This package is under active development. Please report any issues or suggest improvements! 
+## 🚀 Features
+
+*   **Automatic Conversion:** Automatically converts GROMACS `.top` and `.xtc` files to Amber format and prepares them for MM/GBSA analysis.
+*   **Advanced Statistical Visualization:**
+    *   **Rolling Average:** Shows whether the system has reached equilibrium.
+    *   **Convergence Plot:** Analyzes the convergence status of binding energy.
+    *   **Component Pie Chart:** Displays contribution ratios of VDW, Electrostatic, and Solvation energies.
+    *   **Entropy Convergence:** Monitors the change of the entropy term over time.
+*   **Detailed HTML Report:** Generates a professional report containing all charts and result tables.
+*   **Per-Residue Decomposition:** Shows which amino acid contributes how much to binding (via Heatmap).
+*   **Flexible Configuration:** The entire process is controlled by a single YAML file.
+
+---
+
+## 🛠️ Installation
+
+The recommended installation method is using `conda` (or `mamba`):
+
+```bash
+# Create a new environment
+conda create -n mmgbsa python=3.10
+conda activate mmgbsa
+
+# Install basic dependencies
+conda install -c conda-forge openmm mdtraj openff-toolkit rdkit parmed
+pip install matplotlib seaborn pandas pyyaml Jinja2
+```
+
+---
+
+## 📖 Quick Start
+
+### 1. Preparing Configuration File
+To create a template containing all settings:
+
+```bash
+# Creates a sample config file
+# (This file is also available as 'config_master.yaml' in the project root)
+```
+
+You can copy `config_master.yaml` to `my_config.yaml` and edit it.
+
+### 2. Starting Analysis
+
+```bash
+# Run analysis
+python run_mmpbsa.py my_config.yaml
+```
+
+---
+
+## ⚠️ Critical Information for GROMACS Users
+
+Things to consider when working with GROMACS files (`.top`, `.xtc`):
+
+### 1. File Dependencies (.itp)
+If your `topol.top` file references other files (e.g., `#include "ligand.itp"`), **all these files MUST be present in the analysis directory.**
+If the program cannot find these references while reading the .top file, it gives a **"File not found"** error and analysis stops.
+
+**Example Folder Structure:**
+```text
+my_project/
+├── topol.top         <-- Main topology
+├── ligand.itp        <-- Included in topology
+├── protein.itp       <-- Included in topology
+├── md_prod.xtc       <-- Trajectory
+├── ligand.pdb        <-- Ligand structure (For parameterization)
+└── config.yaml       <-- Configuration
+```
+
+### 2. Atom Count Mismatch
+The number of atoms in the `trajectory` (xtc) and `topology` (top) file in your configuration file must match exactly.
+*   If you get an "Atom count mismatch" error during analysis, ensure your `.xtc` file represents the same system as your `.top` file (Are waters removed? Are ions present?).
+
+---
+
+## 📊 Output Files
+
+When analysis is complete, the following are created in the `results` folder:
+
+1.  **Reports:**
+    *   `advanced_analysis_report_LIG.html`: Interactive report containing all charts and summary.
+    *   `fixed_enhanced_mmgbsa_results_obc2.csv`: Detailed energy values for each frame.
+
+2.  **Plots (in `plots/` folder):**
+    *   `rolling_average_LIG.png`: Energy stability chart.
+    *   `convergence_plot_LIG.png`: Cumulative average chart.
+    *   `energy_heatmap_LIG.png`: Amino acid contribution heatmap.
+    *   `components_pie_LIG.png`: Energy components pie chart.
+
+3.  **Visualization:**
+    *   `view_binding.pml`: Ready-to-use session file for PyMOL (Shows important interactions in 3D).
+
+---
+
+## 🔧 Common Errors
+
+| Error Message | Cause | Solution |
+|-------------|-------|-------|
+| `File not found in topology include` | .itp files in .top file are missing | Copy all .itp files to the working directory. |
+| `Atom count mismatch` | Topology and Trajectory atom counts differ | Use an .xtc suitable for your .top file (e.g., water-free). |
+| `Ligand Residue not found` | Ligand name is incorrect in config file | Check `ligand_resname` parameter in `config.yaml` (default: LIG). |
+
+---
+
+## 📞 Support
+
+If you encounter issues, please review the detailed comments in the `config_master.yaml` file.

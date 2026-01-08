@@ -13,6 +13,7 @@ import warnings
 from .utils import convert_mol2_to_sdf
 import mdtraj as md
 from collections import defaultdict
+import xml.etree.ElementTree as ET
 
 
 
@@ -67,10 +68,20 @@ import pickle
 import time
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
+from .visualization import AdvancedVisualization
+from .pymol_viz import PyMOLVisualizer
 from pathlib import Path
 import numpy as np
-import mdtraj as md
 import pandas as pd
+try:
+    import mdtraj as md
+except ImportError:
+    md = None
+
+# New Modular Imports
+from .inputs import InputManager, EngineMode
+from .topology import TopologyLoader
+from .trajectory import TrajectoryProcessor
 from openmm import app, openmm, unit
 from openff.toolkit.topology import Molecule
 from openff.toolkit.typing.engines.smirnoff import ForceField
@@ -85,10 +96,11 @@ from openmmforcefields.generators import SystemGenerator
 class GBSAForceManager:
     """Fixed Enhanced GBSA force implementation that properly handles exceptions"""
     
-    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0):
+    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5):
         self.gb_model = gb_model
         self.salt_concentration = salt_concentration
         self.solute_dielectric = solute_dielectric
+        self.solvent_dielectric = solvent_dielectric
         
         # GB model mapping with fixed versions
         self.gb_models = {
@@ -170,7 +182,7 @@ class GBSAForceManager:
         
         # Set parameters
         gb_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
-        gb_force.setSolventDielectric(78.5)
+        gb_force.setSolventDielectric(self.solvent_dielectric) # Configurable (default 78.5)
         gb_force.setSoluteDielectric(self.solute_dielectric) # Configurable (default 1.0)
         # FIX: Set SA energy to 0 to strictly calculate Polar Solvation (GB)
         # We calculate NonPolar SA in a separate force
@@ -290,8 +302,8 @@ class GBSAForceManager:
                                   openmm.CustomGBForce.ParticlePairNoExclusions)
             
             # Set global parameters
-            gb_force.addGlobalParameter("solventDielectric", 78.5)
-            gb_force.addGlobalParameter("soluteDielectric", 1.0)
+            gb_force.addGlobalParameter("solventDielectric", self.solvent_dielectric) # Configurable (default 78.5)
+            gb_force.addGlobalParameter("soluteDielectric", self.solute_dielectric)   # Configurable (default 1.0)
             gb_force.addGlobalParameter("offset", 0.009)  # nm
             
             # Add particles
@@ -533,7 +545,8 @@ class GBSACalculator:
     
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
-             charge_method='am1bcc', solute_dielectric=1.0, entropy_method='none'):
+             charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
+             visualization_settings=None):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -559,6 +572,8 @@ class GBSACalculator:
             Charge method for ligand ('am1bcc', 'gasteiger')
         solute_dielectric : float
             Solute dielectric constant (default 1.0)
+        solvent_dielectric : float
+            Solvent dielectric constant (default 78.5)
         entropy_method : str
             Entropy calculation method ('interaction', 'normal_mode', 'none')
         """
@@ -571,12 +586,18 @@ class GBSACalculator:
         self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
         self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
         self.protein_forcefield = protein_forcefield
+        # Support user-defined ligand forcefield (openff, gaff)
+        self.ligand_forcefield = 'openff' 
         self.charge_method = charge_method
         self.solute_dielectric = solute_dielectric
+        self.solvent_dielectric = solvent_dielectric
         self.entropy_method = entropy_method
+        self.decomposition_method = decomposition_method
+        self.visualization_settings = visualization_settings or {}
+        self.parameterized_residues = [] # Track any dynamic residues
         
         # Initialize fixed enhanced GBSA manager
-        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric)
+        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric)
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []
@@ -595,11 +616,11 @@ class GBSACalculator:
         Parameters:
         -----------
         ligand_mol : str
-            Path to ligand molecule file (.sdf, .mol2, .pdb)
+            Path to ligand molecule file (.sdf, .mol2, .pdb) - Optional
         complex_pdb : str
             Path to protein-ligand complex PDB file
         ligand_pdb : str
-            Path to isolated ligand PDB file
+            Path to isolated ligand PDB file - Optional
         xtc_file : str
             Path to molecular dynamics trajectory file
             
@@ -618,6 +639,7 @@ class GBSACalculator:
         }
         
         for file_type, file_path in files_to_check.items():
+            if file_path is None: continue
             if not Path(file_path).exists():
                 validation_errors.append(f"{file_type} file not found: {file_path}")
         
@@ -626,39 +648,44 @@ class GBSACalculator:
         
         # Validate PDB files
         try:
-            complex_pdb_obj = app.PDBFile(complex_pdb)
-            ligand_pdb_obj = app.PDBFile(ligand_pdb)
-            
-            # Check if complex contains ligand
-            complex_residues = set(res.name for res in complex_pdb_obj.topology.residues())
-            ligand_residues = set(res.name for res in ligand_pdb_obj.topology.residues())
-            
-            if not ligand_residues.issubset(complex_residues):
-                validation_errors.append("Ligand residues not found in complex PDB")
+            if str(complex_pdb).endswith('.prmtop'):
+                 complex_pdb_obj = app.AmberPrmtopFile(complex_pdb)
+            else:
+                 complex_pdb_obj = app.PDBFile(complex_pdb)
+            if ligand_pdb:
+                ligand_pdb_obj = app.PDBFile(ligand_pdb)
                 
+                # Check if complex contains ligand
+                complex_residues = set(res.name for res in complex_pdb_obj.topology.residues())
+                ligand_residues = set(res.name for res in ligand_pdb_obj.topology.residues())
+                
+                if not ligand_residues.issubset(complex_residues):
+                    validation_errors.append("Ligand residues not found in complex PDB")
+            
         except Exception as e:
             validation_errors.append(f"PDB validation error: {e}")
         
         # Validate ligand molecule file
-        try:
-            if ligand_mol.endswith('.mol2'):
-                # Use our robust converter for validation
-                cache_path = self.cache_dir if hasattr(self, 'cache_dir') else Path(".mmgbsa_cache")
-                cache_path.mkdir(parents=True, exist_ok=True)
-                validation_temp_sdf = str(cache_path / "validation_temp.sdf")
-                
-                if convert_mol2_to_sdf(ligand_mol, validation_temp_sdf):
-                     mol = Molecule.from_file(validation_temp_sdf, allow_undefined_stereo=True)
+        if ligand_mol:
+            try:
+                if ligand_mol.endswith('.mol2'):
+                    # Use our robust converter for validation
+                    cache_path = self.cache_dir if hasattr(self, 'cache_dir') else Path(".mmgbsa_cache")
+                    cache_path.mkdir(parents=True, exist_ok=True)
+                    validation_temp_sdf = str(cache_path / "validation_temp.sdf")
+                    
+                    if convert_mol2_to_sdf(ligand_mol, validation_temp_sdf):
+                         mol = Molecule.from_file(validation_temp_sdf, allow_undefined_stereo=True)
+                    else:
+                         validation_errors.append(f"Ligand Mol2 conversion failed for {ligand_mol}")
+                         mol = None
                 else:
-                     validation_errors.append(f"Ligand Mol2 conversion failed for {ligand_mol}")
-                     mol = None
-            else:
-                mol = Molecule.from_file(ligand_mol, allow_undefined_stereo=True)
-                
-            if mol is not None and mol.n_atoms == 0:
-                validation_errors.append("Ligand molecule file contains no atoms")
-        except Exception as e:
-            validation_errors.append(f"Ligand molecule validation error: {e}")
+                    mol = Molecule.from_file(ligand_mol, allow_undefined_stereo=True)
+                    
+                if mol is not None and mol.n_atoms == 0:
+                    validation_errors.append("Ligand molecule file contains no atoms")
+            except Exception as e:
+                validation_errors.append(f"Ligand molecule validation error: {e}")
         
         # Validate trajectory
         try:
@@ -959,10 +986,16 @@ class GBSACalculator:
         print(f"✓ Detailed report generated in {output_dir}")
         return output_dir
 
-    # Include all the original caching methods here
-    def _get_cache_filename(self, file_path, system_type, gb_model):
+    # Include all the original caching methods
+    def set_ligand_forcefield(self, ff_name):
+        """Set the ligand forcefield (openff or gaff)"""
+        if ff_name and ff_name.lower() in ['openff', 'gaff']:
+            self.ligand_forcefield = ff_name.lower()
+            if self.verbose: print(f"Set ligand forcefield to: {self.ligand_forcefield}")
+
+    def _get_cache_filename(self, input_path, system_type, gb_model):
         """Generate cache filename based on input file and parameters"""
-        file_path = Path(file_path)
+        file_path = Path(input_path)
         file_hash = str(hash(f"{file_path.name}_{system_type}_{gb_model}_{self.salt_concentration}"))
         return self.cache_dir / f"{file_path.stem}_{system_type}_{gb_model}_{file_hash}.pkl"
 
@@ -1011,8 +1044,17 @@ class GBSACalculator:
             return None, None, None
 
     def parameterize_ligand_openff(self, ligand_mol):
-        """Parameterize ligand with OpenFF SMIRNOFF (with caching)"""
-        
+        """
+        Parameterize ligand using OpenFF Toolkit or Antechamber (GAFF)
+        Returns: system, topology (OpenMM), Molecule (OpenFF)
+        """
+        from openff.toolkit.topology import Molecule
+        # GAFF Support imports
+        try:
+             from openmmforcefields.generators import GAFFTemplateGenerator
+        except ImportError:
+             pass
+
         # Check cache first
         if self.use_cache:
             cache_file = self._get_cache_filename(ligand_mol, 'ligand', self.gb_model)
@@ -1071,11 +1113,40 @@ class GBSACalculator:
                 else:
                     raise e
 
-            ff = ForceField('openff-2.1.0.offxml')
-            ligand_top = mol.to_topology().to_openmm()
-            # Use the pre-charged molecule
-            ligand_system = ff.create_openmm_system(mol.to_topology(), charge_from_molecules=[mol])
-            log.success(f"OpenFF parameterization successful ({time.time() - start_time:.1f}s)")
+            # Create Force Field
+            if self.ligand_forcefield == 'gaff':
+                 log.process("Parameterizing ligand with GAFF2 using Antechamber...")
+                 # GAFF workflow using openmmforcefields
+                 # We need to create a system using Amber params + GAFF generator
+                 # 1. Create empty system/topology or use existing? 
+                 # GAFFTemplateGenerator needs to be registered to a ForceField
+                 
+                 # Create a basic Amber ForceField provided by OpenMM, then register GAFF
+                 # Use 'amber14-all.xml' + tip3p usually for protein, but for ligand we just need generic
+                 # Actually we usually add it to a blank system?
+                 
+                 # OpenMMForceFields method:
+                 gaff_gen = GAFFTemplateGenerator(molecules=mol, forcefield='gaff-2.11')
+                 
+                 # We need an OpenMM Topology.
+                 ligand_top = mol.to_topology().to_openmm()
+                 
+                 # Create system using standard Amber xml (allowing custom GAFF types)
+                 # We can use a minimal xml or standard.
+                 omm_ff = app.ForceField('amber14-all.xml') 
+                 omm_ff.registerTemplateGenerator(gaff_gen.generator)
+                 
+                 ligand_system = omm_ff.createSystem(ligand_top, nonbondedMethod=app.NoCutoff)
+                 log.success(f"GAFF validation and generation successful via Antechamber")
+
+            else:
+                 # Default: OpenFF (Sage)
+                 ff = ForceField('openff-2.1.0.offxml')
+                 ligand_top = mol.to_topology().to_openmm()
+                 # Use the pre-charged molecule
+                 ligand_system = ff.create_openmm_system(mol.to_topology(), charge_from_molecules=[mol])
+                 log.success(f"OpenFF (Sage) parameterization successful ({time.time() - start_time:.1f}s)")
+            
             
         except Exception as e:
             log.error(f"Error in OpenFF parameterization: {e}")
@@ -1100,7 +1171,33 @@ class GBSACalculator:
         
         return ligand_gbsa_system, ligand_top, mol
 
-    def parameterize_protein_amber(self, complex_pdb, ligand_resname):
+    def parameterize_protein_amber(self, complex_pdb, ligand_resname=None, ignore_ligand_check=False):
+        from pathlib import Path
+        # Native Prmtop Support (Inserted)
+        # Native Topology Support (Universal)
+        try:
+             mode = InputManager.detect_mode(complex_pdb)
+             if mode in [EngineMode.AMBER, EngineMode.GROMACS, EngineMode.CHARMM]:
+                  log.info(f"Detected Native Mode: {mode}")
+                  system, topology, positions = TopologyLoader.load_system(complex_pdb, mode)
+                  
+                  # Add Enhanced GBSA Forces (Separated GB/SA)
+                  system = self.gbsa_manager.add_gbsa_to_system(system, topology)
+                  
+                  # Generate temp PDB wrapper if needed, or just allow path
+                  # Creating dummy positions for PDBFile write (or use native if available)
+                  temp_pdb = str(Path(complex_pdb).parent / (Path(complex_pdb).stem + "_temp.pdb"))
+                  
+                  if positions is None:
+                      positions = [openmm.Vec3(0,0,0)]*topology.getNumAtoms()
+                      
+                  with open(temp_pdb, 'w') as f:
+                      app.PDBFile.writeFile(topology, positions, f)
+                      
+                  return system, topology, None, temp_pdb
+        except Exception as e:
+             # Fallthrough to standard PDB parameterization if detection fails or Generic
+             pass
         """Parameterize protein with Amber (with caching)"""
         
         # Check cache first
@@ -1130,14 +1227,18 @@ class GBSACalculator:
         modeller = app.Modeller(pdb.topology, pdb.positions)
         
         # Delete ligand (residues with ligand_resname)
-        ligand_residues = [r for r in modeller.topology.residues() if r.name == ligand_resname]
-        if ligand_residues:
-            modeller.delete(ligand_residues)
-            log.info(f"Removed {len(ligand_residues)} ligand residues from protein system")
+        if ligand_resname and not ignore_ligand_check:
+            ligand_residues = [r for r in modeller.topology.residues() if r.name == ligand_resname]
+            if ligand_residues:
+                modeller.delete(ligand_residues)
+                log.info(f"Removed {len(ligand_residues)} ligand residues from protein system")
             
         # FIX: Remove solvent and ions for MM/GBSA (Dry complex)
         solvent_names = ['HOH', 'WAT', 'TIP3', 'SOL']
         ion_names = ['NA', 'CL', 'K', 'MG', 'ZN', 'CA']
+        
+        # Reset parameterized residues tracker
+        self.parameterized_residues = []
         
         solvent_residues = [r for r in modeller.topology.residues() if r.name in solvent_names]
         ion_residues = [r for r in modeller.topology.residues() if r.name in ion_names]
@@ -1146,28 +1247,155 @@ class GBSACalculator:
         if to_delete:
             modeller.delete(to_delete)
             log.info(f"Removed {len(solvent_residues)} solvent and {len(ion_residues)} ion residues")
+    
         
         # Add hydrogens/solvent if missing (robustness)
-        # We use the selected forcefield to determine standard protonation/bonds
-        # Note: addHydrogens might add solvent if not careful, but usually defaults to no solvent unless specified?
-        # Actually addHydrogens adds hydrogens. addSolvent adds water.
+        # Select force field based on protein_forcefield parameter
+        if self.protein_forcefield.lower() == 'charmm':
+            log.info("Using CHARMM36 force field (with KCX support)...")
+            from pathlib import Path
+            kcx_template = Path(__file__).parent / 'forcefields' / 'kcx_charmm36.xml'
+            forcefield_files = [str(kcx_template), 'charmm36.xml']
+            log.info("  ✓ Loaded custom KCX template + CHARMM36")
+        elif self.protein_forcefield.lower() == 'charmm_gromacs':
+            log.info("Using GROMACS-compatible CHARMM36 force field...")
+            from pathlib import Path
+            ff_dir = Path(__file__).parent / 'forcefields'
+            kcx_xml = ff_dir / 'kcx_charmm36_gromacs.xml'
+            charmm_xml = ff_dir / 'charmm36_gromacs_final.xml'
+            forcefield_files = [str(kcx_xml), str(charmm_xml)]
+            log.info(f"  ✓ Loaded GROMACS-compatible templates")
+        else:  # Default: Amber
+            log.info("Using Amber14 force field...")
+            forcefield_files = ['amber14-all.xml', 'amber14/tip3pfb.xml']
+        
         forcefield = app.ForceField(*forcefield_files)
         
         log.process("Adding/Checking hydrogens...")
-        modeller.addHydrogens(forcefield)
-        
-        protein_top = modeller.topology
-        protein_pos = modeller.positions
-        
-        # Create system
-        log.process("Creating OpenMM system...")
-        protein_system = forcefield.createSystem(
-            protein_top,
-            nonbondedMethod=app.NoCutoff,
-            constraints=app.HBonds
-        )
-        
-        log.success(f"{forcefield_files[0].split('.')[0].upper()} parameterization successful ({time.time() - start_time:.1f}s)")
+        try:
+            # Try standard path
+            modeller.addHydrogens(forcefield)
+            
+            protein_top = modeller.topology
+            protein_pos = modeller.positions
+            
+            log.process("Creating OpenMM system...")
+            protein_system = forcefield.createSystem(
+                protein_top,
+                nonbondedMethod=app.NoCutoff,
+                constraints=app.HBonds
+            )
+            
+        except ValueError as e:
+            error_msg = str(e)
+            if "No template found" in error_msg:
+                # Parse the error to identify which residue failed
+                import re
+                match = re.search(r"residue (\d+) \((\w+)\)", error_msg)
+                
+                if match:
+                    res_num = int(match.group(1))
+                    res_name = match.group(2)
+                    
+                    # Check if it's a "bonds are different" error for a STANDARD residue
+                    standard_resnames = {
+                        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", 
+                        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+                        "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN"
+                    }
+                    
+                    if res_name in standard_resnames and "bonds are different" in error_msg:
+                        # This is a bond topology mismatch, not a missing residue
+                        # Try to proceed by using the forcefield's own repair mechanism
+                        log.warning(f"Bond topology mismatch for {res_name}-{res_num} (PDB may be from different FF)")
+                        log.warning("Attempting to continue with topology from force field...")
+                        
+                        # Let OpenMM try to match as best as it can
+                        try:
+                            # For bond mismatches on standard residues, skip addHydrogens
+                            # and use PDB structure as-is (it already has hydrogens)
+                            protein_top = modeller.topology
+                            protein_pos = modeller.positions
+                            
+                            log.warning("Skipping addHydrogens due to bond mismatch - using PDB as-is")
+                            log.process("Creating system directly from PDB structure...")
+                            protein_system = forcefield.createSystem(
+                                protein_top,
+                                nonbondedMethod=app.NoCutoff,
+                                constraints=None,
+                                ignoreExternalBonds=True
+                            )
+                            
+                            # If we got here, it worked!
+                            log.success("Successfully created system with PDB hydrogens")
+                            return protein_system, protein_top, protein_pos, complex_pdb
+                            
+                        except Exception as e2:
+                            log.warning(f"Direct system creation also failed: {e2}")
+                            # Fall through to missing residue check below
+                            pass
+                    
+                    # Always check for genuinely missing residues
+                    # (either we bypassed PHE, or this is a real missing residue like KCX)
+                    log.process("Checking for non-standard residues to parameterize...")
+                
+                # Identify missing residues
+                standard_resnames = {
+                    "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE", "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+                    "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "NMA", "ACE", 
+                    "HOH", "WAT", "NA", "CL", "K", "MG", "ZN", "CA"
+                }
+                
+                # If using CHARMM, KCX is already in the custom template - don't parameterize it
+                if 'charmm' in self.protein_forcefield.lower() and 'KCX' in unique_missing:
+                    unique_missing.remove('KCX')
+                
+                self.parameterized_residues = list(unique_missing)
+                
+                if unique_missing:
+                    # --- DYNAMIC PARAMETERIZATION (XML ONLY, NO PDB SURGERY) ---
+                    # CRITICAL: We ONLY load XML parameters, do NOT modify the PDB structure
+                    # This preserves atom count for trajectory compatibility
+                    
+                    log.process("Attempting on-the-fly parameterization (XML-only, preserving PDB)...")
+                    
+                    from .parameterizer import ResidueParameterizer
+                    param_engine = ResidueParameterizer("parameterization_work")
+                    
+                    for res_name in unique_missing:
+                        log.process(f"Parameterizing {res_name}...")
+                        xml_out = param_engine.work_dir / f"{res_name}.xml"
+                        xml_path, h_pdb_path = param_engine.simple_run(complex_pdb, res_name, xml_out, charge_method=self.charge_method)
+                        forcefield.loadFile(str(xml_path))
+                        log.success(f"Generated XML parameters for {res_name} (PDB unchanged)")
+                    
+                    # NO PDB SURGERY - XML template is sufficient
+                    # Simply retry addHydrogens() now that forcefield has the KCX template loaded
+                    log.process("Retrying addHydrogens with loaded XML templates...")
+                    try:
+                        modeller.addHydrogens(forcefield)
+                    except ValueError as e3:
+                        if "bonds are different" in str(e3):
+                            log.warning(f"AddHydrogens still fails due to bond mismatch: {e3}")
+                            log.warning("Proceeding with existing PDB hydrogens")
+                            # Use topology as-is, already has hydrogens
+                        else:
+                            raise e3
+                    
+                    protein_top = modeller.topology
+                    protein_pos = modeller.positions
+                    
+                    log.process("Creating OpenMM system with custom residues...")
+                    protein_system = forcefield.createSystem(
+                        protein_top,
+                        nonbondedMethod=app.NoCutoff,
+                        constraints=app.HBonds
+                    )
+
+                else:
+                    raise e
+            else:
+                raise e
         
         # Add fixed enhanced GBSA forces to protein system
         protein_gbsa_system = self.gbsa_manager.add_gbsa_to_system(protein_system, protein_top)
@@ -1182,7 +1410,7 @@ class GBSACalculator:
         total_time = time.time() - start_time
         print(f"✓ Total protein preparation time: {total_time:.1f}s")
         
-        return protein_gbsa_system, protein_top, protein_pos
+        return protein_gbsa_system, protein_top, protein_pos, final_pdb_path
 
     def _save_protein_to_cache(self, system, topology, positions, cache_file):
         """Save protein system to cache"""
@@ -1277,11 +1505,14 @@ class GBSACalculator:
                     
         raise ValueError(f"No valid ligand positions found! PDB atom count ({pdb.topology.getNumAtoms() if 'pdb' in locals() else '?'}) mismatches SDF ({ligand_topology.getNumAtoms()}), and SDF has no conformers.")
     
-    def build_complex_system(self, protein_pdb, ligand_mol, ligand_pdb):
-        """Build the full complex system (protein+ligand) with fixed enhanced GBSA forces"""
+    def build_complex_system(self, protein_pdb, ligand_mol=None, ligand_pdb=None):
+        """Build the full complex system with fixed enhanced GBSA forces
         
-        # Check cache first
-        if self.use_cache:
+        If ligand_mol is None, assumes protein-only or protein-protein system (using Amber for all).
+        """
+        
+        # Check cache first (skip if ligand_mol is None for now, or handle key differently)
+        if self.use_cache and ligand_mol is not None:
             cache_key = f"{Path(protein_pdb).stem}_{Path(ligand_mol).stem}_complex"
             cache_file = self._get_cache_filename(cache_key, 'complex', self.gb_model)
             if cache_file.exists():
@@ -1291,64 +1522,95 @@ class GBSACalculator:
                     log.success(f"Complex system loaded from cache ({cached_system.getNumParticles()} particles)")
                     return cached_system, cached_topology
         
-        log.process('Building full complex system (protein+ligand) with fixed enhanced GBSA...')
+        log.process('Building complex system...')
         start_time = time.time()
         
-        # Auto-convert Mol2 to SDF if needed
-        if str(ligand_mol).endswith('.mol2'):
-            sdf_path = str(ligand_mol).replace('.mol2', '.sdf')
-            log.process(f"Auto-converting {ligand_mol} to {sdf_path} for processing...")
-            if convert_mol2_to_sdf(ligand_mol, sdf_path):
-                ligand_mol = sdf_path
-            else:
-                log.warning("Conversion failed, attempting to read Mol2 directly...")
-            
-        ligand_mol_obj = Molecule.from_file(ligand_mol, allow_undefined_stereo=True)
-        
-        # Ensure ligand has conformers
-        if ligand_mol_obj.n_conformers == 0:
-            log.process("Generating conformer for ligand...")
-            ligand_mol_obj.generate_conformers(n_conformers=1)
+        molecules_list = []
+
+        # Check for Native Input (Bypass SystemGenerator/Modeller)
+        # Check for Native Input (Bypass SystemGenerator/Modeller)
+        try:
+             mode = InputManager.detect_mode(protein_pdb)
+             print(f"DEBUG: Detected Mode: {mode} for {protein_pdb}")
+             print(f"DEBUG: Checking against {[EngineMode.AMBER, EngineMode.GROMACS, EngineMode.CHARMM]}")
+             if mode in [EngineMode.AMBER, EngineMode.GROMACS, EngineMode.CHARMM]:
+                  log.info(f"Delegating native input {protein_pdb} to parameterize_protein_amber...")
+                  system, topology, _, _ = self.parameterize_protein_amber(protein_pdb)
+                  return system, topology
+        except Exception as e:
+             log.warning(f"Native delegation failed: {e}")
+             # Proceed to Modeller fallback ONLY if appropriate, but usually failure here is fatal for native mode.
+             # If input is .prmtop, PDBFile will fail anyway.
+             if mode == EngineMode.AMBER:
+                 raise e
         
         protein_pdbfile = app.PDBFile(protein_pdb)
-        
-        # Identify ligand residue name to remove it from protein PDB
-        ligand_resname = self.find_ligand_resname(protein_pdbfile.topology)
-        log.info(f"Identified ligand residue to remove: {ligand_resname}")
-        
-        # Use Modeller to clean protein topology (remove existing ligand)
         modeller = app.Modeller(protein_pdbfile.topology, protein_pdbfile.positions)
         
-        # Identify residues to delete (ligand)
-        to_delete = []
-        for residue in modeller.topology.residues():
-            if residue.name == ligand_resname or residue.name == 'LIG' or residue.name == 'UNL':
-                to_delete.append(residue)
-                
-        if to_delete:
-            log.info(f"Removing {len(to_delete)} ligand residues from protein PDB structure...")
-            modeller.delete(to_delete)
+        # Protein-Ligand Mode (Standard)
+        if ligand_mol is not None:
+            log.info("Running in Protein-Ligand Mode (OpenFF + Amber)")
             
-        # FIX: Remove solvent and ions from complex PDB as well
+            # Auto-convert Mol2 to SDF if needed
+            if str(ligand_mol).endswith('.mol2'):
+                sdf_path = str(ligand_mol).replace('.mol2', '.sdf')
+                log.process(f"Auto-converting {ligand_mol} to {sdf_path} for processing...")
+                if convert_mol2_to_sdf(ligand_mol, sdf_path):
+                    ligand_mol = sdf_path
+                else:
+                    log.warning("Conversion failed, attempting to read Mol2 directly...")
+                
+            ligand_mol_obj = Molecule.from_file(ligand_mol, allow_undefined_stereo=True)
+            
+            # Ensure ligand has conformers
+            if ligand_mol_obj.n_conformers == 0:
+                log.process("Generating conformer for ligand...")
+                ligand_mol_obj.generate_conformers(n_conformers=1)
+                
+            molecules_list = [ligand_mol_obj]
+            
+            # Explicitly assign charges to respect user config (e.g., gasteiger)
+            # This avoids SystemGenerator defaulting to AM1-BCC
+            if ligand_mol_obj.partial_charges is None:
+                log.process(f"Assigning partial charges ({self.charge_method}) for complex building...")
+                try:
+                    ligand_mol_obj.assign_partial_charges(partial_charge_method=self.charge_method)
+                except Exception as e:
+                    if self.charge_method == 'am1bcc':
+                        log.warning(f"AM1-BCC failed: {e}. Fallback to gasteiger.")
+                        ligand_mol_obj.assign_partial_charges(partial_charge_method='gasteiger')
+                    else:
+                        raise e
+            
+            # Identify and delete existing ligand from PDB
+            ligand_resname = self.find_ligand_resname(protein_pdbfile.topology)
+            if ligand_resname:
+                log.info(f"Removing existing ligand residue: {ligand_resname}")
+                to_delete = [r for r in modeller.topology.residues() if r.name == ligand_resname]
+                if to_delete: modeller.delete(to_delete)
+        
+            # Add OpenFF ligand
+            if ligand_pdb:
+                 lig_top, ligand_positions = self.get_ligand_positions_openmm(ligand_mol_obj, ligand_pdb)
+                 log.process("Adding OpenFF ligand to modeller...")
+                 modeller.add(lig_top.to_openmm(), ligand_positions)
+        
+        # Protein-Only / Protein-Protein Mode
+        else:
+            log.info("Running in Protein-Only/Protein-Protein Mode (Amber Only)")
+            # No ligand removal, no molecule addition. 
+            # We assume complex_pdb contains everything we need.
+            pass
+
+        # Clean Solvent/Ions (Always do this unless requested otherwise)
         solvent_names = ['HOH', 'WAT', 'TIP3', 'SOL']
         ion_names = ['NA', 'CL', 'K', 'MG', 'ZN', 'CA']
-        
-        solvent_residues = [r for r in modeller.topology.residues() if r.name in solvent_names]
-        ion_residues = [r for r in modeller.topology.residues() if r.name in ion_names]
-        
-        to_delete_solvent = solvent_residues + ion_residues
+        to_delete_solvent = [r for r in modeller.topology.residues() if r.name in solvent_names or r.name in ion_names]
         if to_delete_solvent:
             modeller.delete(to_delete_solvent)
-            log.info(f"Removed {len(solvent_residues)} solvent and {len(ion_residues)} ion residues from complex")
-        
-        # Get ligand positions
-        lig_top, ligand_positions = self.get_ligand_positions_openmm(ligand_mol_obj, ligand_pdb)
-        
-        log.process("Adding ligand to modeller...")
-        modeller.add(lig_top.to_openmm(), ligand_positions)
-        log.info("Successfully added ligand to modeller")
-        
-        # Create system generator with GBSA-compatible settings
+            log.info(f"Removed {len(to_delete_solvent)} solvent/ion residues")
+    
+        # Create system generator
         general_kwargs = {
             'constraints': app.HBonds,
             'rigidWater': True,
@@ -1356,34 +1618,42 @@ class GBSACalculator:
             'hydrogenMass': 4*unit.amu
         }
         
-        nonperiodic_kwargs = {
-            'nonbondedMethod': app.NoCutoff
-        }
+        nonperiodic_kwargs = {'nonbondedMethod': app.NoCutoff}
         
         system_generator = SystemGenerator(
             forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
             small_molecule_forcefield='gaff-2.11',
-            molecules=[ligand_mol_obj],
+            molecules=molecules_list,
             forcefield_kwargs=general_kwargs,
             nonperiodic_forcefield_kwargs=nonperiodic_kwargs
         )
         
-        # FIX: Ensure non-periodic topology for GBSA (avoids Cutoff mismatch)
+        # Ensure non-periodic
         modeller.topology.setPeriodicBoxVectors(None)
         
-        # Create basic system
-        basic_system = system_generator.create_system(modeller.topology, molecules=ligand_mol_obj)
+        # Create system
+        log.process("Creating system with Amber forcefield...")
+        if 'molecules_list' not in locals():
+             molecules_list = []
         
-        # Add fixed enhanced GBSA forces
+        # Use a fresh variable to ensure clean handover
+        mols_to_use = []
+        try:
+             mols_to_use = molecules_list
+        except (NameError, UnboundLocalError):
+             log.warning("Recovering from molecules_list scope issue")
+             mols_to_use = []
+             
+        basic_system = system_generator.create_system(modeller.topology, molecules=mols_to_use)
+        
+        # Add GBSA
         gbsa_system = self.gbsa_manager.add_gbsa_to_system(basic_system, modeller.topology)
-        
-        # Validate fixed enhanced GBSA setup
         self.gbsa_manager.validate_gbsa_setup(gbsa_system, modeller.topology)
         
-        log.success(f"Complex system created with fixed enhanced GBSA forces ({gbsa_system.getNumParticles()} particles)")
+        log.success(f"System created ({gbsa_system.getNumParticles()} particles)")
         
         # Save to cache
-        if self.use_cache:
+        if self.use_cache and ligand_mol is not None:
             cache_key = f"{Path(protein_pdb).stem}_{Path(ligand_mol).stem}_complex"
             cache_file = self._get_cache_filename(cache_key, 'complex', self.gb_model)
             self._save_complex_to_cache(gbsa_system, modeller.topology, cache_file)
@@ -1436,17 +1706,59 @@ class GBSACalculator:
                 print(f"Warning: Could not load complex from cache: {e}")
             return None, None
 
-    def get_ligand_indices(self, topology, ligand_resname):
-        """Get indices of ligand atoms"""
-        return [i for i, atom in enumerate(topology.atoms()) if atom.residue.name == ligand_resname]
+    def get_selection_indices(self, topology, selection_string, ref_pdb=None):
+        """Get indices using MDTraj selection syntax
+        
+        Parameters:
+        -----------
+        topology : openmm.Topology or mdtraj.Topology
+            Topology object
+        selection_string : str
+            MDTraj selection string
+        """
+        try:
+            # Handle MDTraj Topology directly (Duck typing: check for 'select' method)
+            if hasattr(topology, 'select'):
+                md_top = topology
+            else:
+                # Convert OpenMM to MDTraj
+                md_top = md.Topology.from_openmm(topology)
+                
+            indices = md_top.select(selection_string)
+            return list(indices)
+        except Exception as e:
+            log.error(f"Selection failed for '{selection_string}': {e}")
+            return []
 
-    def get_protein_indices(self, topology, ligand_resname):
-        """Get indices of protein atoms (excluding ligand, solvent, and ions)"""
+    def get_ligand_indices(self, topology, ligand_resname, selection=None):
+        """Get indices of ligand atoms
+        
+        If 'selection' is provided (e.g., 'chainid 1'), it overrides ligand_resname logic.
+        """
+        if selection:
+            log.info(f"Using custom ligand selection: '{selection}'")
+            return self.get_selection_indices(topology, selection)
+            
+        # Handle both OpenMM (method) and MDTraj (property) topologies
+        atoms = topology.atoms() if callable(getattr(topology, 'atoms', None)) else topology.atoms
+        return [i for i, atom in enumerate(atoms) if atom.residue.name == ligand_resname]
+
+    def get_protein_indices(self, topology, ligand_resname, selection=None):
+        """Get indices of protein atoms
+        
+        If 'selection' is provided (e.g., 'chainid 0'), it overrides exclusion logic.
+        """
+        if selection:
+            log.info(f"Using custom protein/receptor selection: '{selection}'")
+            return self.get_selection_indices(topology, selection)
+            
         solvent_names = ['HOH', 'WAT', 'TIP3', 'SOL']
         ion_names = ['NA', 'CL', 'K', 'MG', 'ZN', 'CA']
         excluded_resnames = set(solvent_names + ion_names + [ligand_resname])
         
-        return [i for i, atom in enumerate(topology.atoms()) if atom.residue.name not in excluded_resnames]
+        # Handle both OpenMM (method) and MDTraj (property) topologies
+        atoms = topology.atoms() if callable(getattr(topology, 'atoms', None)) else topology.atoms
+        return [i for i, atom in enumerate(atoms) if atom.residue.name not in excluded_resnames]
 
     def find_ligand_resname(self, topology):
         """Find ligand residue name in topology"""
@@ -1498,7 +1810,7 @@ class GBSACalculator:
     def run_enhanced(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, 
                     energy_decomposition=False, frame_start=None, frame_end=None, 
                     frame_stride=None, frame_selection='sequential', random_seed=42,
-                    qha_analyze_complex=False, output_dir=None):
+                    qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None):
         """
         Enhanced run method with comprehensive validation and analysis
         
@@ -1526,6 +1838,10 @@ class GBSACalculator:
             Frame selection method ('sequential', 'equidistant', 'random')
         random_seed : int, optional
             Random seed for frame selection
+        ligand_selection : str, optional
+            Custom selection string for ligand
+        receptor_selection : str, optional
+            Custom selection string for receptor
             
         Returns:
         --------
@@ -1544,10 +1860,65 @@ class GBSACalculator:
         
         print("✅ Input validation passed")
         
+        # Handle custom selection / Protein-Protein splitting
+        if ligand_selection and receptor_selection:
+            log.info("Processing custom selections for Protein-Protein/Refined analysis...")
+            
+            # Load reference topology
+            ref_traj = md.load(complex_pdb)
+            
+            # Get indices
+            lig_idx = self.get_selection_indices(ref_traj.topology, ligand_selection)
+            rec_idx = self.get_selection_indices(ref_traj.topology, receptor_selection)
+            
+            if not lig_idx or not rec_idx:
+                log.error("Selection failed to find atoms!")
+                return None
+            
+            # Combine and sort indices
+            clean_indices = np.sort(np.concatenate([rec_idx, lig_idx]))
+            
+            # Create Clean Complex PDB
+            clean_pdb_path = str(output_dir / 'distilled_complex.pdb' if output_dir else Path('distilled_complex.pdb'))
+            clean_pdb_traj = ref_traj.atom_slice(clean_indices)
+            clean_pdb_traj.save(clean_pdb_path)
+            log.info(f"Created distilled complex PDB: {clean_pdb_path}")
+            
+            # Create Clean Trajectory
+            # For efficiency, we shouldn't load entire XTC if huge, but for now assuming it fits or using md.load frame args
+            # Actually, `run` handles framing. But `run` expects XTC matching PDB.
+            # So we MUST create a matching XTC.
+            clean_xtc_path = str(output_dir / 'distilled.xtc' if output_dir else Path('distilled.xtc'))
+            
+            log.process("Distilling trajectory to match selection...")
+            # We iterate to avoid memory issues? Or just load?
+            # Using md.load on xtc with original pdb top
+            load_top = complex_pdb
+            if str(complex_pdb).endswith('.prmtop'):
+                # Convert prmtop to PDB for MDTraj
+                prmtop = app.AmberPrmtopFile(str(complex_pdb))
+                # Save to cache dir if possible or same dir
+                temp_pdb = str(Path(complex_pdb).parent / "temp_topology_load.pdb")
+                if not Path(temp_pdb).exists():
+                    with open(temp_pdb, 'w') as f:
+                        app.PDBFile.writeFile(prmtop.topology, prmtop.positions if prmtop.positions is not None else [openmm.Vec3(0,0,0)]*prmtop.topology.getNumAtoms(), f)
+                load_top = temp_pdb
+            
+            full_xtc = md.load(xtc_file, top=load_top)
+            clean_xtc = full_xtc.atom_slice(clean_indices)
+            clean_xtc.save(clean_xtc_path)
+            log.info(f"Created distilled trajectory: {clean_xtc_path}")
+            
+            # Update paths for run
+            complex_pdb = clean_pdb_path
+            xtc_file = clean_xtc_path
+            
+            log.info(f"DEBUG: run_enhanced calling run() with complex_pdb={complex_pdb}")
+
         # Run the core analysis with frame selection
         results = self.run(ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames, energy_decomposition,
                           frame_start, frame_end, frame_stride, frame_selection, random_seed,
-                          qha_analyze_complex, output_dir)
+                          qha_analyze_complex, output_dir, ligand_selection, receptor_selection)
         
         if results is None:
             return None
@@ -1586,20 +1957,21 @@ class GBSACalculator:
 
     def run(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, energy_decomposition=False,
             frame_start=None, frame_end=None, frame_stride=None, frame_selection='sequential', random_seed=42,
-            qha_analyze_complex=False, output_dir=None):
+            qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
+            receptor_topology=None, ligand_topology=None, solvated_topology=None):
         """
         Run fixed enhanced MM/GBSA analysis with proper GBSA forces
         
         Parameters:
         -----------
         ligand_mol : str
-            Path to ligand molecule file
+            Path to ligand molecule file (optional)
         complex_pdb : str
             Path to protein-ligand complex PDB file
         xtc_file : str
             Path to molecular dynamics trajectory file
         ligand_pdb : str
-            Path to isolated ligand PDB file
+            Path to isolated ligand PDB file (optional)
         max_frames : int, optional
             Maximum number of trajectory frames to analyze
         energy_decomposition : bool, optional
@@ -1614,11 +1986,18 @@ class GBSACalculator:
             Frame selection method ('sequential', 'equidistant', 'random')
         random_seed : int, optional
             Random seed for frame selection
+        ligand_selection : str, optional
+            Custom selection string for ligand (e.g. 'chainid 1')
+        receptor_selection : str, optional
+            Custom selection string for receptor (e.g. 'chainid 0')
             
         Returns:
         --------
         dict : Analysis results with binding energies and statistics
         """
+        # Save original complex_pdb path before potential overwrite by distillation extraction
+        original_complex_pdb = complex_pdb
+
         log.section("Fixed Enhanced MM/GBSA Analysis")
         log.info("Starting fixed enhanced MM/GBSA analysis with GBSA forces...")
         
@@ -1635,44 +2014,303 @@ class GBSACalculator:
         # Setup optimized platform
         platform, properties = self.setup_optimized_platform()
         
+        # Check if complex_pdb is an Amber prmtop file
+        is_prmtop = complex_pdb.endswith('.prmtop') or complex_pdb.endswith('.parm7')
+        
+        if is_prmtop:
+            log.info(f"📂 Detected Amber topology file: {complex_pdb}")
+            
+            # Load Amber topology
+            prmtop = app.AmberPrmtopFile(complex_pdb)
+            
+            # Look for coordinate file
+            from pathlib import Path
+            pdb_base = Path(complex_pdb).stem
+            pdb_dir = Path(complex_pdb).parent
+            
+            coord_file = None
+            for ext in ['.inpcrd', '.rst7', '.crd']:
+                candidate = pdb_dir / f"{pdb_base}{ext}"
+                if candidate.exists():
+                    coord_file = str(candidate)
+                    break
+            
+            if coord_file:
+                log.info(f"  ✓ Found coordinate file: {coord_file}")
+                inpcrd = app.AmberInpcrdFile(coord_file)
+                temp_pdb = str(Path(output_dir if output_dir else '.') / 'temp_from_prmtop.pdb')
+                app.PDBFile.writeFile(prmtop.topology, inpcrd.positions, open(temp_pdb, 'w'))
+                complex_pdb = temp_pdb
+                log.info(f"  ✓ Converted to PDB: {complex_pdb}")
+            # Extract first frame from trajectory if we need valid positions...
+            if xtc_file and not str(complex_pdb).endswith('.pdb'):
+                log.info("Extracting first frame from trajectory...")
+                import mdtraj as md
+                try:
+                     # Calculate target atoms if possible (Native Mode)
+                     target_atoms = None
+                     if str(complex_pdb).endswith('.prmtop') or str(complex_pdb).endswith('.parm7'):
+                          # We already loaded prmtop above? No, we created app.AmberPrmtopFile(complex_pdb) at line 2034
+                          # But complex_pdb variable might have changed? No.
+                          # Re-use prmtop object if available.
+                          if 'prmtop' in locals():
+                               target_atoms = prmtop.topology.getNumAtoms()
+                          else:
+                               prmtop_temp = app.AmberPrmtopFile(complex_pdb)
+                               target_atoms = prmtop_temp.topology.getNumAtoms()
+
+                     # Use intelligent TrajectoryProcessor (handles auto-discovery and stripping)
+                     traj = TrajectoryProcessor.load_and_process(
+                         xtc_file, 
+                         complex_pdb, 
+                         target_atoms=target_atoms, 
+                         solvated_topology=solvated_topology,
+                         end=1 # Only need first frame for PDB creation
+                     )
+                except Exception as e:
+                     log.error(f"Failed to extract frame for PDB creation: {e}")
+                     raise e
+
+                temp_pdb = str(Path(output_dir if output_dir else '.') / 'temp_from_traj.pdb')
+                traj[0].save_pdb(temp_pdb)
+                complex_pdb = temp_pdb
+                log.info(f"  ✓ Extracted to PDB: {complex_pdb}")
+            else:
+                if str(complex_pdb).endswith('.prmtop'):
+                     # If no trajectory provided, we can't extract coordinates.
+                     # But parameterize_protein_amber handles creating dummy positions internally.
+                     # So we might not need to raise here? 
+                     # But MDTraj needs PDB? parameterize_protein_amber creates temp_topology.pdb
+                     # So we can just pass complex_pdb as is and let parameterize_protein_amber handle it.
+                     pass
+        
         # Load complex topology
-        pdb = app.PDBFile(complex_pdb)
-        complex_top = pdb.topology
+        if str(complex_pdb).endswith('.prmtop') or str(complex_pdb).endswith('.parm7'):
+            prmtop = app.AmberPrmtopFile(complex_pdb)
+            complex_top = prmtop.topology
+        else:
+            # Use InputManager to detect mode and load topology appropriately
+            # This handles .tpr, .top, .psf, and .pdb
+            try:
+                 mode = InputManager.detect_mode(complex_pdb)
+                 # We only need the topology here for splitting logic
+                 _, complex_top, _ = TopologyLoader.load_system(complex_pdb, mode)
+            except Exception as e:
+                 log.warning(f"Failed to load topology using TopologyLoader: {e}. Falling back to PDBFile.")
+                 pdb = app.PDBFile(complex_pdb)
+                 complex_top = pdb.topology
+        
         ligand_resname = self.find_ligand_resname(complex_top)
         
-        if ligand_resname is None:
-            log.error("Could not identify ligand residue name!")
+        # Allow missing ligand_resname if explicit selection is provided
+        if ligand_resname is None and ligand_selection is None:
+            log.error("Could not identify ligand residue name and no selection provided!")
             return None
             
-        log.info(f"Using ligand residue name: {ligand_resname}")
+        if ligand_resname:
+            log.info(f"Using ligand residue name: {ligand_resname}")
         
-        ligand_indices = self.get_ligand_indices(complex_top, ligand_resname)
-        protein_indices = self.get_protein_indices(complex_top, ligand_resname)
+        ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=ligand_selection)
+        protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=receptor_selection)
         log.info(f"Found {len(ligand_indices)} ligand atoms and {len(protein_indices)} protein atoms")
         
         # Parameterize components with fixed enhanced GBSA (with caching)
         prep_start_time = time.time()
-        ligand_system, ligand_top, ligand_mol_obj = self.parameterize_ligand_openff(ligand_mol)
-        protein_system, protein_top, protein_pos = self.parameterize_protein_amber(complex_pdb, ligand_resname)
-        complex_system = self.create_combined_system(protein_system, ligand_system)
+        
+        # Handle Protein-Protein / Protein-Only Mode (ligand_mol is None)
+        if ligand_mol is None:
+            # Check for Explicit Native Topologies (e.g. converted Gromacs or split Amber)
+            if receptor_topology and ligand_topology and Path(receptor_topology).exists() and Path(ligand_topology).exists():
+                 log.info(f"Using explicit native topologies for components:")
+                 log.info(f"  Receptor: {receptor_topology}")
+                 log.info(f"  Ligand:   {ligand_topology}")
+                 
+                 # Load Complex (already done, but ensure consistent)
+                 # complex_system is built above
+                 if 'complex_system' not in locals():
+                      complex_system, _ = self.build_complex_system(original_complex_pdb, ligand_mol=None)
+
+                 # Load Component Systems
+                 r_mode = InputManager.detect_mode(receptor_topology)
+                 protein_system, protein_top, _ = TopologyLoader.load_system(receptor_topology, r_mode)
+                 protein_system = self.gbsa_manager.add_gbsa_to_system(protein_system, protein_top) # Fix: Add GBSA forces
+                 
+                 l_mode = InputManager.detect_mode(ligand_topology)
+                 ligand_system, ligand_top, _ = TopologyLoader.load_system(ligand_topology, l_mode)
+                 ligand_system = self.gbsa_manager.add_gbsa_to_system(ligand_system, ligand_top) # Fix: Add GBSA forces
+                 
+                 skip_merge = True
+                 final_pdb_path = original_complex_pdb
+                 
+            else:
+                # In this mode, we assume the complex is already fully parameterized by Amber
+                # We don't have separate ligand_system/protein_system from different files.
+                # We build the complex system first.
+                # Use original topology (e.g. prmtop) for native parameterization to trigger proper delegation
+                complex_system, _ = self.build_complex_system(original_complex_pdb, ligand_mol=None)
+            
+            # Now we need to create ligand_system and protein_system for thermodynamic cycle.
+            # Since we can't easily subset an OpenMM System, we might need a workaround.
+            # Workaround: 
+            # 1. Create masked systems? (Hard)
+            # 2. Re-create systems from subset topologies using the same Forcefield.
+            #    This is valid IF the forcefield doesn't depend on external context (Standard Amber usually doesn't).
+            #    (Parameterizing Chain A alone is same as Chain A in complex usually).
+            
+            # TO DO: Isolate PDBs based on indices?
+            # Or reliance on contexts masking? 
+            # NO, MM/GBSA requires calculating E(Complex), E(Receptor), E(Ligand) in their own contexts.
+            # Using masks on Complex context for Receptor term is WRONG because of PBC/Cutoff/PME internal interactions?
+            # Actually, GBSA is usually non-periodic NoCutoff. 
+            # If NoCutoff, E(Receptor) calculated in Complex Context by masking out Ligand is NOT same as E(Receptor) alone?
+            #   - GB term depends on Born Radii which depends on all atoms.
+            #   - If we want E(Receptor) in complex (bound state), we keep Ligand ghost? 
+            #   - Standard MM/GBSA allows relaxation or trajectory snapshot.
+            #   - E(P_bound) = E of Protein atoms using coordinates from complex, BUT usually in isolation (ignoring Ligand atoms for GB calculation).
+            #   - So we NEED separate systems.
+            
+            # STRATEGY: Create temporary PDBs for Receptor and Ligand based on indices
+            # Only if we haven't loaded them explicitly above
+            if 'protein_system' not in locals() or 'ligand_system' not in locals():
+                log.process("Splitting complex into Receptor and Ligand systems for energy calculation...")
+                # md is already imported globally
+                import mdtraj as md
+                from pathlib import Path
+                
+                # If native, use the temp PDB we generated
+                load_with_pdb = complex_pdb
+                if str(complex_pdb).endswith('.top') or str(complex_pdb).endswith('.prmtop') or str(complex_pdb).endswith('.tpr'):
+                     load_with_pdb = str(Path(complex_pdb).parent / (Path(complex_pdb).stem + "_temp.pdb"))
+                
+                # Use actual trajectory coordinates if available to prevent 0,0,0 geometry issues
+                if xtc_file and Path(xtc_file).exists():
+                     traj = md.load(xtc_file, top=load_with_pdb, stride=1)
+                     # Use first frame for splitting
+                     traj = traj[0]
+                else:
+                     traj = md.load(load_with_pdb)
+                
+                # Ligand
+                ligand_traj = traj.atom_slice(ligand_indices)
+                ligand_pdb_path = str(Path(output_dir if output_dir else '.') / 'temp_ligand_mode.pdb')
+                ligand_traj.save(ligand_pdb_path)
+                
+                # Protein/Receptor
+                protein_traj = traj.atom_slice(protein_indices)
+                protein_pdb_path = str(Path(output_dir if output_dir else '.') / 'temp_receptor_mode.pdb')
+                protein_traj.save(protein_pdb_path)
+                
+                # Parameterize separate systems (Amber for both)
+                # We use build_complex_system logic but for single components
+                # Actually, parameterize_protein_amber is exactly what we want for both?
+                # parameterize_protein_amber strips ligand. Here "ligand" is everything not in the PDB provided?
+                # Let's use parameterize_protein_amber for both.
+                
+                log.process("Parameterizing Receptor (Amber)...")
+                protein_system, protein_top, protein_pos, _ = self.parameterize_protein_amber(protein_pdb_path, ignore_ligand_check=True)
+                
+                log.process("Parameterizing Ligand (Amber)...")
+                ligand_system, ligand_top, ligand_pos, _ = self.parameterize_protein_amber(ligand_pdb_path, ignore_ligand_check=True)
+             
+        else:
+            # Standard Mode
+            skip_merge = False
+            if str(original_complex_pdb).endswith('.prmtop'):
+                 # Full complex mode: Load Complex, Receptor, Ligand separately
+                 from pathlib import Path
+                 
+                 # 1. Complex System
+                 complex_system, complex_top, _, final_pdb_path = self.parameterize_protein_amber(original_complex_pdb, ligand_resname)
+                 
+                 # 2. Receptor System
+                 rec_path = None
+                 if receptor_topology and Path(receptor_topology).exists():
+                     rec_path = Path(receptor_topology)
+                 else:
+                     # Fallback to auto-detect (generic naming)
+                     for ext in ['.prmtop', '.top', '.psf', '.pdb']:
+                         pot = Path(original_complex_pdb).with_name(f"receptor{ext}")
+                         if pot.exists():
+                             rec_path = pot
+                             break
+
+                 if rec_path and rec_path.exists():
+                     log.info(f"Loading Receptor from: {rec_path}")
+                     # Use generic loader
+                     protein_system, protein_top, _, _ = self.parameterize_protein_amber(str(rec_path), ligand_resname)
+                 else:
+                     log.warning(f"Receptor topology not found. Using Complex for Protein System (Incorrect for GBSA!)")
+                     protein_system = complex_system # Fallback
+
+                 # 3. Ligand System (Check for ligand.prmtop or use config)
+                 lig_path = None
+                 if ligand_topology and Path(ligand_topology).exists():
+                     lig_path = Path(ligand_topology)
+                 else:
+                     # Fallback to generic naming
+                     for ext in ['.prmtop', '.top', '.psf', '.pdb']:
+                         pot = Path(original_complex_pdb).with_name(f"ligand{ext}")
+                         if pot.exists():
+                             lig_path = pot
+                             break
+
+                 if lig_path and lig_path.exists():
+                     log.info(f"Loading Ligand from: {lig_path}")
+                     # Ensure we call with ignore_ligand_check=True so it doesn't strip itself
+                     ligand_system, ligand_top, _, _ = self.parameterize_protein_amber(str(lig_path), ignore_ligand_check=True)
+                     # We need a molecule object for cache/naming, but system is already consistent
+                     ligand_mol_obj = None 
+                 else:
+                     log.info("Parameterizing Ligand with OpenFF for separate ligand input...")
+                     ligand_system, ligand_top, ligand_mol_obj = self.parameterize_ligand_openff(ligand_mol)
+                 
+                 skip_merge = True
+            else:
+                 ligand_system, ligand_top, ligand_mol_obj = self.parameterize_ligand_openff(ligand_mol)
+                 protein_system, protein_top, protein_pos, final_pdb_path = self.parameterize_protein_amber(complex_pdb, ligand_resname)
+        # Check if PDB changed (e.g. Surgery added atoms)
+        # Skip if in Prmtop Mode (skip_merge=True) as we trust original indices(topology)
+        if final_pdb_path != complex_pdb and not skip_merge:
+            log.info(f"Topology changed during parameterization. Reloading topology from {final_pdb_path}")
+            # Reload MDTraj topology
+            traj = md.load(final_pdb_path)
+            complex_top = traj.topology
+            # Re-calculate indices
+            ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=ligand_selection)
+            protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=receptor_selection)
+            
+            # Check for XTC Trajectory Mismatch
+            if xtc_file:
+                log.warning("Input trajectory (XTC) likely mismatches the new protonated topology!")
+                log.warning("Switching to Single-Frame Analysis using the fixed PDB structure.")
+                xtc_file = None # Disable XTC
+                traj = md.load(final_pdb_path) # Use PDB as trajectory (1 frame)
+                max_frames = 1
+
+        if ligand_system and not skip_merge:
+            complex_system = self.create_combined_system(protein_system, ligand_system)
+            
         prep_time = time.time() - prep_start_time
         print(f"✓ Total preparation time: {prep_time:.1f}s")
         
         # Check atom counts
-        if ligand_system.getNumParticles() != len(ligand_indices):
+        # Check atom counts
+        if ligand_system and ligand_system.getNumParticles() != len(ligand_indices):
             print(f"ERROR: Ligand system has {ligand_system.getNumParticles()} particles but complex has {len(ligand_indices)} ligand atoms")
             return None
-        if protein_system.getNumParticles() != len(protein_indices):
+        if protein_system.getNumParticles() != len(protein_indices) and not str(original_complex_pdb).endswith('.prmtop'):
             print(f"ERROR: Protein system has {protein_system.getNumParticles()} particles but complex has {len(protein_indices)} protein atoms")
             return None
-        if complex_system.getNumParticles() != (len(ligand_indices) + len(protein_indices)):
+        if ligand_system and complex_system.getNumParticles() != (len(ligand_indices) + len(protein_indices)):
             print(f"ERROR: Complex system has {complex_system.getNumParticles()} particles but sum of ligand+protein is {len(ligand_indices) + len(protein_indices)}")
             return None
         print("✓ All particle counts match!")
 
         # HELPER: Assign Force Groups for Internal Energy Cancellation
         def assign_force_groups(sys_obj):
+            print(f"DEBUG: Inspecting forces for system with {sys_obj.getNumParticles()} particles")
             for f in sys_obj.getForces():
+                print(f"  - Found Force: {type(f).__name__}")
                 if isinstance(f, openmm.HarmonicBondForce): f.setForceGroup(10)
                 elif isinstance(f, openmm.HarmonicAngleForce): f.setForceGroup(11)
                 elif isinstance(f, openmm.PeriodicTorsionForce): f.setForceGroup(12)
@@ -1709,13 +2347,24 @@ class GBSACalculator:
                 pass
         
         print("Assigning force groups to component systems for correct energy decomposition...")
-        assign_force_groups(ligand_system)
+        if ligand_system:
+            assign_force_groups(ligand_system)
         assign_force_groups(protein_system)
+        assign_force_groups(complex_system)
         
-        # Create integrators and contexts with optimized platform
-        ligand_integrator = openmm.LangevinMiddleIntegrator(self.temperature, 1/unit.picosecond, 0.001*unit.picosecond)
-        protein_integrator = openmm.LangevinMiddleIntegrator(self.temperature, 1/unit.picosecond, 0.001*unit.picosecond)
-        complex_integrator = openmm.LangevinMiddleIntegrator(self.temperature, 1/unit.picosecond, 0.001*unit.picosecond)
+        # Create integrators (Strip units for safety)
+        temp_k = self.temperature
+        if unit.is_quantity(temp_k):
+            temp_k = temp_k.value_in_unit(unit.kelvin)
+        
+        fric = 1.0 # 1/ps
+        step = 0.001 # 1fs
+        
+        print(f"DEBUG INTEGRATOR ARGS: temp_k={temp_k} ({type(temp_k)}), fric={fric} ({type(fric)}), step={step} ({type(step)})")
+
+        ligand_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
+        protein_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
+        complex_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
         
         ligand_context = openmm.Context(ligand_system, ligand_integrator, platform, properties)
         protein_context = openmm.Context(protein_system, protein_integrator, platform, properties)
@@ -1723,11 +2372,40 @@ class GBSACalculator:
         
         print("✓ All contexts created successfully!")
         
-        # Load trajectory
-        print(f"Loading trajectory {xtc_file} with complex PDB topology...")
-        traj_start_time = time.time()
-        traj = md.load(xtc_file, top=complex_pdb)
-        print(f"✓ Trajectory loaded ({len(traj)} frames, {time.time() - traj_start_time:.1f}s)")
+        # Load trajectory (Universal)
+        if xtc_file:
+            print(f"Loading trajectory {xtc_file}...")
+            # Use TrajectoryProcessor to handle loading and potential stripping
+            try:
+                traj = TrajectoryProcessor.load_and_process(
+                    trajectory_file=xtc_file,
+                    topology_file=final_pdb_path if 'final_pdb_path' in locals() else complex_pdb,
+                    target_atoms=complex_system.getNumParticles(), # Use system count as truth
+                    solvated_topology=solvated_topology
+                )
+                print(f"✓ Trajectory processed ({traj.n_frames} frames)")
+            except Exception as e:
+                log.error(f"Trajectory processing failed: {e}")
+                # Last ditch: try basic load if processor fails unexpectedly
+                traj = md.load(xtc_file, top=final_pdb_path)
+
+            # Verification handled by Processor, but double check
+            if traj.n_atoms != complex_system.getNumParticles():
+                 log.warning("Final atom count mismatch despite processing!")
+
+        elif 'traj' not in locals() or traj is None:
+                 
+            print(f"✓ Trajectory loaded ({traj.n_frames} frames, {time.time()-prep_start_time:.1f}s)")
+            
+            # Align trajectory to reference? (Optional but good practice)
+            # traj.superpose(md.load(final_pdb_path))
+        elif 'traj' not in locals() or traj is None:
+            print("No XTC file provided or XTC disabled. Loading Complex PDB as trajectory.")
+            target_pdb = locals().get('final_pdb_path', complex_pdb)
+            try:
+                traj = md.load(target_pdb)
+            except Exception:
+                traj = md.load(str(target_pdb))
         
         # Select frames based on parameters
         selected_frames = self._select_frames(len(traj), max_frames, frame_start, frame_end, 
@@ -1909,18 +2587,18 @@ class GBSACalculator:
                     if i == 0: 
                         print(f"Warning: SASA calculation failed: {e}")
                     
+                # Calculate components for Protein & Ligand (Every Frame for Analysis)
+                p_nb = protein_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                p_gb = protein_context.getState(getEnergy=True, groups=2).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                p_screen = protein_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                p_sa = protein_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                
+                l_nb = ligand_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                l_gb = ligand_context.getState(getEnergy=True, groups=2).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                l_screen = ligand_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                l_sa = ligand_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                
                 if i == 0:
-                    # Calculate components for Protein (need to fetch from context)
-                    p_nb = protein_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    p_gb = protein_context.getState(getEnergy=True, groups=2).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    p_screen = protein_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    p_sa = protein_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    
-                    l_nb = ligand_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    l_gb = ligand_context.getState(getEnergy=True, groups=2).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    l_screen = ligand_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                    l_sa = ligand_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-
                     print(f"\nBreakdown (kcal/mol):")
                     print(f"            {'Complex':>12} {'Protein':>12} {'Ligand':>12} {'Delta':>12}")
                     print(f"  NB (VdV+Ele): {e_nb:12.2f} {p_nb:12.2f} {l_nb:12.2f} {e_nb - p_nb - l_nb:12.2f}")
@@ -1943,6 +2621,12 @@ class GBSACalculator:
                 self.energies['complex_sa'].append(e_sa)
                 self.energies['complex_screen'].append(e_screen)
                 self.energies['complex_bondsa'].append(e_bondsa)
+                
+                # Store Delta Components for Pie Charts & Analysis
+                self.energies['delta_nb'].append(e_nb - p_nb - l_nb)
+                self.energies['delta_gb'].append(e_obc - p_gb - l_gb)
+                self.energies['delta_sa'].append(e_sa - p_sa - l_sa)
+                self.energies['delta_screen'].append(e_screen - p_screen - l_screen)
                 
                 # Store internal energies (create lists later if needed or on fly)
                 # For simplicity, store in self.energies dict (init in next step if missing)
@@ -2019,7 +2703,204 @@ class GBSACalculator:
         print(f"✓ Energy calculation time: {calc_time:.1f}s")
         print(f"✓ Total analysis time: {total_time:.1f}s")
         
-        return self.save_results(output_dir)
+        # PER-RESIDUE DECOMPOSITION (Integrated Fixed Module)
+        # PER-RESIDUE DECOMPOSITION
+        df_fast = None # Initialize for later visualization access
+        if energy_decomposition:
+            decomp_method = getattr(self, 'decomposition_method', 'full') # Default to full
+            
+            if decomp_method == 'fast':
+                 try:
+                     print("\nRunning Per-Residue Energy Decomposition (Fast Mode)...")
+                     from mmgbsa.energy_decomp import EnergyDecomposer
+                     # Fallback to standard flow (parameter injection happens inside EnergyDecomposer now)
+                     
+                     # Need parmed struct
+                     parmed_struct = None
+                     if 'parmed' in sys.modules:
+                          import parmed as pmd
+                          c_prmtop_path = original_complex_pdb
+                          if c_prmtop_path and str(c_prmtop_path).endswith('.prmtop') and os.path.exists(c_prmtop_path):
+                               parmed_struct = pmd.load_file(str(c_prmtop_path))
+                     
+                     decomposer = EnergyDecomposer(
+                         system=complex_system,
+                         topology=complex_top,
+                         protein_indices=protein_indices,
+                         ligand_indices=ligand_indices,
+                         parmed_structure=parmed_struct
+                     )
+                     
+                     results_list = decomposer.analyze_trajectory(traj)
+                     
+                     # Simple CSV Output for Fast Mode
+                     # We flatten the results list: [{'RES1': {...}, 'RES2': ...}, ...]
+                     # Averaging over frames
+                     
+                     # Aggregate
+                     agg_results = defaultdict(lambda: {'vdw': [], 'ele': [], 'total': []})
+                     
+                     for frame_res in results_list:
+                         for res_name, vals in frame_res.items():
+                             agg_results[res_name]['vdw'].append(vals['vdw'])
+                             agg_results[res_name]['ele'].append(vals['electrostatic'])
+                             agg_results[res_name]['total'].append(vals['total'])
+                             
+                     # Create DataFrame
+                     final_rows = []
+                     for res_name, data in agg_results.items():
+                         final_rows.append({
+                             'residue': res_name,
+                             'vdw_mean': np.mean(data['vdw']),
+                             'vdw_std': np.std(data['vdw']),
+                             'ele_mean': np.mean(data['ele']),
+                             'ele_std': np.std(data['ele']),
+                             'total_mean': np.mean(data['total']),
+                             'total_std': np.std(data['total'])
+                         })
+                         
+                     df_fast = pd.DataFrame(final_rows)
+                     if not df_fast.empty:
+                          output_csv = os.path.join(str(output_dir), 'final_decomposition_fast.csv')
+                          df_fast.to_csv(output_csv, index=False)
+                          print(f"✓ Decomposition saved to: {output_csv}")
+                          
+
+                                  
+
+                     else:
+                          print("Warning: Fast decomposition returned no significant interactions.")
+                          
+                 except Exception as e:
+                     print(f"❌ Fast Decomposition Failed: {e}")
+                     import traceback
+                     traceback.print_exc()
+
+            else:
+                 # FULL MODE (Original)
+                 try:
+                     print("\nRunning Per-Residue Energy Decomposition (Full Mode)...")
+                     from mmgbsa.decomposition import PerResidueDecomposition
+                     
+                     # Instantiate Decomposer
+                     decomp_tool = PerResidueDecomposition(self, temperature=self.temperature, output_dir=str(output_dir))
+                     
+                     # Prepare Systems Dict for the tool
+                     # Reuse the context/system we already have active
+                     decomp_systems = {
+                         'complex_system': complex_system,
+                         'complex_context': complex_context,
+                         'complex_topology': complex_top # OpenMM topology
+                     }
+                     
+                     # Robust Parameter Injection (Fix for VdW=0 on converted systems)
+                     try:
+                         import parmed as pmd
+                         # We need the path to the complex topology (prmtop)
+                         # It is stored in 'complex_prmtop' variable usually, or we can look it up
+                         # Look for input logic result
+                         # complex_top_path should be available if we generated it.
+                         # 'original_complex_pdb' is saved at start of run()
+                         c_prmtop_path = original_complex_pdb 
+                         
+                         if c_prmtop_path and str(c_prmtop_path).endswith('.prmtop') and os.path.exists(c_prmtop_path):
+                              print(f"Loading ParmEd Structure for Decomposition Parameters: {c_prmtop_path}")
+                              struct = pmd.load_file(str(c_prmtop_path))
+                              decomp_systems['parmed_structure'] = struct
+                     except ImportError:
+                         print("Warning: ParmEd not found, using default OpenMM parameters (may be zero for Charmm/Gromacs)")
+                     except Exception as e:
+                         print(f"Warning: Failed to load ParmEd structure: {e}")
+                     
+                     # Execute on the existing trajectory slice
+                     # Note: 'traj' is an MDTraj object. 
+                     # The tool expects mdtraj frames which loop over normally.
+                     decomp_tool.execute_decomposition(traj, decomp_systems)
+                     
+                 except Exception as e:
+                     print(f"❌ Decomposition Failed: {e}")
+                     import traceback
+                     traceback.print_exc()
+        
+        results = self.save_results(output_dir)
+        
+        # --- Visualization Section (Moved to end to capture final delta_g) ---
+        viz_config = self.visualization_settings
+        gen_pymol = viz_config.get('generate_pymol', True)
+        gen_heatmaps = viz_config.get('generate_heatmaps', True)
+        
+        # 1. PyMOL Script
+        if gen_pymol and df_fast is not None:
+             try:
+                  print("creating PyMOL visualization script...")
+                  pymol_viz = PyMOLVisualizer(output_dir)
+                  
+                  pymol_settings = viz_config.get('pymol', {})
+                  p_threshold = pymol_settings.get('energy_threshold', -0.5)
+                  p_distance = pymol_settings.get('distance_cutoff', 5.0)
+                  
+                  # Verify PDB
+                  pdb_file = None
+                  self.topology_file = final_pdb_path if 'final_pdb_path' in locals() else complex_pdb
+                  if Path(self.topology_file).suffix == '.pdb':
+                       pdb_file = self.topology_file
+                  else:
+                       gen_pdb = Path(output_dir) / "temp_from_traj.pdb"
+                       if gen_pdb.exists():
+                           pdb_file = gen_pdb
+                           
+                  if pdb_file:
+                       # Need to find output_csv path again or store it
+                       # It was 'final_decomposition_fast.csv'
+                       # Robustly find it
+                       decomp_csv = Path(output_dir) / 'final_decomposition_fast.csv'
+                       if decomp_csv.exists():
+                           script_path = pymol_viz.generate_script(
+                               decomposition_csv=str(decomp_csv),
+                               pdb_file=pdb_file,
+                               output_filename="view_binding.pml",
+                               ligand_resname=getattr(self, 'ligand_resname', 'LIG'),
+                               energy_threshold=p_threshold,
+                               distance_cutoff=p_distance
+                           )
+                           if script_path:
+                               print(f"✓ PyMOL script generated: {script_path}")
+                               print(f"  Run 'pymol {script_path}' to visualize 3D interaction hotspots.")
+                       else:
+                            print("⚠️  Skipping PyMOL: Decomposition CSV not found.")
+                  else:
+                       print("⚠️  Skipping PyMOL: No suitable PDB file found.")
+             except Exception as e:
+                  print(f"⚠️  PyMOL generation failed: {e}")
+
+        # 2. Advanced Visualization & HTML Report
+        if gen_heatmaps and df_fast is not None:
+             try:
+                  print("Generate Advanced Visualization (Heatmaps & Report)...")
+                  viz_tool = AdvancedVisualization(output_dir)
+                  
+                  # Populate results with Binding Energy!
+                  mock_results = {
+                      'mean_binding_energy': results.get('delta_g', 0.0), # Use Delta G as the total binding energy
+                      'std_dev': results.get('std_dev', 0.0),
+                      'n_frames': results.get('n_frames', 0),
+                      'binding_data': results.get('dataframe'), # Pass time-series data
+                      'decomposition_results': {
+                          'dataframe': df_fast
+                      }
+                  }
+                  viz_tool.load_mmgbsa_results(mock_results)
+                  
+
+
+                  viz_tool.generate_comprehensive_plots(compound_name="Ligand", generate_report=viz_config.get('generate_report', True))
+                  print("✓ Advanced plots generated.")
+             except Exception as e:
+                  print(f"⚠️ Visualization failed: {e}")
+                  import traceback
+                  traceback.print_exc()
+
+        return results
 
         return {
             'output_file': output_file,
@@ -2167,17 +3048,19 @@ class GBSACalculator:
         else:
             print(f"\nInteraction Entropy disabled (entropy_method={self.entropy_method})")
  
-        print(f"Frames analyzed: {len(df)}")
+
         
         return {
             'output_file': output_file,
+            'dataframe': df,  # Return full dataframe for plotting
             'gb_model': self.gb_model,
             'mean_binding_energy': mean_binding,
             'std_dev': std_dev,
             'std_error': std_error,
             'n_frames': len(df),
             'entropy_penalty': entropy_penalty,
-            'delta_g': delta_g
+            'delta_g': delta_g,
+            'parameterized_residues': self.parameterized_residues
         }
 
 

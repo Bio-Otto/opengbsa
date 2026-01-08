@@ -22,9 +22,6 @@ autodoc_mock_imports = [
     'openff.toolkit',
     'rdkit',
     'rdkit.Chem',
-    'prolif',
-    'MDAnalysis',
-    'numpy',
     'pandas',
     'scipy',
     'matplotlib',
@@ -36,6 +33,14 @@ extensions = [
     'myst_parser',
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
+]
+
+myst_enable_extensions = [
+    "dollarmath",
+    "amsmath",
+    "deflist",
+    "html_image",
+    "colon_fence",
 ]
 
 # Enable Markdown

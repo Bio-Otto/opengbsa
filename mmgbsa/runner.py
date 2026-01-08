@@ -200,7 +200,9 @@ class MMGBSARunner:
             protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
             charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
-            entropy_method=analysis_settings.get('entropy_method', 'none')
+            solvent_dielectric=analysis_settings.get('solvent_dielectric', 78.5),
+            entropy_method=analysis_settings.get('entropy_method', 'none'),
+            decomposition_method=analysis_settings.get('decomposition_method', 'full')
         )
         
         return calculator
@@ -244,14 +246,16 @@ class MMGBSARunner:
         }
         
         mmgbsa_results = calculator.run_enhanced(
-            ligand_mol=input_files['ligand_mol'],
+            ligand_mol=input_files.get('ligand_mol'),
             complex_pdb=input_files['complex_pdb'],
             xtc_file=input_files['trajectory'],
-            ligand_pdb=input_files['ligand_pdb'],
+            ligand_pdb=input_files.get('ligand_pdb'),
             max_frames=analysis_settings.get('max_frames', 50),
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
             qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
-            output_dir=output_dir
+            output_dir=output_dir,
+            ligand_selection=analysis_settings.get('ligand_selection'),
+            receptor_selection=analysis_settings.get('receptor_selection')
         )
         
         if not mmgbsa_results:
@@ -259,8 +263,56 @@ class MMGBSARunner:
             return None
         
         self.results['mmgbsa'] = mmgbsa_results
-        log.success(f"MM/GBSA completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
-        
+        log.success(f"MM/GBSA (Standard) completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
+
+        if mmgbsa_results.get('parameterized_residues'):
+            log.result("Parameterized Residues", ", ".join(mmgbsa_results['parameterized_residues']))
+
+        # DUAL MODE: Dimer Interface Analysis
+        if analysis_settings.get('dimer_mode', False):
+            log.section("STEP 4.5: Dimer Interface Analysis (Dual Mode)")
+            log.info("Calculating interface stability between defined subunits...")
+            
+            receptor_subunits = analysis_settings.get('receptor_subunits', {})
+            unit_a = receptor_subunits.get('unit_a')
+            unit_b = receptor_subunits.get('unit_b')
+            
+            if unit_a and unit_b:
+                try:
+                    interface_dir = output_dir / 'interface_stability'
+                    interface_dir.mkdir(exist_ok=True)
+                    
+                    log.info(f"  • Receptor Mask: {unit_a}")
+                    log.info(f"  • Ligand Mask:   {unit_b} (Treated as ligand for calculation)")
+                    
+                    interface_results = calculator.run_enhanced(
+                        ligand_mol=None, # Force Protein-Protein mode
+                        complex_pdb=input_files['complex_pdb'],
+                        xtc_file=input_files['trajectory'],
+                        ligand_pdb=None,
+                        max_frames=analysis_settings.get('max_frames', 50),
+                        energy_decomposition=False, # Keep it simple for interface
+                        qha_analyze_complex=False,
+                        output_dir=interface_dir,
+                        ligand_selection=unit_b,
+                        receptor_selection=unit_a
+                    )
+                    
+                    if interface_results:
+                        self.results['interface_stability'] = interface_results
+                        log.success(f"Interface Stability: {interface_results['mean_binding_energy']:.2f} ± {interface_results['std_error']:.2f} kcal/mol")
+                        
+                        # Compare energies
+                        binding_E = mmgbsa_results['mean_binding_energy']
+                        interface_E = interface_results['mean_binding_energy']
+                        log.result("Ligand Binding Energy", f"{binding_E:.2f}", "kcal/mol")
+                        log.result("Dimer Interface Energy", f"{interface_E:.2f}", "kcal/mol")
+                except Exception as e:
+                    log.error(f"Dimer Interface Analysis Failed: {e}")
+                    log.warning("Continuing with rest of analysis...")
+            else:
+                log.warning("dimer_mode is enabled but 'receptor_subunits' (unit_a, unit_b) are missing in config!")
+            
         # Step 5: Run entropy analysis (if enabled)
         if analysis_settings.get('run_entropy_analysis', False):
             log.section("STEP 5: Entropy Analysis")
@@ -462,6 +514,14 @@ class MMGBSARunner:
                     f.write(f"Standard Deviation: {mmgbsa['std_dev']:.2f} kcal/mol\n")
                     f.write(f"Frames Analyzed: {mmgbsa['n_frames']}\n")
                     f.write(f"GB Model: {mmgbsa['gb_model']}\n\n")
+                    
+                    if mmgbsa.get('parameterized_residues'):
+                        f.write("PARAMETERIZATION DETAILS:\n")
+                        f.write("-" * 25 + "\n")
+                        f.write("The following non-standard residues were parameterized on-the-fly via OpenFF:\n")
+                        for res in mmgbsa['parameterized_residues']:
+                                f.write(f"  • {res}\n")
+                        f.write("\n")
                 
                 # Additional analysis results
                 if 'entropy' in self.results:
