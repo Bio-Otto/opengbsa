@@ -1345,6 +1345,11 @@ class GBSACalculator:
                     "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "NMA", "ACE", 
                     "HOH", "WAT", "NA", "CL", "K", "MG", "ZN", "CA"
                 }
+
+                unique_missing = set()
+                for res in modeller.topology.residues():
+                    if res.name not in standard_resnames:
+                        unique_missing.add(res.name)
                 
                 # If using CHARMM, KCX is already in the custom template - don't parameterize it
                 if 'charmm' in self.protein_forcefield.lower() and 'KCX' in unique_missing:
@@ -2085,18 +2090,26 @@ class GBSACalculator:
                      pass
         
         # Load complex topology
-        if str(complex_pdb).endswith('.prmtop') or str(complex_pdb).endswith('.parm7'):
-            prmtop = app.AmberPrmtopFile(complex_pdb)
+        # Load complex topology
+        # Prefer original topology if it provides valid system information (prmtop/top/tpr)
+        # This avoids issues where complex_pdb was overwritten by a temporary PDB from trajectory
+        target_top_file = complex_pdb
+        if str(original_complex_pdb).endswith('.prmtop') or str(original_complex_pdb).endswith('.parm7'):
+             target_top_file = original_complex_pdb
+        
+        if str(target_top_file).endswith('.prmtop') or str(target_top_file).endswith('.parm7'):
+            prmtop = app.AmberPrmtopFile(target_top_file)
             complex_top = prmtop.topology
         else:
             # Use InputManager to detect mode and load topology appropriately
             # This handles .tpr, .top, .psf, and .pdb
             try:
-                 mode = InputManager.detect_mode(complex_pdb)
+                 mode = InputManager.detect_mode(target_top_file)
                  # We only need the topology here for splitting logic
-                 _, complex_top, _ = TopologyLoader.load_system(complex_pdb, mode)
+                 _, complex_top, _ = TopologyLoader.load_system(target_top_file, mode)
             except Exception as e:
-                 log.warning(f"Failed to load topology using TopologyLoader: {e}. Falling back to PDBFile.")
+                 log.warning(f"Failed to load topology from {target_top_file} using TopologyLoader: {e}. Falling back to PDBFile.")
+                 # If target failed, try loading the PDB (which might have connectivity but no params)
                  pdb = app.PDBFile(complex_pdb)
                  complex_top = pdb.topology
         
