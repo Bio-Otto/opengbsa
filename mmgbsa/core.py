@@ -2197,7 +2197,9 @@ class GBSACalculator:
                 
                 # Use actual trajectory coordinates if available to prevent 0,0,0 geometry issues
                 if xtc_file and Path(xtc_file).exists():
-                     traj = md.load(xtc_file, top=load_with_pdb, stride=1)
+                     # Fix: Use solvated_topology if provided, as dry topology won't match solvated trajectory atom count
+                     load_top = solvated_topology if solvated_topology and Path(solvated_topology).exists() else load_with_pdb
+                     traj = md.load(xtc_file, top=load_top, stride=1)
                      # Use first frame for splitting
                      traj = traj[0]
                 else:
