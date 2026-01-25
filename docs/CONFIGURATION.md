@@ -67,3 +67,33 @@ Controls output formats.
 *   `generate_report`: Generates HTML report.
 *   `generate_pymol`: Generates PyMOL (.pml) file.
 *   `pymol.energy_threshold`: Energy threshold for bonds shown in PyMOL (e.g., -1.0 kcal/mol).
+
+---
+
+## Surface Area Model (`sa_model`)
+
+OpenGBSA supports two surface area calculation methods:
+
+| Model | Description | Performance | Accuracy | Use Case |
+|-------|-------------|-------------|----------|----------|
+| **ACE** | Analytical Continuum Electrostatics (default) | Fast | Good | Initial screening, large datasets |
+| **LCPO** | Linear Combinations of Pairwise Overlaps | Moderate | Better | Publication-quality, final binding affinity calculations |
+
+### Configuration Example
+
+```yaml
+analysis_settings:
+  gb_model: OBC2
+  sa_model: LCPO  # or ACE (default)
+  salt_concentration: 0.150
+```
+
+### Technical Notes
+
+- **LCPO** matches AMBER MMPBSA.py default behavior
+- Requires OpenMM 8.1+ with LCPO support (built from source)
+- Automatically assigns atom-specific parameters via topology analysis
+- Uses 1.4 Å probe radius (standard water molecule size)
+
+---
+

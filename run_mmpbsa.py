@@ -50,9 +50,12 @@ calc = GBSACalculator(
     solvent_dielectric=sett.get('solvent_dielectric', 78.5),
     entropy_method=sett.get('entropy_method', 'interaction'),
     decomposition_method=sett.get('decomposition_method', 'full'),
-    protein_forcefield=config['params'].get('protein_forcefield', 'amber'),
+    protein_forcefield=config.get('params', {}).get('protein_forcefield', 'amber'),
     use_cache=sett.get('use_cache', True),
-    visualization_settings=sett.get('visualization', {})
+    visualization_settings=sett.get('visualization', {}),
+    platform=sett.get('platform', None),
+    reporting_settings=config.get('reporting_settings', {}),
+    sa_model=sett.get('sa_model', 'ACE')
 )
 # Set Ligand Forcefield (gaff/openff)
 calc.set_ligand_forcefield(config.get('params', {}).get('ligand_forcefield', 'openff'))
@@ -113,7 +116,14 @@ ligand_mol = inp.get('ligand_mol')
 ligand_pdb = inp.get('ligand_pdb')
 max_frames = sett.get('max_frames', 10)
 energy_decomp = sett.get('run_per_residue_decomposition', False)
-output_dir = Path(config['params']['output_directory'])
+
+# Robust Output Directory
+output_path_str = config.get('params', {}).get('output_directory')
+if not output_path_str:
+    import datetime
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path_str = f"mmgbsa_results/analysis_{ts}"
+output_dir = Path(output_path_str)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 # Redirect Output to Log File

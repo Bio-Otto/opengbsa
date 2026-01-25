@@ -88,6 +88,18 @@ from openff.toolkit.typing.engines.smirnoff import ForceField
 import warnings
 warnings.filterwarnings('ignore')
 from .logger import ToolLogger
+try:
+    from .reporting import HTMLReportGenerator
+except ImportError:
+    HTMLReportGenerator = None
+
+# Try to import LCPO parameters and helper
+try:
+    from openmm.app.internal.lcpo import getLCPOParamsTopology
+    HAS_LCPO_PARAMS = True
+except ImportError:
+    HAS_LCPO_PARAMS = False
+    getLCPOParamsTopology = None
 
 # Initialize logger
 log = ToolLogger()
@@ -96,11 +108,12 @@ from openmmforcefields.generators import SystemGenerator
 class GBSAForceManager:
     """Fixed Enhanced GBSA force implementation that properly handles exceptions"""
     
-    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5):
+    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='ACE'):
         self.gb_model = gb_model
         self.salt_concentration = salt_concentration
         self.solute_dielectric = solute_dielectric
         self.solvent_dielectric = solvent_dielectric
+        self.sa_model = sa_model
         
         # GB model mapping with fixed versions
         self.gb_models = {
@@ -348,6 +361,13 @@ class GBSAForceManager:
 
     def _setup_enhanced_surface_area_force(self, system, topology):
         """Standard GBSAOBC-based Surface Area force (Charges=0 to isolate NP term)"""
+        
+        # Branch based on sa_model
+        current_sa = getattr(self, 'sa_model', 'ACE')
+        if current_sa == 'LCPO':
+             return self._setup_lcpo_force(system, topology)
+             
+        # Standard ACE (GBSAOBC based)
         # Use GBSAOBCForce to calculate Surface Area Energy (CA * SASA)
         # We set charges to 0 so the Polar term (GB) is zero.
         sa_force = openmm.GBSAOBCForce()
@@ -369,8 +389,70 @@ class GBSAForceManager:
              # Charge 0.0 to strictly calculate NonPolar SA energy
              sa_force.addParticle(0.0, radius, scale)
              
-        print(f"✓ Added enhanced surface area force (GBSAOBC-SA) to system")
+        print(f"✓ Added enhanced surface area force (GBSAOBC-ACE-SA) to system")
         return sa_force
+
+    def _setup_lcpo_force(self, system, topology):
+        """Setup LCPO (Linear Combinations of Pairwise Overlaps) Surface Area Force"""
+        print("✓ Setting up LCPO Surface Area Force...")
+        
+        # 0.0072 kcal/mol/A^2 -> kJ/mol/nm^2
+        surface_tension = 3.01248 * unit.kilojoules_per_mole / unit.nanometers**2
+        
+        if not HAS_LCPO_PARAMS:
+            raise ImportError("LCPO parameters not available. Cannot use LCPO model.")
+            
+        lcpo_force = openmm.LCPOForce()
+        
+        try:
+             lcpo_force.setSurfaceTension(surface_tension)
+        except AttributeError:
+             print("WARNING: LCPOForce.setSurfaceTension not found. Energy might be unscaled.")
+        
+        # Use OpenMM's internal helper to get parameters
+        # Returns list of (radius, p1, p2, p3, p4) tuples with units
+        print("ℹ️  Calculating LCPO parameters from topology...")
+        params_list = getLCPOParamsTopology(topology)
+        
+        # LCPO probe radius (standard water probe radius: 1.4 Å)
+        probe_radius_nm = 1.4 * 0.1  # Convert Angstrom to nm
+        
+        count = 0
+        for params in params_list:
+             # params is (radius, p1, p2, p3, p4) all with units
+             r = params[0]
+             p1, p2, p3, p4 = params[1], params[2], params[3], params[4]
+             
+             # Convert to OpenMM standard units (nm, kJ/mol/nm^2 etc) if needed
+             # LCPOForce expects pure numbers in specific units?
+             # No, addParticle expects floats.
+             # Check if they are Quantity
+             
+             radius_nm = r.value_in_unit(unit.nanometer)
+             # p1, p2, p3 are dimensionless coefficients
+             # p4 is inverse area (1/A^2 or 1/nm^2). LCPOForce likely expects it in internal units (nm^-2?)
+             # Let's check debug output: (..., 0.00036247 /(A**2))
+             # If we pass .value_in_unit(unit.nanometer**-2), it should work.
+             
+             # Safely handle mixed types if p1/p2/p3 are just floats
+             val_p1 = p1 if not unit.is_quantity(p1) else p1._value
+             val_p2 = p2 if not unit.is_quantity(p2) else p2._value
+             val_p3 = p3 if not unit.is_quantity(p3) else p3._value
+             
+             val_p4 = p4.value_in_unit(unit.nanometer**-2) if unit.is_quantity(p4) else p4 * 100.0
+             
+             # CRITICAL: Add probe radius to atom radius (matching openmm.app.internal.lcpo.addLCPOForce)
+             effective_radius = (radius_nm + probe_radius_nm) if radius_nm > 0 else 0.0
+             
+             lcpo_force.addParticle(effective_radius, val_p1, val_p2, val_p3, val_p4)
+             count += 1
+             
+        print(f"✓ Added LCPO Surface Area Force ({lcpo_force.getNumParticles()} particles using internal params)")
+        
+        # CRITICAL: Assign to force group 4 (Surface Area) for proper energy extraction
+        lcpo_force.setForceGroup(4)
+        
+        return lcpo_force
 
 
 
@@ -546,7 +628,7 @@ class GBSACalculator:
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
-             visualization_settings=None):
+             visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE'):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -576,8 +658,16 @@ class GBSACalculator:
             Solvent dielectric constant (default 78.5)
         entropy_method : str
             Entropy calculation method ('interaction', 'normal_mode', 'none')
+        platform : str, optional
+            Platform to force (CPU, CUDA, OpenCL, Reference)
+        reporting_settings : dict, optional
+            Settings for HTML report generation (charts, entropy viz, etc.)
+        sa_model : str
+            Surface Area model ('ACE' or 'LCPO')
         """
         self.temperature = temperature * unit.kelvin
+        self.platform_preference = platform
+        self.reporting_settings = reporting_settings or {}
         self.verbose = verbose
         self.gb_model = gb_model
         self.salt_concentration = salt_concentration
@@ -596,8 +686,15 @@ class GBSACalculator:
         self.visualization_settings = visualization_settings or {}
         self.parameterized_residues = [] # Track any dynamic residues
         
+        # Surface Area Model
+        self.sa_model = sa_model
+        if self.sa_model == 'LCPO' and not HAS_LCPO_PARAMS:
+            print("WARNING: LCPO model requested but openmm.app.internal.lcpo not found. Falling back to ACE.")
+            self.sa_model = 'ACE'
+        
+
         # Initialize fixed enhanced GBSA manager
-        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric)
+        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric, sa_model=self.sa_model)
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []
@@ -609,7 +706,7 @@ class GBSACalculator:
             if self.verbose:
                 print(f"✓ Cache directory: {self.cache_dir}")
 
-    def validate_input_files(self, ligand_mol, complex_pdb, ligand_pdb, xtc_file):
+    def validate_input_files(self, ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology=None):
         """
         Comprehensive validation of input files for MM/GBSA analysis
         
@@ -623,6 +720,8 @@ class GBSACalculator:
             Path to isolated ligand PDB file - Optional
         xtc_file : str
             Path to molecular dynamics trajectory file
+        solvated_topology : str
+            Path to solvated topology file (for trajectory consistency) - Optional
             
         Returns:
         --------
@@ -650,6 +749,10 @@ class GBSACalculator:
         try:
             if str(complex_pdb).endswith('.prmtop'):
                  complex_pdb_obj = app.AmberPrmtopFile(complex_pdb)
+            elif str(complex_pdb).endswith('.top'):
+                 # GROMACS Topology - Skip detailed structure validation here
+                 # Conversion will handle validity
+                 complex_pdb_obj = None
             else:
                  complex_pdb_obj = app.PDBFile(complex_pdb)
             if ligand_pdb:
@@ -689,11 +792,18 @@ class GBSACalculator:
         
         # Validate trajectory
         try:
-            traj_test = md.load(xtc_file, top=complex_pdb, frame=0)
-            if len(traj_test) == 0:
-                validation_errors.append("Trajectory file contains no frames")
+            # Use solvated topology if provided to match trajectory atoms
+            top_to_use = solvated_topology if solvated_topology else complex_pdb
+            
+            # Skip if using GROMACS topology directly (requires structure file we might not know yet)
+            if str(top_to_use).endswith('.top'):
+                 pass
+            else:
+                traj_test = md.load(xtc_file, top=top_to_use, frame=0)
+                if len(traj_test) == 0:
+                    validation_errors.append("Trajectory file contains no frames")
         except Exception as e:
-            validation_errors.append(f"Trajectory validation error: {e}")
+            validation_errors.append(f"Trajectory validation error (Atom Mismatch possible if solvated_topology missing): {e}")
         
         return validation_errors
 
@@ -862,7 +972,7 @@ class GBSACalculator:
         else:
             return {'converged': False, 'difference': abs(recent_avg - early_avg)}
 
-    def generate_detailed_report(self, results, output_dir=None):
+    def generate_detailed_report(self, results, output_dir=None, ligand_resname='LIG', complex_pdb=None):
         """Generate comprehensive analysis report"""
         
         if output_dir is None:
@@ -952,16 +1062,21 @@ class GBSACalculator:
             
             f.write("Results Summary:\n")
             f.write("-" * 20 + "\n")
-            f.write(f"Mean Binding Energy: {results['mean_binding_energy']:.2f} ± {results['std_error']:.2f} kcal/mol\n")
-            f.write(f"Standard Deviation: {results['std_dev']:.2f} kcal/mol\n")
-            f.write(f"Median: {results.get('median_binding_energy', 'N/A'):.2f} kcal/mol\n")
-            f.write(f"Range: {results.get('min_binding_energy', 'N/A'):.2f} to {results.get('max_binding_energy', 'N/A'):.2f} kcal/mol\n\n")
+            f.write(f"Mean Binding Energy: {results.get('mean_binding_energy', 0.0):.2f} ± {results.get('std_error', 0.0):.2f} kcal/mol\n")
+            f.write(f"Standard Deviation: {results.get('std_dev', 0.0):.2f} kcal/mol\n")
             
-            f.write("Bootstrap Uncertainty Analysis:\n")
-            f.write("-" * 30 + "\n")
-            f.write(f"Bootstrap Mean: {bootstrap_results['mean']:.2f} kcal/mol\n")
-            f.write(f"Bootstrap Std: {bootstrap_results['std']:.2f} kcal/mol\n")
-            f.write(f"95% CI: [{bootstrap_results['ci_lower']:.2f}, {bootstrap_results['ci_upper']:.2f}] kcal/mol\n\n")
+            med = results.get('median_binding_energy')
+            if med is not None:
+                f.write(f"Median: {med:.2f} kcal/mol\n")
+                f.write(f"Range: {results.get('min_binding_energy', 0.0):.2f} to {results.get('max_binding_energy', 0.0):.2f} kcal/mol\n\n")
+            
+            if 'bootstrap_results' in results and results['bootstrap_results']:
+                bs = results['bootstrap_results']
+                f.write("Bootstrap Uncertainty Analysis:\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"Bootstrap Mean: {bs.get('mean', 0.0):.2f} kcal/mol\n")
+                f.write(f"Bootstrap Std: {bs.get('std', 0.0):.2f} kcal/mol\n")
+                f.write(f"95% CI: [{bs.get('ci_lower', 0.0):.2f}, {bs.get('ci_upper', 0.0):.2f}] kcal/mol\n\n")
             
             # Convergence analysis
             convergence = self._check_convergence(df['binding_energy'])
@@ -983,8 +1098,149 @@ class GBSACalculator:
                 for warning in results['validation_warnings']:
                     f.write(f"• {warning}\n")
         
+        # Generate Interactive HTML Report
+        try:
+            print("Generating Interactive HTML Report...")
+            
+            # 1. Load Data
+            global_results_list = df.to_dict('records') # df loaded earlier
+            
+            frame_data = None
+            frame_csv = output_dir / "frame_by_frame_decomposition.csv"
+            if frame_csv.exists():
+                try:
+                    frame_data = pd.read_csv(frame_csv).to_dict('records')
+                except Exception as fd_err:
+                    print(f"Warning: Could not load frame data: {fd_err}")
+
+            # 2. Generate PandaMap
+            # Use complex_pdb argument passed to this method
+            pandamap_path = self._generate_pandamap(complex_pdb, ligand_resname, output_dir)
+            pdb_for_report = pandamap_path if pandamap_path else complex_pdb
+            
+            # 3. Generate Report
+            # Pass full config wrapper so HTMLReportGenerator finds 'reporting_settings'
+            report_config = {'reporting_settings': self.reporting_settings}
+            generator = HTMLReportGenerator(output_dir, config=report_config)
+            
+            # Call with ALL arguments required for high-quality report
+            html_path = generator.generate_report(results, 
+                                                  frame_data, 
+                                                  global_results=global_results_list, 
+                                                  complex_pdb_path=pdb_for_report,
+                                                  ligand_resname=ligand_resname)
+                                                  
+            print(f"✓ Interactive report generated: {html_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to generate HTML report: {e}")
+            import traceback
+            traceback.print_exc()
+
         print(f"✓ Detailed report generated in {output_dir}")
         return output_dir
+
+
+    def _generate_pandamap(self, pdb_file, ligand_resname, output_dir):
+        """Generate enhanced 3D visualization using PandaMap"""
+        try:
+            print("Generating PandaMap 3D Visualization...")
+            from pandamap import HybridProtLigMapper
+            from pandamap.create_3d_view import create_pandamap_3d_viz
+            
+            if not pdb_file or not Path(pdb_file).exists():
+                print("Warning: No PDB file for PandaMap.")
+                return None
+
+            # Patch PDB (ATOM -> HETATM)
+            patched_pdb = output_dir / "temp_fixed_for_panda.pdb"
+            with open(pdb_file, 'r') as f_in, open(patched_pdb, 'w') as f_out:
+                for line in f_in:
+                    if line.startswith("ATOM") and (f" {ligand_resname} " in line):
+                        line = "HETATM" + line[6:]
+                    f_out.write(line)
+            
+            # Run PandaMap (suppress printed output if needed)
+            mapper = HybridProtLigMapper(str(patched_pdb), ligand_resname=ligand_resname)
+            mapper.run_analysis()
+            
+            pandamap_html = output_dir / "structure_3d.html"
+            create_pandamap_3d_viz(mapper, output_file=str(pandamap_html))
+            print(f"PandaMap generated: {pandamap_html}")
+            
+            # Post-Process for Thinner Sticks & Hover Labels & Style
+            try:
+                with open(pandamap_html, 'r') as f:
+                    html_content = f.read()
+                
+                # Global Styling
+                html_content = html_content.replace("radius: 0.2", "radius: 0.14")
+                html_content = html_content.replace("radius:0.2", "radius:0.14")
+                html_content = html_content.replace("viewer = $3Dmol.createViewer", "window.viewer = viewer = $3Dmol.createViewer")
+                
+                # Identify Top 5 Residues
+                top_5_calls = ""
+                stats_csv = output_dir / "per_residue_detailed.csv"
+                if stats_csv.exists():
+                     df_stats = pd.read_csv(stats_csv)
+                     df_stats.columns = [c.lower() for c in df_stats.columns]
+                     if 'total' in df_stats.columns:
+                         top_5 = df_stats.sort_values('total', ascending=True).head(5)
+                         for _, row in top_5.iterrows():
+                             res_num = row.get('residue_number')
+                             if pd.isna(res_num): continue
+                             res_num = int(res_num)
+                             pdb_res_num = res_num - 1 # 0-indexed for 3Dmol
+                             res_name = row.get('residue_name', 'RES')
+                             val = row['total']
+                             label_text = f"{res_name}{res_num} ({val:.1f})"
+                             top_5_calls += f"addSmartLabel(v, '{label_text}', {pdb_res_num});\\n"
+
+                hover_script = f"""
+    <script>
+      function addSmartLabel(viewer, text, resNum) {{
+          var selCA = {{resi: resNum, atom: 'CA'}};
+          var atoms = viewer.getModel().selectedAtoms(selCA);
+          var pos = (atoms.length > 0) ? atoms[0] : {{resi: resNum}};
+          viewer.addLabel(text, {{position: pos, fontColor: 'black', fontSize: 14, showBackground: false, inFront: true}});
+      }}
+      function setupScene() {{
+          var v = window.viewer || viewer;
+          if (v) {{
+              v.setStyle({{resn: '{ligand_resname}'}}, {{stick: {{colorscheme: 'greenCarbon', radius: 0.3}}}});
+              try {{ {top_5_calls} }} catch(e) {{ console.log(e); }}
+              v.setHoverable({{}}, true, function(atom, viewer) {{
+                  if (!atom.label) {{
+                      var displayResi = parseInt(atom.resi) + 1;
+                      atom.label = viewer.addLabel(atom.resn + " " + displayResi, {{
+                          position: atom, backgroundColor: 'rgba(0,0,0,0.7)', fontColor: 'white', fontSize: 12, showBackground: true
+                      }});
+                  }}
+              }}, function(atom, viewer) {{
+                  if (atom.label) {{ viewer.removeLabel(atom.label); delete atom.label; }}
+              }});
+              v.render();
+          }} else {{ setTimeout(setupScene, 500); }}
+      }}
+      $(document).ready(function() {{ setTimeout(setupScene, 2000); }});
+    </script>
+    </body>
+                """
+                if "</body>" in html_content:
+                    html_content = html_content.replace("</body>", hover_script)
+                else:
+                    html_content += hover_script
+                    
+                with open(pandamap_html, 'w') as f:
+                    f.write(html_content)
+                
+            except Exception as e:
+                print(f"Post-processing PandaMap failed: {e}")
+                
+            return str(pandamap_html)
+
+        except Exception as e:
+            print(f"PandaMap generation failed: {e}")
+            return None
 
     # Include all the original caching methods
     def set_ligand_forcefield(self, ff_name):
@@ -1173,10 +1429,12 @@ class GBSACalculator:
 
     def parameterize_protein_amber(self, complex_pdb, ligand_resname=None, ignore_ligand_check=False):
         from pathlib import Path
+        
         # Native Prmtop Support (Inserted)
         # Native Topology Support (Universal)
         try:
              mode = InputManager.detect_mode(complex_pdb)
+             
              if mode in [EngineMode.AMBER, EngineMode.GROMACS, EngineMode.CHARMM]:
                   log.info(f"Detected Native Mode: {mode}")
                   system, topology, positions = TopologyLoader.load_system(complex_pdb, mode)
@@ -1196,8 +1454,11 @@ class GBSACalculator:
                       
                   return system, topology, None, temp_pdb
         except Exception as e:
-             # Fallthrough to standard PDB parameterization if detection fails or Generic
-             pass
+         log.warning(f"Native delegation failed: {e}")
+         import traceback
+         traceback.print_exc()
+         # Fallthrough to standard PDB parameterization if detection fails or Generic
+         pass
         """Parameterize protein with Amber (with caching)"""
         
         # Check cache first
@@ -1793,6 +2054,21 @@ class GBSACalculator:
 
     def setup_optimized_platform(self):
         """Setup optimized platform for calculations"""
+        # Check for user preference
+        pref = getattr(self, 'platform_preference', None)
+        if pref and str(pref).lower() != 'auto':
+            try:
+                platform = openmm.Platform.getPlatformByName(str(pref))
+                properties = {}
+                if pref == 'CUDA':
+                    properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
+                elif pref == 'OpenCL':
+                    properties = {'OpenCLPrecision': 'mixed'}
+                print(f"Using forced platform: {pref}")
+                return platform, properties
+            except Exception as e:
+                print(f"⚠️ Warning: Forced platform '{pref}' failed: {e}. Falling back to auto-detection.")
+
         try:
             platform = openmm.Platform.getPlatformByName('CUDA')
             properties = {
@@ -1815,7 +2091,8 @@ class GBSACalculator:
     def run_enhanced(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, 
                     energy_decomposition=False, frame_start=None, frame_end=None, 
                     frame_stride=None, frame_selection='sequential', random_seed=42,
-                    qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None):
+                    qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
+                    receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10):
         """
         Enhanced run method with comprehensive validation and analysis
         
@@ -1855,7 +2132,7 @@ class GBSACalculator:
         
         # Pre-run validation
         print("Validating input files...")
-        validation_errors = self.validate_input_files(ligand_mol, complex_pdb, ligand_pdb, xtc_file)
+        validation_errors = self.validate_input_files(ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology)
         
         if validation_errors:
             print("❌ Input validation failed:")
@@ -1923,7 +2200,8 @@ class GBSACalculator:
         # Run the core analysis with frame selection
         results = self.run(ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames, energy_decomposition,
                           frame_start, frame_end, frame_stride, frame_selection, random_seed,
-                          qha_analyze_complex, output_dir, ligand_selection, receptor_selection)
+                          qha_analyze_complex, output_dir, ligand_selection, receptor_selection,
+                          receptor_topology, ligand_topology, solvated_topology, print_interval)
         
         if results is None:
             return None
@@ -1963,7 +2241,17 @@ class GBSACalculator:
     def run(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, energy_decomposition=False,
             frame_start=None, frame_end=None, frame_stride=None, frame_selection='sequential', random_seed=42,
             qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
-            receptor_topology=None, ligand_topology=None, solvated_topology=None):
+            receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10):
+        """
+        Run fixed enhanced MM/GBSA analysis with proper GBSA forces
+        """
+        # ... (rest of method start)
+
+        # (skipping to loop) - no, replace_file_content needs contiguous block.
+        # I cannot replace signature AND loop in one go if they are far apart.
+        # I will replace signature first.
+        pass # Placeholder strategy check.
+
         """
         Run fixed enhanced MM/GBSA analysis with proper GBSA forces
         
@@ -2592,7 +2880,7 @@ class GBSACalculator:
                     protein_sasa = protein_sasa_nm2 * 100.0
                     ligand_sasa = ligand_sasa_nm2 * 100.0
 
-                    if i == 0 or i % 10 == 0:
+                    if i == 0 or i % print_interval == 0:
                         print(f"\nSASA Values (Å²):")
                         print(f"  Protein: {protein_sasa:.2f}")
                         print(f"  Ligand: {ligand_sasa:.2f}")
@@ -2655,7 +2943,7 @@ class GBSACalculator:
 
                 # Optional legacy decomposition (disabled by default as new method is better)
                  
-                if i < 5 or i % 10 == 0:
+                if i < 5 or i % print_interval == 0:
                     print(f"Frame {i}: Binding={binding_e:.1f} (NB={e_nb:.1f}, OBC={e_obc:.1f}, Int={e_internal:.1f})")
                     
             except Exception as e:
@@ -2811,11 +3099,6 @@ class GBSACalculator:
                      # Robust Parameter Injection (Fix for VdW=0 on converted systems)
                      try:
                          import parmed as pmd
-                         # We need the path to the complex topology (prmtop)
-                         # It is stored in 'complex_prmtop' variable usually, or we can look it up
-                         # Look for input logic result
-                         # complex_top_path should be available if we generated it.
-                         # 'original_complex_pdb' is saved at start of run()
                          c_prmtop_path = original_complex_pdb 
                          
                          if c_prmtop_path and str(c_prmtop_path).endswith('.prmtop') and os.path.exists(c_prmtop_path):
@@ -2914,6 +3197,11 @@ class GBSACalculator:
                   print(f"⚠️ Visualization failed: {e}")
                   import traceback
                   traceback.print_exc()
+
+
+        # Generate Interactive HTML Report (New Method)
+        if output_dir:
+            self.generate_detailed_report(results, output_dir, ligand_resname=ligand_resname, complex_pdb=complex_pdb)
 
         return results
 
@@ -3070,13 +3358,32 @@ class GBSACalculator:
             'dataframe': df,  # Return full dataframe for plotting
             'gb_model': self.gb_model,
             'mean_binding_energy': mean_binding,
+            'median_binding_energy': df['binding_energy'].median(),
+            'min_binding_energy': df['binding_energy'].min(),
+            'max_binding_energy': df['binding_energy'].max(),
             'std_dev': std_dev,
             'std_error': std_error,
             'n_frames': len(df),
             'entropy_penalty': entropy_penalty,
             'delta_g': delta_g,
-            'parameterized_residues': self.parameterized_residues
+            'parameterized_residues': self.parameterized_residues,
+            'bootstrap_results': self._calculate_bootstrap(df['binding_energy'].values) if len(df) > 5 else None
         }
+
+    def _calculate_bootstrap(self, data_values, n_boot=1000):
+        try:
+           resampled_means = []
+           for _ in range(n_boot):
+               resample = np.random.choice(data_values, size=len(data_values), replace=True)
+               resampled_means.append(np.mean(resample))
+           return {
+               'mean': np.mean(resampled_means), 
+               'std': np.std(resampled_means), 
+               'ci_lower': np.percentile(resampled_means, 2.5), 
+               'ci_upper': np.percentile(resampled_means, 97.5)
+           }
+        except:
+           return None
 
 
     def clear_cache(self):

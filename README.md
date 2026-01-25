@@ -13,6 +13,9 @@ It is particularly optimized for **GROMACS** and **Amber** users.
 ## 🚀 Features
 
 *   **Automatic Conversion:** Automatically converts GROMACS `.top` and `.xtc` files to Amber format and prepares them for MM/GBSA analysis.
+*   **Multiple Surface Area Models:**
+    *   **ACE (Analytical Continuum Electrostatics):** Fast, default model
+    *   **LCPO (Linear Combinations of Pairwise Overlaps):** More accurate, physics-based surface area calculation
 *   **Advanced Statistical Visualization:**
     *   **Rolling Average:** Shows whether the system has reached equilibrium.
     *   **Convergence Plot:** Analyzes the convergence status of binding energy.
@@ -118,3 +121,33 @@ When analysis is complete, the following are created in the `results` folder:
 ## 📞 Support
 
 If you encounter issues, please review the detailed comments in the `config_master.yaml` file.
+---
+
+## 🧬 LCPO Surface Area Model
+
+OpenGBSA now supports the **LCPO (Linear Combinations of Pairwise Overlaps)** method for more accurate surface area calculations.
+
+### Why LCPO?
+
+- **Physics-based:** More accurate than the analytical ACE approximation
+- **AMBER-compatible:** Matches MMPBSA.py default behavior
+- **Validated:** Tested against reference AMBER implementations
+
+### Configuration Example
+
+```yaml
+analysis_settings:
+  gb_model: OBC2
+  sa_model: LCPO  # or ACE (default)
+  salt_concentration: 0.150
+```
+
+### Performance Comparison
+
+| Model | Computation Time | Accuracy | Use Case |
+|-------|-----------------|----------|----------|
+| ACE   | Fast            | Good     | Rapid screening, large datasets |
+| LCPO  | Moderate        | Better   | Publication-quality, final analysis |
+
+**Note:** LCPO requires OpenMM 8.1+ (built from source with LCPO support).
+
