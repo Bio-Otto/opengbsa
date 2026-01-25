@@ -1,0 +1,24 @@
+input:
+  topology: /home/bio-otto/Desktop/OXA-MD/6t1h_1151/replica_1/topol.top
+  trajectory: /home/bio-otto/Desktop/OXA-MD/6t1h_1151/replica_1/md_complex_prod.xtc
+  ligand_resname: LIG
+
+analysis_settings:
+  gb_model: OBC2
+  charge_method: gasteiger
+  max_frames: 200
+  decomp_frames: 100
+  plot_top_residues: 20
+  print_interval: 1
+  run_per_residue_decomposition: true
+  decomposition_method: fast
+  entropy_method: interaction # This was for the core analysis (if implemented there)
+  temperature: 300.0
+
+reporting_settings:
+  include_all_plots: true
+  entropy_approximation: gaussian # Options: gaussian, exponential, none
+  show_entropy_shift_plot: true   # Show the shifted Delta G line
+
+advanced_settings:
+  n_jobs: 8

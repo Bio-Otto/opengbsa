@@ -48,6 +48,9 @@ class ConfigManager:
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f)
             
+            # Normalize configuration (handle legacy 'input' section)
+            self._normalize_config()
+            
             self.config_path = config_path
             logger.info(f"Configuration loaded from: {config_path}")
             return True
@@ -62,6 +65,34 @@ class ConfigManager:
             logger.error(f"Error loading configuration: {e}")
             return False
     
+    
+    def _normalize_config(self):
+        """
+        Normalize configuration to standard format.
+        Handles legacy 'input' section alias to 'input_files'.
+        """
+        if 'input_files' not in self.config and 'input' in self.config:
+            logger.info("Normalizing legacy 'input' section to 'input_files'")
+            inp = self.config['input']
+            
+            # Create input_files section
+            self.config['input_files'] = {}
+            
+            # Map keys
+            mapping = {
+                'topology': 'complex_pdb',
+                'trajectory': 'trajectory',
+                'ligand_mol': 'ligand_mol',
+                'ligand_pdb': 'ligand_pdb',
+                'receptor_topology': 'receptor_topology',
+                'ligand_topology': 'ligand_topology',
+                'solvated_topology': 'solvated_topology'
+            }
+            
+            for legacy_key, new_key in mapping.items():
+                if legacy_key in inp:
+                    self.config['input_files'][new_key] = inp[legacy_key]
+
     def validate_config(self) -> bool:
         """
         Validate configuration.
@@ -96,7 +127,7 @@ class ConfigManager:
         """Validate input files section."""
         input_files = self.config.get('input_files', {})
         
-        required_files = ['ligand_mol', 'complex_pdb', 'ligand_pdb', 'trajectory']
+        required_files = ['complex_pdb', 'trajectory']
         for file_key in required_files:
             if file_key not in input_files:
                 self.validation_errors.append(f"Missing required file: {file_key}")
@@ -120,8 +151,19 @@ class ConfigManager:
         
         for param, validation_rule in required_params.items():
             if param not in settings:
-                self.validation_errors.append(f"Missing required parameter: {param}")
-                continue
+                # Inject defaults for common parameters instead of failing
+                defaults = {
+                    'temperature': 300.0,
+                    'salt_concentration': 0.15,
+                    'max_frames': 50
+                }
+                if param in defaults:
+                    settings[param] = defaults[param]
+                    self.config['analysis_settings'][param] = defaults[param] # Update actual config
+                    continue
+                else: 
+                    self.validation_errors.append(f"Missing required parameter: {param}")
+                    continue
             
             value = settings[param]
             param_type, min_val, max_val = validation_rule

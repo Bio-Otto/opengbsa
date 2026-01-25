@@ -1,0 +1,227 @@
+<?xml version="1.0" ?>
+<ForceField>
+  <AtomTypes>
+    <Type name="KCX-N" element="N" mass="14.007" class="KCX-N"/>
+    <Type name="KCX-HN" element="H" mass="1.008" class="KCX-HN"/>
+    <Type name="KCX-CA" element="C" mass="12.011" class="KCX-CA"/>
+    <Type name="KCX-HA" element="H" mass="1.008" class="KCX-HA"/>
+    <Type name="KCX-CB" element="C" mass="12.011" class="KCX-CB"/>
+    <Type name="KCX-HB1" element="H" mass="1.008" class="KCX-HB1"/>
+    <Type name="KCX-HB2" element="H" mass="1.008" class="KCX-HB2"/>
+    <Type name="KCX-CG" element="C" mass="12.011" class="KCX-CG"/>
+    <Type name="KCX-HG1" element="H" mass="1.008" class="KCX-HG1"/>
+    <Type name="KCX-HG2" element="H" mass="1.008" class="KCX-HG2"/>
+    <Type name="KCX-CD" element="C" mass="12.011" class="KCX-CD"/>
+    <Type name="KCX-HD1" element="H" mass="1.008" class="KCX-HD1"/>
+    <Type name="KCX-HD2" element="H" mass="1.008" class="KCX-HD2"/>
+    <Type name="KCX-CE" element="C" mass="12.011" class="KCX-CE"/>
+    <Type name="KCX-HE1" element="H" mass="1.008" class="KCX-HE1"/>
+    <Type name="KCX-HE2" element="H" mass="1.008" class="KCX-HE2"/>
+    <Type name="KCX-NZ" element="N" mass="14.007" class="KCX-NZ"/>
+    <Type name="KCX-HZ" element="H" mass="1.008" class="KCX-HZ"/>
+    <Type name="KCX-CX" element="C" mass="12.011" class="KCX-CX"/>
+    <Type name="KCX-OQ1" element="O" mass="15.999" class="KCX-OQ1"/>
+    <Type name="KCX-OQ2" element="O" mass="15.999" class="KCX-OQ2"/>
+    <Type name="KCX-C" element="C" mass="12.011" class="KCX-C"/>
+    <Type name="KCX-O" element="O" mass="15.999" class="KCX-O"/>
+  </AtomTypes>
+  <Residues>
+    <Residue name="KCX">
+      <Atom name="N" type="KCX-N"/>
+      <Atom name="HN" type="KCX-HN"/>
+      <Atom name="CA" type="KCX-CA"/>
+      <Atom name="HA" type="KCX-HA"/>
+      <Atom name="CB" type="KCX-CB"/>
+      <Atom name="HB1" type="KCX-HB1"/>
+      <Atom name="HB2" type="KCX-HB2"/>
+      <Atom name="CG" type="KCX-CG"/>
+      <Atom name="HG1" type="KCX-HG1"/>
+      <Atom name="HG2" type="KCX-HG2"/>
+      <Atom name="CD" type="KCX-CD"/>
+      <Atom name="HD1" type="KCX-HD1"/>
+      <Atom name="HD2" type="KCX-HD2"/>
+      <Atom name="CE" type="KCX-CE"/>
+      <Atom name="HE1" type="KCX-HE1"/>
+      <Atom name="HE2" type="KCX-HE2"/>
+      <Atom name="NZ" type="KCX-NZ"/>
+      <Atom name="HZ" type="KCX-HZ"/>
+      <Atom name="CX" type="KCX-CX"/>
+      <Atom name="OQ1" type="KCX-OQ1"/>
+      <Atom name="OQ2" type="KCX-OQ2"/>
+      <Atom name="C" type="KCX-C"/>
+      <Atom name="O" type="KCX-O"/>
+      <Bond from="0" to="1"/>
+      <Bond from="0" to="2"/>
+      <Bond from="2" to="3"/>
+      <Bond from="2" to="4"/>
+      <Bond from="2" to="21"/>
+      <Bond from="4" to="5"/>
+      <Bond from="4" to="6"/>
+      <Bond from="4" to="7"/>
+      <Bond from="7" to="8"/>
+      <Bond from="7" to="9"/>
+      <Bond from="7" to="10"/>
+      <Bond from="10" to="11"/>
+      <Bond from="10" to="12"/>
+      <Bond from="10" to="13"/>
+      <Bond from="13" to="14"/>
+      <Bond from="13" to="15"/>
+      <Bond from="13" to="16"/>
+      <Bond from="16" to="17"/>
+      <Bond from="16" to="18"/>
+      <Bond from="18" to="19"/>
+      <Bond from="18" to="20"/>
+      <Bond from="21" to="22"/>
+      <ExternalBond atomName="N"/>
+      <ExternalBond atomName="C"/>
+      <ExternalBond atomName="CX"/>
+      <ExternalBond atomName="OQ1"/>
+      <ExternalBond atomName="OQ2"/>
+      <ExternalBond atomName="C"/>
+      <ExternalBond atomName="O"/>
+    </Residue>
+  </Residues>
+  <HarmonicBondForce>
+    <Bond class1="KCX-N" class2="KCX-CA" length="0.14500985862729998" k="294600.92777590535"/>
+    <Bond class1="KCX-CA" class2="KCX-CB" length="0.152190126495" k="221435.25929028585"/>
+    <Bond class1="KCX-CA" class2="KCX-C" length="0.152190126495" k="221435.25929028585"/>
+    <Bond class1="KCX-CB" class2="KCX-CG" length="0.152190126495" k="221435.25929028585"/>
+    <Bond class1="KCX-CG" class2="KCX-CD" length="0.152190126495" k="221435.25929028585"/>
+    <Bond class1="KCX-CD" class2="KCX-CE" length="0.152190126495" k="221435.25929028585"/>
+    <Bond class1="KCX-CE" class2="KCX-NZ" length="0.1464762957261" k="306553.7072171673"/>
+    <Bond class1="KCX-NZ" class2="KCX-CX" length="0.1464762957261" k="306553.7072171673"/>
+    <Bond class1="KCX-CX" class2="KCX-OQ1" length="0.14273439587159997" k="276118.8797485491"/>
+    <Bond class1="KCX-CX" class2="KCX-OQ2" length="0.14273439587159997" k="276118.8797485491"/>
+    <Bond class1="KCX-C" class2="KCX-O" length="0.14273439587159997" k="276118.8797485491"/>
+  </HarmonicBondForce>
+  <HarmonicAngleForce>
+    <Angle class1="KCX-N" class2="KCX-CA" class3="KCX-HA" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-N" class2="KCX-CA" class3="KCX-CB" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-N" class2="KCX-CA" class3="KCX-C" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HN" class2="KCX-N" class3="KCX-CA" angle="2.0159797763293597" k="530.9012827843272"/>
+    <Angle class1="KCX-CA" class2="KCX-CB" class3="KCX-HB1" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CA" class2="KCX-CB" class3="KCX-HB2" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CA" class2="KCX-C" class3="KCX-O" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HA" class2="KCX-CA" class3="KCX-CB" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HA" class2="KCX-CA" class3="KCX-C" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CB" class2="KCX-CA" class3="KCX-C" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CB" class2="KCX-CG" class3="KCX-HG1" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CB" class2="KCX-CG" class3="KCX-HG2" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HB1" class2="KCX-CB" class3="KCX-HB2" angle="2.017654719697188" k="408.161690475075"/>
+    <Angle class1="KCX-HB1" class2="KCX-CB" class3="KCX-CG" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HB2" class2="KCX-CB" class3="KCX-CG" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CG" class2="KCX-CD" class3="KCX-HD1" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CG" class2="KCX-CD" class3="KCX-HD2" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CG" class2="KCX-CD" class3="KCX-CE" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HG1" class2="KCX-CG" class3="KCX-HG2" angle="2.017654719697188" k="408.161690475075"/>
+    <Angle class1="KCX-HG1" class2="KCX-CG" class3="KCX-CD" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HG2" class2="KCX-CG" class3="KCX-CD" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CD" class2="KCX-CE" class3="KCX-HE1" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CD" class2="KCX-CE" class3="KCX-HE2" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CD" class2="KCX-CE" class3="KCX-NZ" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HD1" class2="KCX-CD" class3="KCX-HD2" angle="2.017654719697188" k="408.161690475075"/>
+    <Angle class1="KCX-HD1" class2="KCX-CD" class3="KCX-CE" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HD2" class2="KCX-CD" class3="KCX-CE" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-CE" class2="KCX-NZ" class3="KCX-HZ" angle="1.9359230395787466" k="791.028080064996"/>
+    <Angle class1="KCX-CE" class2="KCX-NZ" class3="KCX-CX" angle="2.004361594786895" k="410.1658045477351"/>
+    <Angle class1="KCX-HE1" class2="KCX-CE" class3="KCX-HE2" angle="2.017654719697188" k="408.161690475075"/>
+    <Angle class1="KCX-HE1" class2="KCX-CE" class3="KCX-NZ" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HE2" class2="KCX-CE" class3="KCX-NZ" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-NZ" class2="KCX-CX" class3="KCX-OQ1" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-NZ" class2="KCX-CX" class3="KCX-OQ2" angle="2.034139115548445" k="445.22208650928565"/>
+    <Angle class1="KCX-HZ" class2="KCX-NZ" class3="KCX-CX" angle="1.9359230395787466" k="791.028080064996"/>
+    <Angle class1="KCX-OQ1" class2="KCX-CX" class3="KCX-OQ2" angle="2.034139115548445" k="445.22208650928565"/>
+  </HarmonicAngleForce>
+  <PeriodicTorsionForce>
+    <Proper class1="KCX-N" class2="KCX-CA" class3="KCX-CB" class4="KCX-HB1" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-N" class2="KCX-CA" class3="KCX-CB" class4="KCX-HB2" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-N" class2="KCX-CA" class3="KCX-CB" class4="KCX-CG" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-N" class2="KCX-CA" class3="KCX-C" class4="KCX-O" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-HA" periodicity1="2" phase1="0.0" k1="0.7624858976858641"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-HA" periodicity1="3" phase1="0.0" k1="0.12436280495163224"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-CB" periodicity1="2" phase1="0.0" k1="0.7624858976858641"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-CB" periodicity1="3" phase1="0.0" k1="0.12436280495163224"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-C" periodicity1="2" phase1="0.0" k1="0.7624858976858641"/>
+    <Proper class1="KCX-HN" class2="KCX-N" class3="KCX-CA" class4="KCX-C" periodicity1="3" phase1="0.0" k1="0.12436280495163224"/>
+    <Proper class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG1" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG2" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" class4="KCX-CD" periodicity1="3" phase1="0.0" k1="0.3859268900186583"/>
+    <Proper class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" class4="KCX-CD" periodicity1="2" phase1="3.141592653589793" k1="1.3221171897434616"/>
+    <Proper class1="KCX-CA" class2="KCX-CB" class3="KCX-CG" class4="KCX-CD" periodicity1="1" phase1="3.141592653589793" k1="1.358878183988969"/>
+    <Proper class1="KCX-HA" class2="KCX-CA" class3="KCX-CB" class4="KCX-HB1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HA" class2="KCX-CA" class3="KCX-CB" class4="KCX-HB2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HA" class2="KCX-CA" class3="KCX-CB" class4="KCX-CG" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-HA" class2="KCX-CA" class3="KCX-C" class4="KCX-O" periodicity1="3" phase1="0.0" k1="0.4667359389899568"/>
+    <Proper class1="KCX-HA" class2="KCX-CA" class3="KCX-C" class4="KCX-O" periodicity1="1" phase1="0.0" k1="1.436153909161781"/>
+    <Proper class1="KCX-CB" class2="KCX-CA" class3="KCX-C" class4="KCX-O" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD1" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD2" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" class4="KCX-CE" periodicity1="3" phase1="0.0" k1="0.3859268900186583"/>
+    <Proper class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" class4="KCX-CE" periodicity1="2" phase1="3.141592653589793" k1="1.3221171897434616"/>
+    <Proper class1="KCX-CB" class2="KCX-CG" class3="KCX-CD" class4="KCX-CE" periodicity1="1" phase1="3.141592653589793" k1="1.358878183988969"/>
+    <Proper class1="KCX-HB1" class2="KCX-CB" class3="KCX-CA" class4="KCX-C" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-HB1" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HB1" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HB1" class2="KCX-CB" class3="KCX-CG" class4="KCX-CD" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-HB2" class2="KCX-CB" class3="KCX-CA" class4="KCX-C" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-HB2" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HB2" class2="KCX-CB" class3="KCX-CG" class4="KCX-HG2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HB2" class2="KCX-CB" class3="KCX-CG" class4="KCX-CD" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CG" class2="KCX-CB" class3="KCX-CA" class4="KCX-C" periodicity1="3" phase1="0.0" k1="0.3859268900186583"/>
+    <Proper class1="KCX-CG" class2="KCX-CB" class3="KCX-CA" class4="KCX-C" periodicity1="2" phase1="3.141592653589793" k1="1.3221171897434616"/>
+    <Proper class1="KCX-CG" class2="KCX-CB" class3="KCX-CA" class4="KCX-C" periodicity1="1" phase1="3.141592653589793" k1="1.358878183988969"/>
+    <Proper class1="KCX-CG" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE1" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CG" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE2" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CG" class2="KCX-CD" class3="KCX-CE" class4="KCX-NZ" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-HG1" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HG1" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HG1" class2="KCX-CG" class3="KCX-CD" class4="KCX-CE" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-HG2" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HG2" class2="KCX-CG" class3="KCX-CD" class4="KCX-HD2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HG2" class2="KCX-CG" class3="KCX-CD" class4="KCX-CE" periodicity1="3" phase1="0.0" k1="0.43541375381115444"/>
+    <Proper class1="KCX-CD" class2="KCX-CE" class3="KCX-NZ" class4="KCX-HZ" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-CD" class2="KCX-CE" class3="KCX-NZ" class4="KCX-CX" periodicity1="3" phase1="0.0" k1="1.1760757362760232"/>
+    <Proper class1="KCX-CD" class2="KCX-CE" class3="KCX-NZ" class4="KCX-CX" periodicity1="2" phase1="3.141592653589793" k1="0.22277947274788648"/>
+    <Proper class1="KCX-HD1" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HD1" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HD1" class2="KCX-CD" class3="KCX-CE" class4="KCX-NZ" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-HD2" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE1" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HD2" class2="KCX-CD" class3="KCX-CE" class4="KCX-HE2" periodicity1="3" phase1="0.0" k1="0.7999501384731329"/>
+    <Proper class1="KCX-HD2" class2="KCX-CD" class3="KCX-CE" class4="KCX-NZ" periodicity1="3" phase1="0.0" k1="0.4834078610240992"/>
+    <Proper class1="KCX-CE" class2="KCX-NZ" class3="KCX-CX" class4="KCX-OQ1" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-CE" class2="KCX-NZ" class3="KCX-CX" class4="KCX-OQ2" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HE1" class2="KCX-CE" class3="KCX-NZ" class4="KCX-HZ" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HE1" class2="KCX-CE" class3="KCX-NZ" class4="KCX-CX" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HE2" class2="KCX-CE" class3="KCX-NZ" class4="KCX-HZ" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HE2" class2="KCX-CE" class3="KCX-NZ" class4="KCX-CX" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HZ" class2="KCX-NZ" class3="KCX-CX" class4="KCX-OQ1" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+    <Proper class1="KCX-HZ" class2="KCX-NZ" class3="KCX-CX" class4="KCX-OQ2" periodicity1="3" phase1="0.0" k1="0.8521427965991905"/>
+  </PeriodicTorsionForce>
+  <NonbondedForce coulomb14scale="0.833333333333" lj14scale="0.5">
+    <Atom type="KCX-N" charge="-0.3496194799338756" sigma="0.3206876023663901" epsilon="0.7016212989374017"/>
+    <Atom type="KCX-HN" charge="0.16339703520570756" sigma="0.11034276772973167" epsilon="0.058955968900150965"/>
+    <Atom type="KCX-CA" charge="0.06813192163584975" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-HA" charge="0.05700291779442125" sigma="0.2583225710839196" epsilon="0.068656285380106"/>
+    <Atom type="KCX-CB" charge="-0.02885260203924985" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-HB1" charge="0.028906890618744817" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-HB2" charge="0.028906890618744817" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-CG" charge="-0.04999126828650282" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-HG1" charge="0.026779209164254306" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-HG2" charge="0.026779209164254306" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-CD" charge="-0.04041347704579883" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-HD1" charge="0.02795844554527822" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-HD2" charge="0.02795844554527822" sigma="0.26445434132681245" epsilon="0.06602135607582665"/>
+    <Atom type="KCX-CE" charge="-0.0002628114646476468" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-HE1" charge="0.04296517540025062" sigma="0.2583225710839196" epsilon="0.068656285380106"/>
+    <Atom type="KCX-HE2" charge="0.04296517540025062" sigma="0.2583225710839196" epsilon="0.068656285380106"/>
+    <Atom type="KCX-NZ" charge="-0.2691989618487774" sigma="0.3206876023663901" epsilon="0.7016212989374017"/>
+    <Atom type="KCX-HZ" charge="0.12716978156876982" sigma="0.11034276772973167" epsilon="0.058955968900150965"/>
+    <Atom type="KCX-CX" charge="0.21046678009758038" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-OQ1" charge="-0.35588421617908866" sigma="0.2997159987248637" epsilon="0.8764372596155737"/>
+    <Atom type="KCX-OQ2" charge="-0.35588421617908866" sigma="0.2997159987248637" epsilon="0.8764372596155737"/>
+    <Atom type="KCX-C" charge="0.12459971490107374" sigma="0.337953176162662" epsilon="0.45538911611061844"/>
+    <Atom type="KCX-O" charge="-0.3764338721752352" sigma="0.2997159987248637" epsilon="0.8764372596155737"/>
+  </NonbondedForce>
+</ForceField>

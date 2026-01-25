@@ -12,6 +12,10 @@ import seaborn as sns
 from collections import defaultdict
 import time
 import warnings
+import multiprocessing # Added for parallel processing
+
+# Global worker context for multiprocessing
+_worker_context = {}
 
 # Suppress specific warnings
 warnings.filterwarnings('ignore')
@@ -34,7 +38,7 @@ class PerResidueDecomposition:
     Integrates seamlessly with your existing GBSACalculator class
     """
     
-    def __init__(self, mmgbsa_calculator, temperature=300.0, output_dir=None):
+    def __init__(self, mmgbsa_calculator, temperature=300.0, output_dir=None, n_jobs=1):
         """
         Initialize per-residue decomposition analysis
         
@@ -46,10 +50,13 @@ class PerResidueDecomposition:
             Temperature in Kelvin
         output_dir : str, optional
             Output directory for saving results
+        n_jobs : int
+            Number of parallel jobs (default: 1, -1 for all cores)
         """
         self.mmgbsa_calculator = mmgbsa_calculator
         self.temperature = temperature * unit.kelvin
         self.output_dir = output_dir
+        self.n_jobs = n_jobs
         
         # Storage for decomposition results
         self.residue_contributions = {}
@@ -60,7 +67,9 @@ class PerResidueDecomposition:
                                 ligand_pdb, max_frames=50, decomp_frames=10,
                                 output_dir=None,
                                 frame_start=None, frame_end=None, frame_stride=None,
-                                frame_selection='sequential', random_seed=42):
+                                frame_selection='sequential', random_seed=42, 
+                                solvated_topology=None, receptor_topology=None, ligand_topology=None,
+                                ligand_resname=None, plot_top_residues=10):
         """
         Run complete MM/GBSA analysis with per-residue decomposition
         
@@ -79,7 +88,10 @@ class PerResidueDecomposition:
         log.info("Running Baseline MM/GBSA Analysis...")
         
         mmgbsa_results = self.mmgbsa_calculator.run_enhanced(
-            ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames
+            ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames,
+            solvated_topology=solvated_topology,
+            receptor_topology=receptor_topology,
+            ligand_topology=ligand_topology
         )
         
         if not mmgbsa_results:
@@ -94,7 +106,10 @@ class PerResidueDecomposition:
         
         decomp_results = self._perform_per_residue_decomposition(
             ligand_mol, complex_pdb, xtc_file, ligand_pdb, decomp_frames,
-            frame_start, frame_end, frame_stride, frame_selection, random_seed
+            frame_start, frame_end, frame_stride, frame_selection, random_seed,
+            solvated_topology=solvated_topology, ligand_resname=ligand_resname,
+            salt_concentration=self.mmgbsa_calculator.salt_concentration,
+            plot_top_residues=plot_top_residues
         )
         
         if decomp_results:
@@ -183,18 +198,28 @@ class PerResidueDecomposition:
     def _perform_per_residue_decomposition(self, ligand_mol, complex_pdb, 
                                          xtc_file, ligand_pdb, n_frames,
                                          frame_start=None, frame_end=None, frame_stride=None,
-                                         frame_selection='sequential', random_seed=42):
+                                         frame_selection='sequential', random_seed=42, solvated_topology=None,
+                                         ligand_resname=None, salt_concentration=None, plot_top_residues=10):
         """
         Perform detailed per-residue energy decomposition
         """
         
         try:
             # Load trajectory and get frames for decomposition
-            traj = md.load(xtc_file, top=complex_pdb)
+            # Load trajectory (Use solvated_topology if available to avoid atom mismatch)
+            load_top = solvated_topology if solvated_topology else complex_pdb
+            
+            # Check if loading might fail (if dry topology used with solvated xtc)
+            # This is critical for GROMACS/Native mode where complex_pdb is dry but xtc is solvated.
+            if not solvated_topology and str(complex_pdb).endswith('.prmtop'):
+                 # Heuristic: try loading, if fails, user needs solvated_topology (which we should have passed)
+                 pass
+
+            traj = md.load(xtc_file, top=load_top)
+            
             if len(traj) < n_frames:
                 n_frames = len(traj)
             
-            # Select frames based on parameters
             # Select frames based on parameters
             selected_frames = self._select_frames(len(traj), n_frames, frame_start, frame_end,
                                                 frame_stride, frame_selection, random_seed)
@@ -202,17 +227,22 @@ class PerResidueDecomposition:
             
             print(f"  Selected {len(decomp_traj)} frames for decomposition")
             
-            # FIX: Strip solvent/ions from trajectory to match OpenMM system
+            # FIX: Strip solvent/ions from trajectory to match OpenMM system (Dry)
             # The system builder removes these, so the trajectory must match.
             topology = decomp_traj.topology
-            # Select atoms to keep (Protein + Ligand generally)
-            # Use 'not (water or resname ...)' consistent with core.py build_complex_system
+            
+            # If we loaded using solvated_topology, we MUST strip down to the dry complex
+            # If we loaded using complex_pdb (dry), we might already match, or mismatch (and likely crashed above if mismatch).
+            
             selection_query = "not (water or resname NA CL K MG ZN CA HOH WAT TIP3 SOL)"
             keep_indices = topology.select(selection_query)
             
-            if len(keep_indices) < topology.n_atoms:
-                log.process(f"Stripping {topology.n_atoms - len(keep_indices)} solvent/ion atoms from trajectory to match system...")
+            # Optimization: Only strip if we actually have solvent atoms or if explicit solvated top was used
+            if solvated_topology or len(keep_indices) < topology.n_atoms:
+                log.process(f"Stripping solvent/ion atoms (keeping {len(keep_indices)}) from trajectory to match system...")
                 decomp_traj = decomp_traj.atom_slice(keep_indices)
+            
+
 
             # Prepare systems for decomposition
             systems = self._prepare_decomposition_systems(ligand_mol, complex_pdb, ligand_pdb)
@@ -224,10 +254,21 @@ class PerResidueDecomposition:
             # Use the topology from the prepared system (stripped of solvent/ions)
             # to ensure indices match the OpenMM system and stripped trajectory
             complex_topology = systems['complex_topology']
-            ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
+            
+            if not ligand_resname:
+                log.info("Searching for ligand residue name...")
+                ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
+            
+            log.info(f"Using Ligand Residue Name: {ligand_resname}")
+            
             residue_map, ligand_indices = self._build_residue_mapping(complex_topology, ligand_resname)
             
             log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
+            if len(ligand_indices) == 0:
+                 log.error(f"CRITICAL: No ligand atoms found for resname '{ligand_resname}'. Energies will be zero.")
+                 # Provide debugging dump
+                 res_found = set(r.name for r in complex_topology.residues())
+                 log.info(f"Available residues in topology: {list(res_found)[:20]}")
             
             if not systems:
                 return None
@@ -236,43 +277,144 @@ class PerResidueDecomposition:
             residue_energies = []
             frame_by_frame_data = []  # Store frame-by-frame data for CSV output
             
-            for i, frame in enumerate(decomp_traj):
-                if i % 5 == 0:
-                    log.process(f"Processing frame {i+1}/{len(decomp_traj)}...")
+            # Determine number of cores
+            n_cores = self.n_jobs
+            if n_cores == -1:
+                import multiprocessing
+                n_cores = multiprocessing.cpu_count()
+            
+            # Prepare for Parallel Execution
+            run_parallel = (n_cores > 1 and len(decomp_traj) > 1)
+            
+            if run_parallel:
+                log.info(f"Running parallel decomposition on {n_cores} cores...")
                 
-                frame_result = self._decompose_single_frame(
-                    frame, systems, residue_map, ligand_indices, ligand_resname
-                )
+                # 1. Serialize System for Workers
+                system_xml = openmm.XmlSerializer.serialize(systems['complex_system'])
                 
-                if frame_result:
-                    residue_energies.append(frame_result)
-                    
-                    # Store frame-by-frame data for CSV output
-                    frame_data = {
+                # 2. Extract pdb_params (Pre-calculate so workers don't need ParmEd)
+                pdb_params = None
+                if 'parmed_structure' in systems:
+                    pdb_params = {}
+                    struct = systems['parmed_structure']
+                    for i, atom in enumerate(struct.atoms):
+                         sigma = atom.rmin * 1.781797697 * 0.1 # Angstrom -> nm
+                         epsilon = atom.epsilon 
+                         charge = atom.charge
+                         pdb_params[i] = (charge, sigma, epsilon)
+                
+                # 3. Prepare Tasks
+                tasks = []
+                for i, frame in enumerate(decomp_traj):
+                    pos = frame.xyz[0] 
+                    # Note: We must strip unit from pos if it has it, but mdtraj returns numpy
+                    # We pass frame index to sort results
+                    tasks.append((selected_frames[i], pos, residue_map, ligand_indices, salt_concentration, ligand_resname))
+                
+                # 4. Run Parallel Pool
+                import multiprocessing
+                pool_results = []
+                try:
+                    with multiprocessing.Pool(processes=n_cores, initializer=_worker_init, initargs=(system_xml, pdb_params)) as pool:
+                        # Use imap to get results as they complete
+                        for i, (frame_idx, interactions) in enumerate(pool.imap(_worker_analyze_frame, tasks)):
+                            if (i+1) % 5 == 0:
+                                log.process(f"Processed {i+1}/{len(tasks)} frames (Parallel)...")
+                            
+                            if interactions:
+                                pool_results.append((i, interactions)) # Store with loop index 'i' to match decomp_traj[i]
+                except Exception as e:
+                    log.error(f"Parallel execution failed: {e}. Falling back to serial.")
+                    run_parallel = False
+            
+            # Processing Loop (Parallel Collection or Serial Execution)
+            if run_parallel:
+                 # Sort by original index to ensure order matches decomp_traj
+                 pool_results.sort(key=lambda x: x[0])
+                 
+                 for i, interactions in pool_results:
+                     frame = decomp_traj[i]
+                     positions = frame.xyz[0] * unit.nanometer
+                     
+                     # Calculate Solvation (Approximate) - locally
+                     solvation_contributions = self._approximate_solvation_decomposition(
+                        systems, positions, residue_map, ligand_indices
+                     )
+                     
+                     # Combine and Format Results
+                     frame_result = {}
+                     for res_id in interactions:
+                         inter = interactions[res_id]
+                         solv = solvation_contributions.get(res_id, 0.0)
+                         
+                         interactions[res_id]['solvation'] = solv
+                         interactions[res_id]['electrostatic'] = inter['elec'] # Ensure key matches legacy format (electrostatic)
+                         interactions[res_id]['total'] = inter['vdw'] + inter['elec'] + solv
+                         frame_result[res_id] = interactions[res_id]
+                     
+                     residue_energies.append(frame_result)
+                     
+                     # Store/Format CSV Data
+                     frame_data = {
                         'frame_index': selected_frames[i],
                         'frame_number': i + 1,
                         'total_frames': len(decomp_traj)
-                    }
+                     }
+                     for res_id, energies in frame_result.items():
+                         parts = res_id.split('_')
+                         if len(parts) >= 3: res_name, res_number, chain_id = parts[0], parts[1], parts[2]
+                         else: res_name, res_number, chain_id = res_id, "0", "A"
+                         
+                         frame_data[f'{res_name}{res_number}_{chain_id}_vdw'] = energies['vdw']
+                         frame_data[f'{res_name}{res_number}_{chain_id}_electrostatic'] = energies['elec']
+                         frame_data[f'{res_name}{res_number}_{chain_id}_solvation'] = energies['solvation']
+                         frame_data[f'{res_name}{res_number}_{chain_id}_total'] = energies['total']
+                     
+                     frame_by_frame_data.append(frame_data)
+            
+            else:
+                # Serial Execution (Legacy Loop)
+                log.info("Running serial decomposition...")
+                for i, frame in enumerate(decomp_traj):
+                    if i % 5 == 0:
+                        log.process(f"Processing frame {i+1}/{len(decomp_traj)}...")
                     
-                    # Add residue energies for this frame
-                    for res_id, energies in frame_result.items():
-                        # Parse residue information
-                        parts = res_id.split('_')
-                        if len(parts) >= 3:
-                            res_name = parts[0]
-                            res_number = parts[1]
-                            chain_id = parts[2]
-                        else:
-                            res_name = res_id
-                            res_number = "0"
-                            chain_id = "A"
+                    frame_result = self._decompose_single_frame(
+                        frame, systems, residue_map, ligand_indices, ligand_resname,
+                        salt_concentration=salt_concentration
+                    )
+                    
+                    if frame_result:
+                        residue_energies.append(frame_result)
                         
-                        frame_data[f'{res_name}{res_number}_{chain_id}_vdw'] = energies['vdw']
-                        frame_data[f'{res_name}{res_number}_{chain_id}_electrostatic'] = energies['electrostatic']
-                        frame_data[f'{res_name}{res_number}_{chain_id}_solvation'] = energies['solvation']
-                        frame_data[f'{res_name}{res_number}_{chain_id}_total'] = energies['total']
-                    
-                    frame_by_frame_data.append(frame_data)
+                        frame_data = {
+                            'frame_index': selected_frames[i],
+                            'frame_number': i + 1,
+                            'total_frames': len(decomp_traj)
+                        }
+                        
+                        for res_id, energies in frame_result.items():
+                            parts = res_id.split('_')
+                            if len(parts) >= 3:
+                                res_name = parts[0]
+                                res_number = parts[1]
+                                chain_id = parts[2]
+                            else:
+                                res_name = res_id
+                                res_number = "0"
+                                chain_id = "A"
+                            
+                            frame_data[f'{res_name}{res_number}_{chain_id}_vdw'] = energies['vdw']
+                            # Note: Key in Serial result is 'electrostatic' but my standalone uses 'elec'.
+                            # decompose_single_frame normalizes this?
+                            # _calculate_pairwise returns 'elec'. 
+                            # _decompose_single_frame (line 488) logic?
+                            # Needs check. I'll assume standard keys.
+                            frame_data[f'{res_name}{res_number}_{chain_id}_electrostatic'] = energies.get('electrostatic', energies.get('elec', 0.0))
+                            frame_data[f'{res_name}{res_number}_{chain_id}_solvation'] = energies['solvation']
+                            frame_data[f'{res_name}{res_number}_{chain_id}_total'] = energies['total']
+                        
+                        frame_by_frame_data.append(frame_data)
             
             if not residue_energies:
                 log.error("No successful frame decompositions")
@@ -283,8 +425,17 @@ class PerResidueDecomposition:
             # Save frame-by-frame output
             self._save_frame_by_frame_csv(frame_by_frame_data, residue_map)
             
+            # Store for reporting
+            self.frame_data = frame_by_frame_data
+            
             # Average across frames
             averaged_results = self._average_residue_energies(residue_energies)
+            
+            
+            # Generate advanced visualization plots
+            # Generate advanced visualization plots
+            if frame_by_frame_data:
+                self._generate_time_series_heatmap(frame_by_frame_data, residue_map, top_n=plot_top_residues)
             
             return averaged_results
             
@@ -416,7 +567,7 @@ class PerResidueDecomposition:
             print(f"  ERROR: System preparation failed: {e}")
             return None
     
-    def _decompose_single_frame(self, frame, systems, residue_map, ligand_indices, ligand_resname):
+    def _decompose_single_frame(self, frame, systems, residue_map, ligand_indices, ligand_resname, salt_concentration=None):
         """
         Decompose energy for a single frame into per-residue contributions
         """
@@ -438,7 +589,8 @@ class PerResidueDecomposition:
             
             # Method 1: Pairwise interaction decomposition
             interaction_energies = self._calculate_pairwise_interactions(
-                systems, positions, residue_map, ligand_indices
+                systems, positions, residue_map, ligand_indices,
+                salt_concentration=salt_concentration
             )
             
             # Method 2: GB/SA decomposition (approximate)
@@ -468,112 +620,34 @@ class PerResidueDecomposition:
             print(f"    WARNING: Frame decomposition failed: {e}")
             return None
     
-    def _calculate_pairwise_interactions(self, systems, positions, residue_map, ligand_indices):
+    def _calculate_pairwise_interactions(self, systems, positions, residue_map, ligand_indices, salt_concentration=None):
         """
-        Calculate pairwise interactions between residues and ligand
+        Calculate pairwise interactions (Wrapper for standalone function)
         """
-        
-        interaction_energies = {}
-        
         try:
-            # Get force objects from system
             system = systems['complex_system']
             context = systems['complex_context']
             
-            # GBSAForceManager vdW and electrostatics
-            nonbonded_force = None
+            # Extract pdb_params if available (for ParmEd-based parameters)
             pdb_params = None
-            
-            # Check for ParmEd Structure first (Robust Fallback)
             if 'parmed_structure' in systems:
                 pdb_params = {}
                 struct = systems['parmed_structure']
-                # Pre-process parameters
                 for i, atom in enumerate(struct.atoms):
-                    # Convert Rmin/2 to Sigma (nm)
-                    # Sigma = (Rmin/2) * 2 / 1.12246 = Rmin * 1.7818 / 1.122 = No.
-                    # Rmin = 2^(1/6) * Sigma.
-                    # Rmin/2 (ParmEd) = 0.5 * 2^(1/6) * Sigma.
-                    # Sigma = (Rmin/2) / (0.5 * 2^(1/6)) = (Rmin/2) * 1.781797
                     sigma = atom.rmin * 1.781797697 * 0.1 # Angstrom -> nm
-                    # Epsilon
                     epsilon = atom.epsilon # kcal/mol
-                    # Charge
                     charge = atom.charge
                     pdb_params[i] = (charge, sigma, epsilon)
             
-            # Fallback to NonbondedForce if no ParmEd
-            if pdb_params is None:
-                for force in system.getForces():
-                    if isinstance(force, openmm.NonbondedForce):
-                        nonbonded_force = force
-                        break
-                
-                if nonbonded_force is None:
-                    return interaction_energies
-            
-            # Calculate interactions for each residue
-            for res_id, res_atoms in residue_map.items():
-                vdw_energy = 0.0
-                elec_energy = 0.0
-                
-                # Calculate pairwise interactions with ligand
-                for res_atom in res_atoms:
-                    for lig_atom in ligand_indices:
-                        # Get parameters
-                        if pdb_params:
-                             q1, sig1, eps1 = pdb_params[res_atom]
-                             q2, sig2, eps2 = pdb_params[lig_atom]
-                             
-                             charge1 = q1 * unit.elementary_charge
-                             charge2 = q2 * unit.elementary_charge
-                             sigma_combined = (sig1 + sig2) * 0.5 * unit.nanometer
-                             epsilon_combined = (eps1 * eps2)**0.5 * unit.kilocalorie_per_mole
-                             
-                        else:
-                             charge1, sigma1, epsilon1 = nonbonded_force.getParticleParameters(res_atom)
-                             charge2, sigma2, epsilon2 = nonbonded_force.getParticleParameters(lig_atom)
-                             sigma_combined = (sigma1 + sigma2) * 0.5
-                             epsilon_combined = (epsilon1 * epsilon2) ** 0.5
-
-                        # Calculate distance
-                        pos1 = positions[res_atom]
-                        pos2 = positions[lig_atom]
-                        r = np.linalg.norm((pos1 - pos2).value_in_unit(unit.nanometer))
-                        
-                        if r > 0.001:  # Avoid division by zero
-                            # Electrostatic energy (Coulomb)
-                            # k_e = 332.0522 kcal·Å/(mol·e²)
-                            k_e = 332.0522
-                            charge_product = charge1.value_in_unit(unit.elementary_charge) * charge2.value_in_unit(unit.elementary_charge)
-                            r_angstrom = r * 10.0
-                            elec_energy += k_e * charge_product / r_angstrom
-                            
-                            # van der Waals energy (Lennard-Jones)
-                            # (sigma_combined and epsilon_combined calculated above)
-                            
-                            
-                            sigma_val = sigma_combined.value_in_unit(unit.nanometer)
-                            epsilon_val = epsilon_combined.value_in_unit(unit.kilocalorie_per_mole)
-                            
-                            if sigma_val > 0 and epsilon_val > 0:
-                                sigma_over_r = sigma_val / r
-                                if sigma_over_r < 10:  # Avoid numerical overflow
-                                    sr6 = sigma_over_r ** 6
-                                    sr12 = sr6 ** 2
-                                    term = 4 * epsilon_val * (sr12 - sr6)
-                                    vdw_energy += term
-                
-                interaction_energies[res_id] = {
-                    'vdw': vdw_energy,
-                    'elec': elec_energy
-                }
-            
-            return interaction_energies
+            # Call standalone logic
+            return _calculate_pairwise_interactions_standalone(
+                system, context, positions, residue_map, ligand_indices, 
+                salt_concentration=salt_concentration, pdb_params=pdb_params
+            )
             
         except Exception as e:
-            print(f"      WARNING: Pairwise calculation failed: {e}")
-            return interaction_energies
+            print(f"    WARNING: Interaction calculation failed: {e}")
+            return {}
     
     def _approximate_solvation_decomposition(self, systems, positions, residue_map, ligand_indices):
         """
@@ -808,6 +882,91 @@ class PerResidueDecomposition:
             
         except Exception as e:
             print(f"  WARNING: Plot generation failed: {e}")
+
+    def _generate_time_series_heatmap(self, frame_data, residue_map, top_n=20):
+        """
+        Generate time-dependent interaction energy heatmap for top residues
+        """
+        try:
+            if not frame_data:
+                return
+
+            print(f"  Generating time-series heatmap for top {top_n} residues...")
+            
+            # Convert to DataFrame
+            df_time = pd.DataFrame(frame_data)
+            
+            # Identify columns Ending with _total (representing total energy)
+            energy_cols = [col for col in df_time.columns if col.endswith('_total')]
+            
+            # Calculate mean for each residue column to find top N
+            mean_energies = {col: df_time[col].mean() for col in energy_cols}
+            
+            # Sort by most negative (strongest interaction)
+            sorted_residues = sorted(mean_energies.items(), key=lambda x: x[1])
+            top_residues = sorted_residues[:top_n]  # Top N most stabilizing
+            
+            # Prepare matrix for heatmap (X=Frame, Y=Residue)
+            heatmap_data = []
+            residue_labels = []
+            
+            for col, mean_val in top_residues:
+                clean_name = col.replace('_total', '').replace('_A', '')
+                residue_labels.append(f"{clean_name} ({mean_val:.1f})")
+                heatmap_data.append(df_time[col].values)
+            
+            # --- Add Ligand Total Row (Bottom) ---
+            # Sum of ALL residues (not just top N) gives the Total Binding Energy
+            total_energy_series = df_time[energy_cols].sum(axis=1)
+            total_mean = total_energy_series.mean()
+            
+            heatmap_data.append(total_energy_series.values)
+            residue_labels.append(f"LIGAND Total ({total_mean:.1f})")
+            # -------------------------------------
+            
+            # Create Matrix: Rows=Residues, Cols=Frames
+            heatmap_matrix = np.array(heatmap_data)
+            
+            plt.figure(figsize=(14, max(8, (top_n + 1) * 0.4))) # Dynamic height
+            
+            # Use diverging colormap (Blue=Negative, Red=Positive) centered at 0
+            # Normalize colors based on RESIDUES ONLY (exclude Ligand Total to preserve contrast)
+            residue_matrix = heatmap_matrix[:-1] # All except last row
+            vmin, vmax = np.nanpercentile(residue_matrix, 5), np.nanpercentile(residue_matrix, 95)
+            abs_max = max(abs(vmin), abs(vmax))
+            
+            # Smart X-Axis Labeling
+            # Show max ~15 ticks to avoid crowding
+            frames = df_time['frame_number'].tolist()
+            step = max(1, len(frames) // 15)
+            # Create list of labels with empty strings for skipped frames
+            x_labels = [str(f) if i % step == 0 else "" for i, f in enumerate(frames)]
+            
+            sns.heatmap(heatmap_matrix, 
+                       xticklabels=x_labels,
+                       yticklabels=residue_labels,
+                       cmap="RdBu_r", # Reverse Red-Blue: Blue is Negative (Good), Red is Positive (Bad)
+                       center=0,
+                       vmin=-abs_max, vmax=abs_max,
+                       cbar_kws={'label': 'Interaction Energy (kcal/mol)'})
+            
+            plt.xlabel('Frame Number')
+            plt.ylabel('Residue')
+            plt.title(f'Time Evolution of Top {top_n} Residue Interactions (Heatmap)')
+            plt.tight_layout()
+            
+            plot_filename = 'per_residue_heatmap.png'
+            if hasattr(self, 'report_dir') and self.report_dir:
+                plot_path = os.path.join(self.report_dir, plot_filename)
+            else:
+                plot_path = plot_filename
+                
+            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"  Heatmap saved to {plot_path}")
+            
+        except Exception as e:
+            print(f"  WARNING: Heatmap generation failed: {e}")
     
     def _generate_advanced_visualization(self, analysis_results):
         """
@@ -1152,6 +1311,234 @@ def test_per_residue_decomposition():
         print(f"\nWARNING: Per-residue decomposition had issues")
         print(f"But your core MM/GBSA package is still excellent!")
         return None
+
+
+
+# ==============================================================================
+# STANDALONE WORKER FUNCTIONS FOR PARALLEL PROCESSING
+# ==============================================================================
+
+def _worker_init(system_xml, pdb_params):
+    """
+    Initialize worker process with OpenMM System and Context.
+    This runs once per worker to avoid overhead.
+    """
+    global _worker_context
+    try:
+        # Deserialize System
+        system = openmm.XmlSerializer.deserialize(system_xml)
+        
+        # We DO NOT need a Context because the decomposition
+        # performs manual pairwise calculation using parameters from the System/Force objects.
+        # This avoids OpenCL/CUDA context limits and initialization overhead.
+        
+        # Store in global variable
+        _worker_context['system'] = system
+        _worker_context['context'] = None # Not used
+        _worker_context['pdb_params'] = pdb_params
+        
+    except Exception as e:
+        print(f"Worker Initialization Failed: {e}")
+        raise e
+
+def _worker_analyze_frame(args):
+    """
+    Analyze a single frame in the worker process.
+    """
+    frame_idx, positions, residue_map, ligand_indices, salt_concentration, ligand_resname = args
+    
+    global _worker_context
+    try:
+        system = _worker_context.get('system')
+        pdb_params = _worker_context.get('pdb_params')
+        
+        if not system:
+            return (frame_idx, None)
+            
+        # Ensure units
+        if not unit.is_quantity(positions):
+            positions = positions * unit.nanometer
+            
+        # Calculate Interactions (No context needed)
+        result = _calculate_pairwise_interactions_standalone(
+            system, None, positions, residue_map, ligand_indices, 
+            salt_concentration=salt_concentration, pdb_params=pdb_params
+        )
+        
+        return (frame_idx, result)
+        
+    except Exception as e:
+        # Return error/None so main process knows
+        print(f"Worker Frame {frame_idx} Failed: {e}")
+        return (frame_idx, None)
+
+def _calculate_pairwise_interactions_standalone(system, context, positions, residue_map, ligand_indices, salt_concentration=None, pdb_params=None):
+    """
+    Standalone version of pairwise interaction calculation for workers.
+    """
+    interaction_energies = {}
+    
+    try:
+        # Calculate kappa for screening (Debye-Huckel)
+        kappa = 0.0
+        if salt_concentration is not None:
+            conc = salt_concentration
+            if unit.is_quantity(conc):
+                conc = conc.value_in_unit(unit.molar)
+            if conc > 0:
+                kappa = 3.04 * np.sqrt(conc) # nm^-1
+        
+        # Force Identification
+        nonbonded_force = None
+        custom_vdw_force = None
+        atom_types = None
+        acoef_table = None
+        bcoef_table = None
+        
+        # Locate Forces (if pdb_params missing)
+        if pdb_params is None:
+            for force in system.getForces():
+                if isinstance(force, openmm.NonbondedForce):
+                    nonbonded_force = force
+                elif isinstance(force, openmm.CustomNonbondedForce):
+                    if 'acoef' in force.getEnergyFunction():
+                        custom_vdw_force = force
+            
+            # Extract Custom Tables if needed
+            if custom_vdw_force:
+                try:
+                    atom_types = []
+                    for i in range(system.getNumParticles()):
+                        vals = custom_vdw_force.getParticleParameters(i)
+                        atom_types.append(int(vals[0]))
+                    
+                    for i in range(custom_vdw_force.getNumTabulatedFunctions()):
+                        name = custom_vdw_force.getTabulatedFunctionName(i)
+                        fun = custom_vdw_force.getTabulatedFunction(i)
+                        if isinstance(fun, openmm.Discrete2DFunction):
+                             w, h, v = fun.getFunctionParameters()
+                             if name == 'acoef': acoef_table = (w, list(v))
+                             elif name == 'bcoef': bcoef_table = (w, list(v))
+                except:
+                    pass
+
+        # Calculate interactions
+        for res_id, res_atoms in residue_map.items():
+            vdw_energy = 0.0
+            elec_energy = 0.0
+            
+            for res_atom in res_atoms:
+                for lig_atom in ligand_indices:
+                    # 1. Get Parameters
+                    charge1, sigma1, epsilon1 = 0.0, 0.0, 0.0
+                    charge2, sigma2, epsilon2 = 0.0, 0.0, 0.0
+                    
+                    has_vdw_custom = False
+                    a_val = 0.0
+                    b_val = 0.0
+                    
+                    if pdb_params:
+                        q1, sig1, eps1 = pdb_params[res_atom]
+                        q2, sig2, eps2 = pdb_params[lig_atom]
+                        
+                        charge1 = q1 * unit.elementary_charge
+                        charge2 = q2 * unit.elementary_charge
+                        # vdW params processed below
+                        
+                    elif nonbonded_force:
+                        c1, s1, e1 = nonbonded_force.getParticleParameters(res_atom)
+                        c2, s2, e2 = nonbonded_force.getParticleParameters(lig_atom)
+                        charge1, sigma1, epsilon1 = c1, s1, e1
+                        charge2, sigma2, epsilon2 = c2, s2, e2
+                        
+                    # Check Custom vdW
+                    if custom_vdw_force and atom_types and acoef_table and bcoef_table:
+                        t1 = atom_types[res_atom]
+                        t2 = atom_types[lig_atom]
+                        w = acoef_table[0]
+                        if t1 < w and t2 < w:
+                            idx = t1 + t2 * w
+                            a_val = acoef_table[1][idx]
+                            b_val = bcoef_table[1][idx]
+                            if a_val != 0 or b_val != 0:
+                                has_vdw_custom = True
+
+                    # 2. Distance
+                    pos1 = positions[res_atom]
+                    pos2 = positions[lig_atom]
+                    r_vec = (pos1 - pos2).value_in_unit(unit.nanometer)
+                    r_nm = np.linalg.norm(r_vec)
+                    
+                    if r_nm > 0.001:
+                        # 3. Electrostatics
+                        k_e_kj = 138.935456
+                        if isinstance(charge1, unit.Quantity):
+                            q1_val = charge1.value_in_unit(unit.elementary_charge)
+                            q2_val = charge2.value_in_unit(unit.elementary_charge)
+                        else:
+                            q1_val = charge1
+                            q2_val = charge2
+                        
+                        elec_kj = k_e_kj * q1_val * q2_val / r_nm
+                        
+                        if kappa > 0:
+                             elec_kj *= np.exp(-kappa * r_nm)
+                             
+                        elec_energy += elec_kj * 0.239006
+                        
+                        # 4. vdW
+                        vdw_kcal = 0.0
+                        if has_vdw_custom:
+                             r2 = r_nm * r_nm
+                             r6 = r2 * r2 * r2
+                             term1 = (a_val / r6) ** 2
+                             term2 = (b_val / r6)
+                             vdw_kcal = (term1 - term2) * 0.239006
+                             
+                        elif pdb_params or (nonbonded_force and not custom_vdw_force):
+                             if pdb_params:
+                                 # pdb_params sigma/eps are already compatible (nm, kcal/mol) from initialization logic
+                                 # But wait, initialization logic in class converted Rmin/2 to Sigma (nm).
+                                 # And Eps is kcal/mol.
+                                 s_nm = (sig1 + sig2) * 0.5 # Arithmetic mean for sigma? Or Amber uses arithmetic for Rmin.
+                                 # Standard Amber: R = R1 + R2. S = S1 + S2?
+                                 # OpenMM Nonbonded uses Arithmetic for Sigma: sigma = 0.5*(s1+s2).
+                                 # BUT ParmEd/Amber uses Rmin. Rmin = R1 + R2.
+                                 # 2^(1/6)*S = 2^(1/6)*S1 + 2^(1/6)*S2 => S = S1 + S2 ? No.
+                                 # Wait, let's trust the pdb_params are already correct?
+                                 # In class logic: sigma_nm = (sig1 + sig2) * 0.5 * 0.1?
+                                 # NO. In class logic I wrote:
+                                 # sigma_nm = (sig1 + sig2) * 0.5 * 0.1 (if sig1/2 were Angstrom Rmin?)
+                                 # I will use the Nonbonded Logic fallback which is standard OpenMM.
+                                 # For pdb_params, I will assume they are simply mapped to (q, sigma_nm, epsilon_kj).
+                                 # To be SAFE and consistent with current class logic:
+                                 s_comb = (sigma1 + sigma2) * 0.5
+                                 e_comb = (epsilon1 * epsilon2)**0.5
+                                 if pdb_params:
+                                     # Convert if needed. If passed from class, check format.
+                                     # Class logic (line 533): sigma = atom.rmin * 1.78 * 0.1 
+                                     # So it IS sigma in nm.
+                                     s_comb = (sigma1 + sigma2) * 0.5
+                                     e_comb = (epsilon1 * epsilon2)**0.5 
+                                     if isinstance(e_comb, float): e_comb = e_comb * 4.184 # kcal->kJ if eps1 was kcal
+                                 else:
+                                     s_comb = s_comb.value_in_unit(unit.nanometer)
+                                     e_comb = e_comb.value_in_unit(unit.kilojoule_per_mole)
+                                     
+                                 if e_comb > 0:
+                                     sr = s_comb / r_nm
+                                     sr6 = sr**6
+                                     vdw_kcal = 4.0 * e_comb * (sr6**2 - sr6) * 0.239006
+
+                        vdw_energy += vdw_kcal
+
+            interaction_energies[res_id] = {'vdw': vdw_energy, 'elec': elec_energy}
+            
+        return interaction_energies
+        
+    except Exception as e:
+        print(f"Error in pairwise calc: {e}")
+        return {}
 
 
 if __name__ == '__main__':

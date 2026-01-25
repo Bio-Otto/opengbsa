@@ -21,7 +21,9 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 from .core import GBSACalculator
 from .entropy import run_ultra_robust_nma
 from .decomposition import PerResidueDecomposition
+from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
+from .reporting import HTMLReportGenerator
 
 # Initialize global logger
 log = ToolLogger()
@@ -48,7 +50,9 @@ class MMGBSARunner:
         else:
             self.config_file = None
             self.config = config_file
+        log.info(f"MMGBSARunner Initialized (Version: Fix-Decomposition-NativeMode-v3)")
         
+        # Load analysis settings = {}
         self.results = {}
         self.output_dir = output_dir
         
@@ -236,6 +240,63 @@ class MMGBSARunner:
         input_files = self.config['input_files']
         analysis_settings = self.config['analysis_settings']
         
+        # GROMACS SMART DETECTION (Swap PDB for TOP if available)
+        complex_pdb = input_files.get('complex_pdb')
+        if complex_pdb and str(complex_pdb).endswith('.pdb'):
+            from pathlib import Path
+            pdb_path = Path(complex_pdb)
+            # Check for .top with same basename
+            candidate_top = pdb_path.with_suffix('.top')
+            if candidate_top.exists():
+                log.warning(f"Found GROMACS topology {candidate_top.name} matching input PDB.")
+                log.warning("Switching input to .top file to enable Native GROMACS Mode.")
+                complex_pdb = str(candidate_top)
+                input_files['complex_pdb'] = complex_pdb
+                # Also ensure we don't have conflicting ligand_mol if we are going native
+                # Native mode handles ligands via topology
+        
+        # GROMACS AUTO-CONVERSION CHECK
+        if complex_pdb and str(complex_pdb).endswith('.top'):
+            log.info("Detected GROMACS topology (.top). Attempting auto-conversion to Amber format...")
+            try:
+                from .conversion import GromacsPreprocessor
+                from pathlib import Path
+                
+                top_path = Path(complex_pdb)
+                # Infer coordinate file (.gro)
+                gro_files = list(top_path.parent.glob("*.gro"))
+                coord_file = None
+                
+                # Logic to find best matching .gro
+                if gro_files:
+                     for g in gro_files:
+                         if g.stem == top_path.stem:
+                             coord_file = g
+                             break
+                     if not coord_file:
+                         coord_file = gro_files[0]
+                
+                if coord_file:
+                    log.info(f"Found GROMACS coordinate file: {coord_file}")
+                    conversion_results = GromacsPreprocessor.convert_to_amber(top_path, coord_file)
+                    
+                    # UPDATE INPUT FILES WITH CONVERTED TOPOLOGIES
+                    log.success("GROMACS conversion successful. Updating input configuration.")
+                    input_files['complex_pdb'] = conversion_results['topology']       # dry complex
+                    input_files['receptor_topology'] = conversion_results['receptor_topology']
+                    input_files['ligand_topology'] = conversion_results['ligand_topology']
+                    # Only update solvated topology if it wasn't valid before or to ensure consistency
+                    # But convert_to_amber returns a 'solvated' which matches the dry one.
+                    # If user provided a specific solvated_topology, maybe keep it?
+                    # But for consistency with the new prmtops, using the generated one is safer.
+                    input_files['solvated_topology'] = conversion_results['solvated_topology']
+                    
+                else:
+                    log.warning("Could not find .gro file for GROMACS conversion. Proceeding without conversion (may fail).")
+            except Exception as e:
+                log.error(f"GROMACS auto-conversion failed: {e}")
+                # We continue, likely to fail later, but error log is imperative.
+        
         # Get frame selection parameters for reporting
         frame_params = {
             'max_frames': analysis_settings.get('max_frames', 50),
@@ -255,7 +316,11 @@ class MMGBSARunner:
             qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
             output_dir=output_dir,
             ligand_selection=analysis_settings.get('ligand_selection'),
-            receptor_selection=analysis_settings.get('receptor_selection')
+            receptor_selection=analysis_settings.get('receptor_selection'),
+            receptor_topology=input_files.get('receptor_topology'),
+            ligand_topology=input_files.get('ligand_topology'),
+            solvated_topology=input_files.get('solvated_topology'),
+            print_interval=analysis_settings.get('print_interval', 10)
         )
         
         if not mmgbsa_results:
@@ -295,7 +360,8 @@ class MMGBSARunner:
                         qha_analyze_complex=False,
                         output_dir=interface_dir,
                         ligand_selection=unit_b,
-                        receptor_selection=unit_a
+                        receptor_selection=unit_a,
+                        print_interval=analysis_settings.get('print_interval', 10)
                     )
                     
                     if interface_results:
@@ -451,10 +517,15 @@ class MMGBSARunner:
     def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None):
         """Run per-residue energy decomposition"""
         try:
+            # Enable Parallel Processing
+            # Get n_jobs from advanced settings, default to -1 (All Cores) for maximum performance
+            n_jobs = self.config.get('advanced_settings', {}).get('n_jobs', -1)
+            
             decomp_analyzer = PerResidueDecomposition(
                 calculator, 
                 temperature=analysis_settings.get('temperature', 300),
-                output_dir=output_dir
+                output_dir=output_dir,
+                n_jobs=n_jobs
             )
             
             # Extract frame parameters
@@ -468,10 +539,10 @@ class MMGBSARunner:
                 }
             
             decomp_results = decomp_analyzer.run_per_residue_analysis(
-                ligand_mol=input_files['ligand_mol'],
+                ligand_mol=input_files.get('ligand_mol'),
                 complex_pdb=input_files['complex_pdb'],
                 xtc_file=input_files['trajectory'],
-                ligand_pdb=input_files['ligand_pdb'],
+                ligand_pdb=input_files.get('ligand_pdb'),
                 max_frames=analysis_settings.get('max_frames', 50),
                 decomp_frames=analysis_settings.get('decomp_frames', 10),
                 frame_start=frame_params.get('frame_start'),
@@ -479,8 +550,33 @@ class MMGBSARunner:
                 frame_stride=frame_params.get('frame_stride'),
                 frame_selection=frame_params.get('frame_selection', 'sequential'),
                 random_seed=frame_params.get('random_seed', 42),
-                output_dir=output_dir
+                solvated_topology=input_files.get('solvated_topology'),
+                receptor_topology=input_files.get('receptor_topology'),
+                ligand_topology=input_files.get('ligand_topology'),
+                ligand_resname=self.config['input'].get('ligand_resname'),
+                output_dir=output_dir,
+                plot_top_residues=analysis_settings.get('plot_top_residues', 10)
             )
+            
+            # Generate Interactive HTML Report
+            if decomp_results and hasattr(decomp_analyzer, 'frame_data'):
+                try:
+                    # Select best PDB for visualization
+                    # Prioritize the temporary PDB extracted from trajectory if available
+                    viz_pdb = input_files.get('complex_pdb')
+                    temp_pdb = output_dir / "temp_from_traj.pdb"
+                    if temp_pdb.exists():
+                        viz_pdb = str(temp_pdb)
+                    
+                    html_gen = HTMLReportGenerator(output_dir)
+                    html_gen.generate_report(
+                        analysis_results=decomp_results,
+                        frame_data=decomp_analyzer.frame_data,
+                        complex_pdb_path=viz_pdb,
+                        ligand_resname=input_files.get('ligand_resname') or self.config['input'].get('ligand_resname')
+                    )
+                except Exception as e:
+                    log.warning(f"Interactive report generation failed: {e}")
             
             return decomp_results
             

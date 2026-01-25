@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+import mmgbsa; print(f'DEBUG: mmgbsa loaded from {mmgbsa.__file__}'); #!/usr/bin/env python3
 """
 MM/GBSA CLI - Simple command line interface
 """
