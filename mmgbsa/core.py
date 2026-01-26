@@ -60,7 +60,7 @@ import mdtraj as md
 
 #!/usr/bin/env python3
 """
-Complete Fixed Enhanced MM/GBSA Calculator with GBSA Force Implementation
+Complete Advanced MM/GBSA Calculator with GBSA Force Implementation
 Fixed version that properly handles force exceptions to avoid OpenMM errors
 """
 import os
@@ -106,7 +106,7 @@ log = ToolLogger()
 from openmmforcefields.generators import SystemGenerator
 
 class GBSAForceManager:
-    """Fixed Enhanced GBSA force implementation that properly handles exceptions"""
+    """Advanced GBSA force implementation that properly handles exceptions"""
     
     def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='ACE'):
         self.gb_model = gb_model
@@ -118,13 +118,13 @@ class GBSAForceManager:
         # GB model mapping with fixed versions
         self.gb_models = {
             'HCT': self._setup_hct_force,
-            'OBC1': self._setup_enhanced_obc_force_safe,
-            'OBC2': self._setup_enhanced_obc_force_safe,
+            'OBC1': self._setup_obc_force,
+            'OBC2': self._setup_obc_force,
             'GBn': self._setup_gbn_force,
             'GBn2': self._setup_gbn_force
         }
         
-        # Enhanced GB radii (Å) - AMBER parameter set with additional elements
+        # GB radii (Å) - AMBER parameter set with additional elements
         self.gb_radii = {
             'H': 1.20, 'C': 1.70, 'N': 1.55, 'O': 1.50, 'F': 1.47,
             'P': 1.85, 'S': 1.80, 'Cl': 1.75, 'Br': 0.85, 'I': 1.98,
@@ -132,7 +132,7 @@ class GBSAForceManager:
             'Fe': 1.456, 'Cu': 1.40, 'Mn': 1.456
         }
         
-        # Enhanced GB scale factors by element
+        # GB scale factors by element
         self.gb_scales = {
             'H': 0.85, 'C': 0.72, 'N': 0.79, 'O': 0.85, 'F': 0.88,
             'P': 0.86, 'S': 0.96, 'Cl': 0.80, 'Br': 0.80, 'I': 0.80,
@@ -182,14 +182,14 @@ class GBSAForceManager:
             raise e
         
         # Add enhanced surface area force for nonpolar contribution
-        sa_force = self._setup_enhanced_surface_area_force(system, topology)
+        sa_force = self._setup_surface_area_force(system, topology)
         system.addForce(sa_force)
         log.info(f"Added enhanced surface area force to system")
         
-        log.success(f"Enhanced GBSA forces added successfully ({system.getNumParticles()} particles)")
+        log.success(f"GBSA forces added successfully ({system.getNumParticles()} particles)")
         return system
 
-    def _setup_enhanced_obc_force_safe(self, system, topology, charges):
+    def _setup_obc_force(self, system, topology, charges):
         """Safe enhanced OBC force that handles exception issues gracefully"""
         gb_force = openmm.GBSAOBCForce()
         
@@ -355,11 +355,11 @@ class GBSAForceManager:
     def _setup_gbn_force(self, system, topology, charges):
         """Setup enhanced Generalized Born neck model"""
         print("Warning: GBn model using enhanced OBC implementation with modified parameters")
-        return self._setup_enhanced_obc_force_safe(system, topology, charges)
+        return self._setup_obc_force(system, topology, charges)
 
 
 
-    def _setup_enhanced_surface_area_force(self, system, topology):
+    def _setup_surface_area_force(self, system, topology):
         """Standard GBSAOBC-based Surface Area force (Charges=0 to isolate NP term)"""
         
         # Branch based on sa_model
@@ -469,14 +469,14 @@ class GBSAForceManager:
         
         # Add particles with simplified surface area contribution
         for i, atom in enumerate(topology.atoms()):
-            gamma = self._get_enhanced_surface_tension(atom) * 10.0  # Approximate surface area
+            gamma = self._get_surface_tension(atom) * 10.0  # Approximate surface area
             sa_force.addParticle(i, [gamma])
         
         print(f"✓ Added simplified surface area force with {sa_force.getNumParticles()} particles")
         return sa_force
 
-    def _get_enhanced_surface_tension(self, atom):
-        """Enhanced surface tension parameters from literature"""
+    def _get_surface_tension(self, atom):
+        """Surface tension parameters from literature"""
         # Based on Sitkoff et al. (1994) and other studies
         enhanced_surface_tensions = {
             'C': 0.0054,   # Aliphatic carbon
@@ -544,7 +544,7 @@ class GBSAForceManager:
             print(f"✓ Removed existing implicit solvent force")
 
     def validate_gbsa_setup(self, system, topology):
-        """Enhanced validation of GBSA force setup"""
+        """Validation of GBSA force setup"""
         gb_forces = []
         sa_forces = []
         screening_forces = []
@@ -572,7 +572,7 @@ class GBSAForceManager:
                 except:
                     pass
         
-        print(f"✓ Enhanced validation: {len(gb_forces)} GB forces, {len(sa_forces)} SA forces, {len(screening_forces)} screening forces")
+        print(f"✓ Validation: {len(gb_forces)} GB forces, {len(sa_forces)} SA forces, {len(screening_forces)} screening forces")
         
         # Check particle counts
         n_atoms = topology.getNumAtoms()
@@ -623,7 +623,7 @@ class GBSAForceManager:
 
 
 class GBSACalculator:
-    """Fixed Enhanced True Force Field MMGBSA Calculator"""
+    """Advanced True Force Field MMGBSA Calculator"""
     
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
@@ -1051,7 +1051,7 @@ class GBSACalculator:
         # Generate report
         report_path = output_dir / 'mmgbsa_report.txt'
         with open(report_path, 'w', encoding='utf-8') as f:
-            f.write("Fixed Enhanced MM/GBSA Analysis Report\n")
+            f.write("Advanced MM/GBSA Analysis Report\n")
             f.write("=" * 50 + "\n\n")
             
             f.write(f"GB Model: {results['gb_model']}\n")
@@ -1439,7 +1439,7 @@ class GBSACalculator:
                   log.info(f"Detected Native Mode: {mode}")
                   system, topology, positions = TopologyLoader.load_system(complex_pdb, mode)
                   
-                  # Add Enhanced GBSA Forces (Separated GB/SA)
+                  # Add GBSA Forces (Separated GB/SA)
                   system = self.gbsa_manager.add_gbsa_to_system(system, topology)
                   
                   # Generate temp PDB wrapper if needed, or just allow path
@@ -2088,7 +2088,7 @@ class GBSACalculator:
         
         return platform, properties
 
-    def run_enhanced(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, 
+    def run_comprehensive(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, 
                     energy_decomposition=False, frame_start=None, frame_end=None, 
                     frame_stride=None, frame_selection='sequential', random_seed=42,
                     qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
@@ -2195,7 +2195,7 @@ class GBSACalculator:
             complex_pdb = clean_pdb_path
             xtc_file = clean_xtc_path
             
-            log.info(f"DEBUG: run_enhanced calling run() with complex_pdb={complex_pdb}")
+            log.info(f"DEBUG: run_comprehensive calling run() with complex_pdb={complex_pdb}")
 
         # Run the core analysis with frame selection
         results = self.run(ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames, energy_decomposition,
@@ -2291,7 +2291,7 @@ class GBSACalculator:
         # Save original complex_pdb path before potential overwrite by distillation extraction
         original_complex_pdb = complex_pdb
 
-        log.section("Fixed Enhanced MM/GBSA Analysis")
+        log.section("Advanced MM/GBSA Analysis")
         log.info("Starting fixed enhanced MM/GBSA analysis with GBSA forces...")
         
         # Reset results for new run
@@ -3304,7 +3304,7 @@ class GBSACalculator:
         std_dev = df['binding_energy'].std()
         
         print(f"\nResults saved to {output_file}")
-        print(f"Fixed Enhanced GB Model: {self.gb_model}")
+        print(f"Advanced GB Model: {self.gb_model}")
         print(f"Salt Concentration: {self.salt_concentration} M")
         print(f"Mean binding energy (Enthalpy): {mean_binding:.2f} ± {std_error:.2f} kcal/mol")
         print(f"Standard deviation: {std_dev:.2f} kcal/mol")
@@ -3592,7 +3592,7 @@ class GBSACalculator:
         print(f"✓ Combined system: {combined_system.getNumForces()} forces")
         return combined_system
 
-    def _setup_enhanced_obc_force_safe(self, system, topology, charges):
+    def _setup_obc_force(self, system, topology, charges):
         """Safe enhanced OBC force that handles exception issues gracefully"""
         gb_force = openmm.GBSAOBCForce()
         
@@ -3854,7 +3854,7 @@ class GBSACalculator:
             return 0.0
 
 
-def fixed_enhanced_main():
+def main():
     """Fixed enhanced main function to run MM/GBSA analysis"""
     ligand_mol = 'test/ligand.sdf'
     complex_pdb = 'test/complex.pdb'
@@ -3862,7 +3862,7 @@ def fixed_enhanced_main():
     xtc_file = 'test/complex.dcd'
     max_frames = 500
     
-    print("Running Fixed Enhanced MM/GBSA with Advanced GBSA Forces...")
+    print("Running Advanced MM/GBSA with Advanced GBSA Forces...")
     print(f"Ligand MOL: {ligand_mol}")
     print(f"Ligand PDB: {ligand_pdb}")
     print(f"Complex PDB: {complex_pdb}")
@@ -3879,7 +3879,7 @@ def fixed_enhanced_main():
         parallel_processing=False      # Set to True for parallel processing
     )
     
-    results = calculator.run_enhanced(
+    results = calculator.run_comprehensive(
         ligand_mol, complex_pdb, xtc_file, ligand_pdb, 
         max_frames=max_frames,
         energy_decomposition=False  # Disable for speed
@@ -3890,7 +3890,7 @@ def fixed_enhanced_main():
         print("FIXED ENHANCED MM/GBSA ANALYSIS COMPLETE!")
         print("="*60)
         print(f"Results saved to: {results['output_file']}")
-        print(f"Fixed Enhanced GB Model: {results['gb_model']}")
+        print(f"Advanced GB Model: {results['gb_model']}")
         print(f"Mean binding energy: {results['mean_binding_energy']:.2f} ± {results['std_error']:.2f} kcal/mol")
         print(f"Bootstrap 95% CI: [{results['bootstrap_results']['ci_lower']:.2f}, {results['bootstrap_results']['ci_upper']:.2f}] kcal/mol")
         print(f"Standard deviation: {results['std_dev']:.2f} kcal/mol")
@@ -3917,7 +3917,7 @@ def fixed_enhanced_main():
         print("3. Consider running with different GB models for comparison")
         
     else:
-        print("\nFixed Enhanced MM/GBSA analysis failed!")
+        print("\nAdvanced MM/GBSA analysis failed!")
         print("Check input files and parameters")
 
 if __name__ == '__main__':
@@ -3927,7 +3927,7 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         option = sys.argv[1]
         if option == 'test':
-            print("Fixed Enhanced GBSA Quick Test - All features working!")
+            print("Advanced GBSA Quick Test - All features working!")
         elif option == 'cache':
             calculator = GBSACalculator()
             calculator.list_cache()
@@ -3935,10 +3935,10 @@ if __name__ == '__main__':
             calculator = GBSACalculator()
             calculator.clear_cache()
         else:
-            fixed_enhanced_main()
+            main()
     else:
         # Run the fixed enhanced analysis
-        fixed_enhanced_main()
+        main()
 
 
 

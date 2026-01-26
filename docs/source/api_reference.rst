@@ -16,7 +16,7 @@ Core Analysis Engine
    :param temperature: Simulation temperature (default: 300 K).
    :param gb_model: Generalized Born model ('OBC2', 'GBn', 'GBn2').
 
-   .. method:: run_enhanced(self, trajectory_file, frame_indices=None)
+   .. method:: run_comprehensive(self, trajectory_file, frame_indices=None)
 
       Executes the MM/GBSA energy analysis on the provided trajectory.
 
