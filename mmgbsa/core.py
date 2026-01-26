@@ -460,42 +460,9 @@ class GBSAForceManager:
 
 
 
-    def _setup_surface_area_force(self, system, topology):
-        """Setup simplified surface area contribution"""
-        
-        # Simple approximation: constant surface tension per atom
-        sa_force = openmm.CustomExternalForce("gamma")
-        sa_force.addPerParticleParameter("gamma")
-        
-        # Add particles with simplified surface area contribution
-        for i, atom in enumerate(topology.atoms()):
-            gamma = self._get_surface_tension(atom) * 10.0  # Approximate surface area
-            sa_force.addParticle(i, [gamma])
-        
-        print(f"✓ Added simplified surface area force with {sa_force.getNumParticles()} particles")
-        return sa_force
 
-    def _get_surface_tension(self, atom):
-        """Surface tension parameters from literature"""
-        # Based on Sitkoff et al. (1994) and other studies
-        enhanced_surface_tensions = {
-            'C': 0.0054,   # Aliphatic carbon
-            'CA': 0.0054,  # Aromatic carbon  
-            'N': -0.0012,  # Nitrogen (polar, favorable)
-            'O': -0.0012,  # Oxygen (polar, favorable)
-            'S': 0.0049,   # Sulfur
-            'P': -0.0012,  # Phosphorus
-            'H': 0.0,      # Hydrogen (usually not included in SA)
-            'F': -0.0012,  # Fluorine
-            'Cl': 0.0054,  # Chlorine
-            'Br': 0.0054,  # Bromine
-            'I': 0.0054    # Iodine
-        }
-        
-        # Try to get more specific atom type
-        atom_type = getattr(atom, 'type', atom.element.symbol)
-        return enhanced_surface_tensions.get(atom_type, 
-               enhanced_surface_tensions.get(atom.element.symbol, 0.0054))
+
+
 
     def _get_gb_radius(self, atom):
         """Get GB radius for atom"""
