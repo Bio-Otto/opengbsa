@@ -20,6 +20,8 @@ input:
   ligand_resname: LIG
 ```
 
+> **Note:** See [AMBER User Guide](amber_guide.md) for more details.
+
 ---
 
 ## 2. GROMACS (Automatic Conversion)

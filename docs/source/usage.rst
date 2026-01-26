@@ -61,7 +61,7 @@ Once files are ready, activate your environment and run:
     conda activate mmgbsa
 
     # 2. Run Analysis
-    python -m mmgbsa.runner config.yaml
+    mmgbsa config.yaml
 
 4. Output Interpretation
 ------------------------

@@ -13,6 +13,7 @@ This documentation provides detailed information on installation, usage, and adv
 
    installation
    gromacs_guide
+   amber_guide
    multi_engine_guide
 
 .. toctree::
