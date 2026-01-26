@@ -589,7 +589,7 @@ class GBSAForceManager:
         return energy_decomposition
 
 
-class GBSACalculator:
+class GBSACalculator(GBSAForceManager):
     """Advanced True Force Field MMGBSA Calculator"""
     
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
@@ -3559,41 +3559,6 @@ class GBSACalculator:
         print(f"✓ Combined system: {combined_system.getNumForces()} forces")
         return combined_system
 
-    def _setup_obc_force(self, system, topology, charges):
-        """Safe enhanced OBC force that handles exception issues gracefully"""
-        gb_force = openmm.GBSAOBCForce()
-        
-        # Set parameters
-        gb_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
-        gb_force.setSolventDielectric(78.5)
-        gb_force.setSoluteDielectric(1.0)
-        # FIX: Set SA energy to 0 to strictly calculate Polar Solvation (GB)
-        # We calculate NonPolar SA in a separate force
-        gb_force.setSurfaceAreaEnergy(0.0) 
-        
-        # Add particles with GB parameters
-        for i, atom in enumerate(topology.atoms()):
-            charge = charges[i]
-            radius = self._get_gb_radius(atom) * 0.1  # Convert Å to nm
-            scale = self._get_gb_scale(atom)
-            gb_force.addParticle(charge, radius, scale)
-        
-        # Try to add salt effects
-        
-        has_salt = False
-        if unit.is_quantity(self.salt_concentration):
-            if self.salt_concentration > 0 * unit.molar:
-                has_salt = True
-        elif self.salt_concentration > 0:
-            has_salt = True
-
-        if has_salt:
-            screening_force = self._add_debye_huckel_screening_safe(charges, system)
-            print(f"✓ Added {gb_force.getNumParticles()} particles to enhanced {self.gb_model} force with salt screening")
-            return gb_force, screening_force
-        
-        print(f"✓ Added {gb_force.getNumParticles()} particles to enhanced {self.gb_model} force")
-        return gb_force
 
     def _merge_obc_forces(self, pf, lf, po, lo):
         c = openmm.GBSAOBCForce()
@@ -3760,68 +3725,6 @@ class GBSACalculator:
         return c
 
 
-    def calculate_interaction_entropy(self, binding_energies, temperature=None):
-        """
-        Calculate Interaction Entropy (IE) from binding energy fluctuations.
-        Ref: Duan et al., J. Chem. Theory Comput. 2016, 12, 4611.
-        
-        Formula: -T \Delta S = kT * ln < exp(beta * \Delta E_int) >
-        
-        Parameters:
-        -----------
-        binding_energies : list or np.array
-            List of binding energies (kcal/mol) for each frame
-        temperature : float
-            Temperature in Kelvin (default: self.temperature)
-            
-        Returns:
-        --------
-        float : Entropy contribution (-T \Delta S) in kcal/mol. Positive value means penalty.
-        """
-        import numpy as np
-        
-        # Validate input (safe for lists and numpy arrays)
-        if hasattr(binding_energies, 'size'):
-            if binding_energies.size < 2:
-                print("Warning: Not enough frames for Interaction Entropy calculation")
-                return 0.0
-        elif not binding_energies or len(binding_energies) < 2:
-            print("Warning: Not enough frames for Interaction Entropy calculation")
-            return 0.0
-            
-        T = temperature if temperature is not None else self.temperature.value_in_unit(unit.kelvin)
-        R = 0.0019872041 # kcal/(mol*K)
-        beta = 1.0 / (R * T)
-        
-        energies = np.array(binding_energies).flatten()
-        mean_energy = np.mean(energies)
-        delta_energies = energies - mean_energy
-        
-        # Calculate exponential term with numerical stability check
-        # exp(beta * (E - <E>))
-        try:
-            exp_terms = np.exp(beta * delta_energies)
-            average_exp = np.mean(exp_terms)
-            
-            # Force conversion to python float
-            if hasattr(average_exp, 'item'):
-                avg_val = average_exp.item()
-            else:
-                avg_val = float(average_exp)
-
-            if avg_val <= 1e-12:
-                print(f"Warning: Average exponential is non-positive or too small ({avg_val}), returning 0 entropy.")
-                return 0.0
-            
-            entropic_penalty = (1.0/beta) * np.log(avg_val)
-            return float(entropic_penalty)
-            
-        except Exception as e:
-            print(f"Entropy math error: {e}")
-            return 0.0
-
-
-def main():
     """Fixed enhanced main function to run MM/GBSA analysis"""
     ligand_mol = 'test/ligand.sdf'
     complex_pdb = 'test/complex.pdb'
