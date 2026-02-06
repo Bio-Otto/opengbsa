@@ -87,7 +87,7 @@ class PerResidueDecomposition:
         # Step 1: Run standard MM/GBSA analysis
         log.info("Running Baseline MM/GBSA Analysis...")
         
-        mmgbsa_results = self.mmgbsa_calculator.run_enhanced(
+        mmgbsa_results = self.mmgbsa_calculator.run(
             ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames,
             solvated_topology=solvated_topology,
             receptor_topology=receptor_topology,

@@ -89,6 +89,10 @@ class MMGBSARunner:
             # Skip None/null values
             if file_path is None:
                 continue
+                
+            # Skip known non-file keys
+            if file_type in ['ligand_resname', 'receptor_resname', 'ligand_charge']:
+                continue
             
             if not Path(file_path).exists():
                 missing_files.append(f"{file_type}: {file_path}")
@@ -185,6 +189,9 @@ class MMGBSARunner:
         
         output_path.mkdir(parents=True, exist_ok=True)
         
+        # Update instance variable so it can be retrieved
+        self.output_dir = output_path
+        
         log.info(f"Output directory established: {output_path}")
         return output_path
     
@@ -193,6 +200,17 @@ class MMGBSARunner:
         analysis_settings = self.config['analysis_settings']
         forcefield_settings = self.config.get('forcefield_settings', {})
         
+        
+        # Determine cache directory
+        cache_dir = None
+        if self.output_dir:
+            cache_dir = Path(self.output_dir) / "cache"
+        else:
+            # Fallback if output_dir not yet set
+             out_settings = self.config.get('output_settings', {})
+             base_out = out_settings.get('output_directory', 'mmgbsa_results')
+             cache_dir = Path(base_out) / "cache"
+
         calculator = GBSACalculator(
             temperature=analysis_settings.get('temperature', 300),
             verbose=analysis_settings.get('verbose', 1),
@@ -206,7 +224,8 @@ class MMGBSARunner:
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
             solvent_dielectric=analysis_settings.get('solvent_dielectric', 78.5),
             entropy_method=analysis_settings.get('entropy_method', 'none'),
-            decomposition_method=analysis_settings.get('decomposition_method', 'full')
+            decomposition_method=analysis_settings.get('decomposition_method', 'full'),
+            cache_dir=cache_dir
         )
         
         return calculator
@@ -306,7 +325,7 @@ class MMGBSARunner:
             'frame_selection': analysis_settings.get('frame_selection', 'sequential')
         }
         
-        mmgbsa_results = calculator.run_enhanced(
+        mmgbsa_results = calculator.run_comprehensive(
             ligand_mol=input_files.get('ligand_mol'),
             complex_pdb=input_files['complex_pdb'],
             xtc_file=input_files['trajectory'],
@@ -350,7 +369,7 @@ class MMGBSARunner:
                     log.info(f"  • Receptor Mask: {unit_a}")
                     log.info(f"  • Ligand Mask:   {unit_b} (Treated as ligand for calculation)")
                     
-                    interface_results = calculator.run_enhanced(
+                    interface_results = calculator.run_comprehensive(
                         ligand_mol=None, # Force Protein-Protein mode
                         complex_pdb=input_files['complex_pdb'],
                         xtc_file=input_files['trajectory'],
@@ -389,7 +408,11 @@ class MMGBSARunner:
                 log.success("Entropy analysis completed")
         
         # Step 6: Run per-residue decomposition (if enabled)
-        if analysis_settings.get('run_per_residue_decomposition', False) or analysis_settings.get('per_residue_decomposition', False):
+        # Step 6: Run per-residue decomposition (if enabled)
+        advanced_settings = self.config.get('advanced_settings', {})
+        if (analysis_settings.get('run_per_residue_decomposition', False) or 
+            analysis_settings.get('per_residue_decomposition', False) or
+            advanced_settings.get('run_per_residue_decomposition', False)):
             log.section("STEP 6: Per-Residue Decomposition")
             
             # Get frame parameters for per-residue decomposition
@@ -553,7 +576,7 @@ class MMGBSARunner:
                 solvated_topology=input_files.get('solvated_topology'),
                 receptor_topology=input_files.get('receptor_topology'),
                 ligand_topology=input_files.get('ligand_topology'),
-                ligand_resname=self.config['input'].get('ligand_resname'),
+                ligand_resname=self.config.get('input_files', {}).get('ligand_resname'),
                 output_dir=output_dir,
                 plot_top_residues=analysis_settings.get('plot_top_residues', 10)
             )
@@ -568,12 +591,19 @@ class MMGBSARunner:
                     if temp_pdb.exists():
                         viz_pdb = str(temp_pdb)
                     
+                    pandamap_path = output_dir / "structure_3d.html"
+                    if not pandamap_path.exists():
+                         pandamap_path = str(Path(viz_pdb).resolve()) if viz_pdb else None # Fallback to PDB if PandaMap missing
+                    else:
+                         pandamap_path = str(pandamap_path.resolve())
+
                     html_gen = HTMLReportGenerator(output_dir)
                     html_gen.generate_report(
                         analysis_results=decomp_results,
                         frame_data=decomp_analyzer.frame_data,
-                        complex_pdb_path=viz_pdb,
-                        ligand_resname=input_files.get('ligand_resname') or self.config['input'].get('ligand_resname')
+                        global_results=decomp_results.get('mmgbsa_results'),
+                        complex_pdb_path=pandamap_path,
+                        ligand_resname=input_files.get('ligand_resname') or self.config.get('input_files', {}).get('ligand_resname')
                     )
                 except Exception as e:
                     log.warning(f"Interactive report generation failed: {e}")
@@ -581,7 +611,9 @@ class MMGBSARunner:
             return decomp_results
             
         except Exception as e:
+            import traceback
             log.error(f"Per-residue decomposition failed: {e}")
+            traceback.print_exc()
             return None
     
     def _generate_final_report(self, output_dir):

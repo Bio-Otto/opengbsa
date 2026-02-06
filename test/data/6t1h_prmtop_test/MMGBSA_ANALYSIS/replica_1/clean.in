@@ -1,0 +1,6 @@
+parm replica_1/results/prod/md_complex_clean_nowat.pdb
+trajin replica_1/results/prod/md_complex_clean_nowat.xtc
+strip :SOL,WAT,TIP3,HOH,TP3,NA,CL,K,MG,ZN,CA,Na+,Cl-,Mg+,Zn2+,K+,Ca2+,SOD,CLA,CAL,ZINC
+trajout /media/emre/Expansion/VS2_Monomer_MD/VS2/ZINC000004097427/6T1H/MMGBSA_ANALYSIS/replica_1/clean_traj.nc
+run
+quit

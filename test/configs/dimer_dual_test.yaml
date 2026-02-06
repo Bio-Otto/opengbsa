@@ -12,10 +12,10 @@ analysis_settings:
     unit_a: residue 0 to 98
     unit_b: residue 99 to 197
 input_files:
-  complex_pdb: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/3if6_fixed.pdb
-  ligand_mol: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/ligand.sdf
-  ligand_pdb: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/ligand.pdb
-  trajectory: /home/bio-otto/Desktop/opengbsa/test/3if6_dimer_test/3if6.xtc
+  complex_pdb: test/data/3if6_dimer_test/3if6.pdb
+  ligand_mol: test/data/3if6_dimer_test/ligand.sdf
+  ligand_pdb: test/data/3if6_dimer_test/ligand.pdb
+  trajectory: test/data/3if6_dimer_test/3if6.xtc
 parameter_settings:
   charge_method: gasteiger
   entropy_method: none
@@ -26,4 +26,4 @@ parameter_settings:
   solvent_dielectric: 80.0
   verbose: 1
 output_settings:
-  output_directory: /home/bio-otto/Desktop/opengbsa/test/results/dimer_dual_test
+  output_directory: test/results/dimer_dual_test

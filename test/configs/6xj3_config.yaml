@@ -1,11 +1,11 @@
 input_files:
-  ligand_mol: analysis_6xj3/ligand.sdf
-  complex_pdb: analysis_6xj3/6xj3_mdtraj_clean.pdb
-  ligand_pdb: analysis_6xj3/ligand.pdb
-  trajectory: analysis_6xj3/6xj3_repaired.xtc
+  ligand_mol: test/data/6xj3_pdb_test/ligand.sdf
+  complex_pdb: test/data/6xj3_pdb_test/6xj3.pdb
+  ligand_pdb: test/data/6xj3_pdb_test/ligand.pdb
+  trajectory: test/data/6xj3_pdb_test/6xj3.xtc
 
 output_settings:
-  output_directory: mmgbsa_results/6xj3_analysis
+  output_directory: test/results/6xj3_analysis
   analysis_name: 6xj3_zinc000062237144
   save_plots: true
   save_logs: true

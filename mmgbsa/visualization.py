@@ -78,7 +78,7 @@ class AdvancedVisualization:
         self.comparison_data = {}
         
         print(f"📊 Advanced Visualization System Initialized")
-        print(f"  • ProLIF: {'✅' if self.prolif_available else '❌'}")
+        # ProLIF status removed as it is disabled
         print(f"  • RDKit: {'✅' if self.rdkit_available else '❌'}")
         print(f"  • MDTraj: {'✅' if self.mdtraj_available else '❌'}")
         print(f"  • OpenMM: {'✅' if self.openmm_available else '❌'}")

@@ -283,11 +283,12 @@ class CompleteMMGBSARunner:
             'random_seed': analysis_settings.get('random_seed', 42)
         }
         
-        mmgbsa_results = calculator.run_enhanced(
+        mmgbsa_results = calculator.run(
             ligand_mol=input_files['ligand_mol'],
             complex_pdb=input_files['complex_pdb'],
             xtc_file=input_files['trajectory'],
             ligand_pdb=input_files['ligand_pdb'],
+            output_dir=self.output_dir,
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
             **frame_params
         )

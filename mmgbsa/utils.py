@@ -219,7 +219,6 @@ def check_dependencies() -> Dict[str, bool]:
         'matplotlib': False,
         'seaborn': False,
         'yaml': False,
-        'prolif': False,
         'rdkit': False,
         'MDAnalysis': False,
         'h5py': False,
@@ -269,12 +268,7 @@ def check_dependencies() -> Dict[str, bool]:
     except ImportError:
         pass
     
-    try:
-        import prolif
-        dependencies['prolif'] = True
-    except ImportError:
-        pass
-    
+
     try:
         import rdkit
         dependencies['rdkit'] = True

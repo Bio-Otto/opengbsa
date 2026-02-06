@@ -1,11 +1,11 @@
 input_files:
-  ligand_mol: test/ligand.sdf
-  complex_pdb: test/complex.pdb
-  ligand_pdb: test/ligand.pdb
-  trajectory: test/complex.dcd
+  ligand_mol: test/data/6xj3_pdb_test/ligand.sdf
+  complex_pdb: test/data/6xj3_pdb_test/6xj3.pdb
+  ligand_pdb: test/data/6xj3_pdb_test/ligand.pdb
+  trajectory: test/data/6xj3_pdb_test/6xj3.xtc
 
 output_settings:
-  output_directory: mmgbsa_results/dcd_test
+  output_directory: test/results/dcd_test
   analysis_name: dcd_test
   save_plots: true
   save_logs: true
