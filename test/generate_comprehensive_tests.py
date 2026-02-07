@@ -106,6 +106,23 @@ combinations = [
 ]
 test_cases.extend(combinations)
 
+# 8. Add GROMACS Test Case (7khz)
+test_cases.append({
+    'name': 'test_7khz_gro',
+    'settings': {
+        'gb_model': 'OBC2',
+        'salt_concentration': 0.15,
+        'run_per_residue_decomposition': True,
+        'report_raw_energies': True
+    },
+    'input_files': {
+        'complex_pdb': '/home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/topol.top',
+        'trajectory': '/home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/md_complex_full.xtc',
+        'solvated_topology': '/home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/topol.top',
+        'ligand_resname': 'LIG'
+    }
+})
+
 
 # Generate Files
 print(f"Generating {len(test_cases)} test configurations...")
@@ -125,6 +142,10 @@ for case in test_cases:
 
     config['analysis_settings'].update(case['settings'])
     
+    # 8. Special Handling for GROMACS case (Override Input Files)
+    if 'input_files' in case:
+        config['input_files'] = case['input_files']
+
     # Write to file
     filename = f"{OUTPUT_DIR}/{case['name']}.yaml"
     with open(filename, 'w') as f:

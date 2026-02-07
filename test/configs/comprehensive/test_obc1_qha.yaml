@@ -1,0 +1,28 @@
+analysis_settings:
+  decomp_frames: 1
+  entropy_method: quasiharmonic
+  frame_selection: sequential
+  frame_stride: 1
+  gb_model: OBC1
+  max_frames: 1
+  report_raw_energies: false
+  run_entropy_analysis: true
+  run_per_residue_decomposition: false
+  sa_model: ACE
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: false
+  verbose: 1
+forcefield_settings:
+  protein_forcefield: amber
+input_files:
+  complex_pdb: test/data/6t1h_prmtop_test/complex.prmtop
+  ligand_topology: test/data/6t1h_prmtop_test/ligand.prmtop
+  receptor_topology: test/data/6t1h_prmtop_test/receptor.prmtop
+  solvated_topology: test/data/6t1h_prmtop_test/replica_1/gro/complex_solv_ions.gro
+  trajectory: test/data/6t1h_prmtop_test/md_complex_prod.xtc
+output_settings:
+  analysis_name: test_obc1_qha
+  output_directory: test/results/comprehensive/test_obc1_qha
+  save_logs: true
+  save_plots: true

@@ -261,7 +261,8 @@ class GBSAForceManager:
              gb_force.setSurfaceAreaEnergy(0.0)
              gb_force.setSoluteDielectric(self.solute_dielectric)
              gb_force.setSolventDielectric(self.solvent_dielectric)
-             log.info("Configured GBSAOBCForce: SA=0, Dielectrics set.")
+             gb_force.setForceGroup(1) # Group 1 for Standard GB
+             log.info("Configured GBSAOBCForce: SA=0, Dielectrics set, Group=1.")
              
         elif isinstance(gb_force, openmm.CustomGBForce):
              # For CustomGBForce (GBn), assume params are set by factory.
@@ -272,7 +273,8 @@ class GBSAForceManager:
                      gb_force.setGlobalParameterDefaultValue(i, self.solute_dielectric)
                  elif name == 'solventDielectric':
                      gb_force.setGlobalParameterDefaultValue(i, self.solvent_dielectric)
-             log.info("Configured CustomGBForce dielectrics.")
+             gb_force.setForceGroup(2) # Group 2 for Custom GB
+             log.info("Configured CustomGBForce dielectrics, Group=2.")
 
         # 3. Add Separate Surface Area Force
         sa_force = self._setup_surface_area_force(system, topology)
@@ -2604,7 +2606,8 @@ class GBSACalculator(GBSAForceManager):
                 # Group 3 (Screen) -> 8
                 # Group 4 (SA) -> 16
                 e_nb = complex_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                e_obc = complex_context.getState(getEnergy=True, groups=2).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+                # GB Energy (Sum of Standard GB [1] and Custom GB [2])
+                e_obc = complex_context.getState(getEnergy=True, groups={1, 2}).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 # FIX: SA is in Group 4, so mask is 16
                 e_sa = complex_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 e_screen = complex_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
