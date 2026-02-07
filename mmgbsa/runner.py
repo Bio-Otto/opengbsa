@@ -548,7 +548,8 @@ class MMGBSARunner:
                 calculator, 
                 temperature=analysis_settings.get('temperature', 300),
                 output_dir=output_dir,
-                n_jobs=n_jobs
+                n_jobs=n_jobs,
+                report_raw_energies=analysis_settings.get('report_raw_energies', False)
             )
             
             # Extract frame parameters

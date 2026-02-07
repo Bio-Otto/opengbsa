@@ -1,27 +1,27 @@
 Installation
 ============
 
-Recommended: Conda Installation
-------------------------------
+Quick Installation
+------------------
 
-OpenGBSA is best installed using conda to ensure all dependencies are handled correctly.
+OpenGBSA is distributed via Conda.
 
 .. code-block:: bash
 
-   conda create -n opengbsa python=3.10
-   conda activate opengbsa
-   conda install -c conda-forge opengbsa
+    # Create a new environment
+    conda create -n mmgbsa python=3.10 -y
+    conda activate mmgbsa
 
-.. tip::
-   Always use a fresh conda environment for OpenGBSA to avoid dependency conflicts.
+    # Install OpenGBSA and dependencies
+    conda install -c conda-forge -c omnia mdtraj openmm openff-toolkit pymol-open-source
+    pip install opengbsa
 
-Troubleshooting & Compatibility
-------------------------------
+Requirements
+------------
 
-If you encounter issues, see the :doc:`troubleshooting` page for solutions to common problems (Python, NumPy, OpenMM, CUDA, etc.).
-
-.. warning::
-   Avoid pip installation unless you are an advanced user and understand the dependency requirements.
-
-.. note::
-   For CUDA support, ensure your system CUDA version matches the OpenMM requirements. 
+- Linux or macOS
+- Python 3.9+
+- **OpenMM** (with CUDA support recommended for performance)
+- **MDTraj**
+- **OpenForceField** (for ligand parameterization)
+- **ParmEd**

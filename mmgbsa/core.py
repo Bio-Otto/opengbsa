@@ -170,21 +170,32 @@ class StructureManager:
         return receptor, ligand
 
     @staticmethod
-    def create_openmm_system(structure, implicitSolvent=app.OBC2, 
+    def create_openmm_system(structure, implicitSolvent=None, 
+                           implicitSolventSaltConc=0.0*unit.molar,
                            nonbondedMethod=app.NoCutoff, 
                            constraints=None):
         """
         Create an OpenMM System from a ParmEd Structure.
         """
-        return structure.createSystem(
-            nonbondedMethod=nonbondedMethod,
-            constraints=constraints,
-            implicitSolvent=implicitSolvent,
-            removeCMMotion=False
-        )
+        # Prepare kwargs
+        kwargs = {
+            'nonbondedMethod': nonbondedMethod,
+            'constraints': constraints,
+            'implicitSolvent': implicitSolvent,
+            'implicitSolventSaltConc': implicitSolventSaltConc
+        }
+        # Filter None to let defaults handle it or avoid errors
+        kwargs = {k: v for k, v in kwargs.items() if v is not None}
+        
+        return structure.createSystem(**kwargs)
+
 
 class GBSAForceManager:
-    """Advanced GBSA force implementation that properly handles exceptions"""
+    """
+    Advanced GBSA force implementation that refines OpenMM-generated forces.
+    Now relies on SystemGenerator/app.createSystem to create the correct physics model (OBC1/OBC2/GBn),
+    then refines it (separating SA, adding salt if needed).
+    """
     
     def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='ACE'):
         self.gb_model = gb_model
@@ -193,16 +204,18 @@ class GBSAForceManager:
         self.solvent_dielectric = solvent_dielectric
         self.sa_model = sa_model
         
-        # GB model mapping with fixed versions
-        self.gb_models = {
-            'HCT': self._setup_hct_force,
-            'OBC1': self._setup_obc_force,
-            'OBC2': self._setup_obc_force,
-            'GBn': self._setup_gbn_force,
-            'GBn2': self._setup_gbn_force
+        # Map string names to OpenMM constants
+        self.gb_model_map = {
+            'HCT': app.HCT,
+            'OBC1': app.OBC1,
+            'OBC2': app.OBC2,
+            'GBn': app.GBn,
+            'GBn2': app.GBn2
         }
         
-        # GB radii (Å) - AMBER parameter set with additional elements
+        self.current_app_model = self.gb_model_map.get(gb_model, app.OBC2)
+
+        # GB radii (Å) - AMBER parameter set (Still useful for manual SA or checks)
         self.gb_radii = {
             'H': 1.20, 'C': 1.70, 'N': 1.55, 'O': 1.50, 'F': 1.47,
             'P': 1.85, 'S': 1.80, 'Cl': 1.75, 'Br': 0.85, 'I': 1.98,
@@ -210,7 +223,6 @@ class GBSAForceManager:
             'Fe': 1.456, 'Cu': 1.40, 'Mn': 1.456
         }
         
-        # GB scale factors by element
         self.gb_scales = {
             'H': 0.85, 'C': 0.72, 'N': 0.79, 'O': 0.85, 'F': 0.88,
             'P': 0.86, 'S': 0.96, 'Cl': 0.80, 'Br': 0.80, 'I': 0.80,
@@ -218,224 +230,71 @@ class GBSAForceManager:
             'Fe': 1.0, 'Cu': 1.0, 'Mn': 1.0
         }
 
-    def add_gbsa_to_system(self, system, topology, charges=None):
-        """Add enhanced GBSA forces to an existing OpenMM system with proper exception handling"""
-        if self.gb_model not in self.gb_models:
-            raise ValueError(f"Unsupported GB model: {self.gb_model}")
-            
-        log.process(f"Adding enhanced GBSA forces with {self.gb_model} model...")
+    def refine_gbsa_forces(self, system, topology):
+        """
+        Refine GBSA forces in a system that was already created with implicit solvent.
+        1. Identifies the GB force.
+        2. Sets Surface Area energy to 0 (to separate it).
+        3. Adds the specific SA model (ACE/LCPO).
+        """
+        log.process(f"Refining GBSA forces for {self.gb_model} model...")
         
-        # Extract charges from NonbondedForce if not provided
-        if charges is None:
-            try:
-                charges = self._extract_charges_from_system(system)
-                log.info(f"Extracted {len(charges)} charges from system")
-            except Exception as e:
-                log.error(f"Error extracting charges: {e}")
-                raise e
+        # 1. Identify Existing GB Force
+        gb_force = None
+        for force in system.getForces():
+            if isinstance(force, openmm.GBSAOBCForce):
+                gb_force = force
+                break
+            elif isinstance(force, openmm.CustomGBForce):
+                gb_force = force
+                break
         
-        # Remove any existing implicit solvent forces
-        self._remove_implicit_forces(system)
+        if gb_force is None:
+            log.warning("No GB force found in system. Was it created with implicitSolvent? Attempting to add manual OBC2 fallback.")
+            # Fallback for systems created without GB
+            gb_force = self._create_fallback_obc_force(system, topology)
+            system.addForce(gb_force)
         
-        # Add GB model-specific force(s) - PASS SYSTEM FOR EXCEPTION HANDLING
-        try:
-            gb_result = self.gb_models[self.gb_model](system, topology, charges)
-            
-            if isinstance(gb_result, tuple):
-                # Some models return multiple forces (e.g., with salt screening)
-                gb_force, screening_force = gb_result
-                system.addForce(gb_force)
-                if screening_force:
-                    system.addForce(screening_force)
-                    log.info(f"Added GB force and salt screening force to system")
-                else:
-                    log.info(f"Added GB force to system")
-            else:
-                gb_force = gb_result
-                system.addForce(gb_force)
-                log.info(f"Added GB force to system")
-            
-        except Exception as e:
-            log.error(f"Error adding GB force: {e}")
-            raise e
-        
-        # Add enhanced surface area force for nonpolar contribution
+        # 2. Configure GB Force
+        if isinstance(gb_force, openmm.GBSAOBCForce):
+             # Zero out SA to separate it
+             gb_force.setSurfaceAreaEnergy(0.0)
+             gb_force.setSoluteDielectric(self.solute_dielectric)
+             gb_force.setSolventDielectric(self.solvent_dielectric)
+             log.info("Configured GBSAOBCForce: SA=0, Dielectrics set.")
+             
+        elif isinstance(gb_force, openmm.CustomGBForce):
+             # For CustomGBForce (GBn), assume params are set by factory.
+             # We might need to manually set dielectrics if global params allow.
+             for i in range(gb_force.getNumGlobalParameters()):
+                 name = gb_force.getGlobalParameterName(i)
+                 if name == 'soluteDielectric':
+                     gb_force.setGlobalParameterDefaultValue(i, self.solute_dielectric)
+                 elif name == 'solventDielectric':
+                     gb_force.setGlobalParameterDefaultValue(i, self.solvent_dielectric)
+             log.info("Configured CustomGBForce dielectrics.")
+
+        # 3. Add Separate Surface Area Force
         sa_force = self._setup_surface_area_force(system, topology)
         system.addForce(sa_force)
-        log.info(f"Added enhanced surface area force to system")
         
-        log.success(f"GBSA forces added successfully ({system.getNumParticles()} particles)")
+        log.success(f"GBSA forces refined successfully")
         return system
 
-    def _setup_obc_force(self, system, topology, charges):
-        """Safe enhanced OBC force that handles exception issues gracefully"""
+    def _create_fallback_obc_force(self, system, topology):
+        """Fallback OBC2 creation if factory failed"""
+        charges = self._extract_charges_from_system(system)
         gb_force = openmm.GBSAOBCForce()
-        
-        # Set parameters
         gb_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
-        gb_force.setSolventDielectric(self.solvent_dielectric) # Configurable (default 78.5)
-        gb_force.setSoluteDielectric(self.solute_dielectric) # Configurable (default 1.0)
-        # FIX: Set SA energy to 0 to strictly calculate Polar Solvation (GB)
-        # We calculate NonPolar SA in a separate force
+        gb_force.setSolventDielectric(self.solvent_dielectric)
+        gb_force.setSoluteDielectric(self.solute_dielectric)
         gb_force.setSurfaceAreaEnergy(0.0)
-        
-        # Add particles with GB parameters
         for i, atom in enumerate(topology.atoms()):
             charge = charges[i]
-            radius = self._get_gb_radius(atom) * 0.1  # Convert Å to nm
+            radius = self._get_gb_radius(atom) * 0.1
             scale = self._get_gb_scale(atom)
             gb_force.addParticle(charge, radius, scale)
-        
-        # Try to add salt effects
-        
-        has_salt = False
-        if unit.is_quantity(self.salt_concentration):
-            if self.salt_concentration > 0 * unit.molar:
-                has_salt = True
-        elif self.salt_concentration > 0:
-            has_salt = True
-
-        if has_salt:
-            screening_force = self._add_debye_huckel_screening_safe(charges, system)
-            log.info(f"Added {gb_force.getNumParticles()} particles to enhanced {self.gb_model} force with salt screening")
-            return gb_force, screening_force
-        
-        log.info(f"Added {gb_force.getNumParticles()} particles to enhanced {self.gb_model} force")
         return gb_force
-
-    def _add_debye_huckel_screening_safe(self, charges, system=None):
-        """Strict version that raises exceptions if salt screening fails"""
-        
-        # Calculate Debye screening length (in nm)
-        # Calculate Debye screening length (in nm)
-        # kappa approx 3.04 * sqrt(C [M]) for water at 298K
-        conc_val = self.salt_concentration
-        if unit.is_quantity(conc_val):
-            conc_val = conc_val.value_in_unit(unit.molar)
-        
-        kappa = 3.04 * np.sqrt(conc_val)  # nm^-1
-        
-        # Create CustomNonbondedForce for screening correction
-        screening_force = openmm.CustomNonbondedForce(
-            "138.935485*q1*q2*(exp(-kappa*r)/r - 1/r)/(solventDielectric)"
-        )
-        screening_force.addGlobalParameter("kappa", kappa)
-        screening_force.addGlobalParameter("solventDielectric", 78.5)
-        screening_force.addPerParticleParameter("q")
-        
-        # EXPLICITLY set NoCutoff to match GB force and avoid Context errors
-        screening_force.setNonbondedMethod(openmm.CustomNonbondedForce.NoCutoff)
-        
-        # Add particles with charges
-        for charge in charges:
-            screening_force.addParticle([charge])
-        
-        # CRITICAL FIX: Copy exceptions from existing NonbondedForce
-        if system is not None:
-            nonbonded_force = None
-            for force in system.getForces():
-                if isinstance(force, openmm.NonbondedForce):
-                    nonbonded_force = force
-                    break
-            
-            if nonbonded_force is not None:
-                # Copy all exceptions from NonbondedForce to screening force
-                for i in range(nonbonded_force.getNumExceptions()):
-                    p1, p2, chargeProd, sigma, epsilon = nonbonded_force.getExceptionParameters(i)
-                    # Add exclusion to screening force (zero interaction for bonded pairs)
-                    screening_force.addExclusion(p1, p2)
-                
-                print(f"✓ Copied {nonbonded_force.getNumExceptions()} exceptions to screening force")
-                print(f"✓ Prepared Debye-Hückel screening force (κ = {kappa:.3f} nm⁻¹)")
-                return screening_force
-        
-        raise ValueError("Could not set up screening force: NonbondedForce not found in system")
-
-
-    def _setup_hct_force(self, system, topology, charges):
-        """Setup enhanced Hawkins-Cramer-Truhlar GB model using CustomGBForce"""
-        try:
-            gb_force = openmm.CustomGBForce()
-            
-            # Add per-particle parameters
-            gb_force.addPerParticleParameter("q")      # Charge
-            gb_force.addPerParticleParameter("radius") # GB radius
-            gb_force.addPerParticleParameter("scale")  # GB scale
-            
-            # HCT GB equation with enhanced parameters
-            # Note: OpenMM requires careful syntax for multi-line expressions
-            I_expression = (
-                "step(r+sr2-or1)*0.5*(1/L-1/U+0.25*(r-sr2^2/r)*(1/(U^2)-1/(L^2))+0.5*log(L/U)/r);"
-                "U=r+sr2;"
-                "L=max(or1, D);"
-                "D=abs(r-sr2);"
-                "sr2 = scale2*or2;"
-                "or1 = radius1-offset; or2 = radius2-offset"
-            )
-            
-            gb_force.addComputedValue("I", I_expression, 
-                openmm.CustomGBForce.ParticlePairNoExclusions)
-            
-            B_expression = (
-                "1/(1/or-tanh(1*psi-0.8*psi^2+4.85*psi^3)/radius);"
-                "psi=I*or; or=radius-offset"
-            )
-            
-            gb_force.addComputedValue("B", B_expression, 
-                openmm.CustomGBForce.SingleParticle)
-            
-            # Energy terms (no separate salt screening for HCT to avoid exception issues)
-            gb_force.addEnergyTerm("-0.5*138.935485*(1/solventDielectric-1/soluteDielectric)*q^2/B", 
-                                  openmm.CustomGBForce.SingleParticle)
-            
-            gb_force.addEnergyTerm("-138.935485*(1/solventDielectric-1/soluteDielectric)*q1*q2/f;"
-                                  "f=sqrt(r^2+B1*B2*exp(-r^2/(4*B1*B2)))", 
-                                  openmm.CustomGBForce.ParticlePairNoExclusions)
-            
-            # Set global parameters
-            gb_force.addGlobalParameter("solventDielectric", self.solvent_dielectric) # Configurable (default 78.5)
-            gb_force.addGlobalParameter("soluteDielectric", self.solute_dielectric)   # Configurable (default 1.0)
-            gb_force.addGlobalParameter("offset", 0.009)  # nm
-            
-            # Add particles
-            for i, atom in enumerate(topology.atoms()):
-                charge = charges[i]
-                radius = self._get_gb_radius(atom) * 0.1  # Convert Å to nm
-                scale = self._get_gb_scale(atom)
-                
-                gb_force.addParticle([charge, radius, scale])
-            
-            if self.salt_concentration > 0:
-                print(f"Note: Salt concentration {self.salt_concentration} M handled implicitly in HCT model")
-            
-            print(f"✓ Added {gb_force.getNumParticles()} particles to enhanced HCT force")
-            return gb_force
-            
-        except Exception as e:
-            print(f"Error creating HCT GB force: {str(e)}")
-            raise
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    def _setup_gbn_force(self, system, topology, charges):
-        """Setup enhanced Generalized Born neck model"""
-        print("Warning: GBn model using enhanced OBC implementation with modified parameters")
-        return self._setup_obc_force(system, topology, charges)
-
-
 
     def _setup_surface_area_force(self, system, topology):
         """Standard GBSAOBC-based Surface Area force (Charges=0 to isolate NP term)"""
@@ -446,25 +305,18 @@ class GBSAForceManager:
              return self._setup_lcpo_force(system, topology)
              
         # Standard ACE (GBSAOBC based)
-        # Use GBSAOBCForce to calculate Surface Area Energy (CA * SASA)
-        # We set charges to 0 so the Polar term (GB) is zero.
         sa_force = openmm.GBSAOBCForce()
         sa_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
         sa_force.setSoluteDielectric(1.0) 
         sa_force.setSolventDielectric(78.5)
         
-        # Standard surface area energy (approx 0.00542 kcal/mol/A^2)
-        # OpenMM default is 2.25936 kJ/mol/nm^2
-        # User requested 0.0072 kcal/mol/A^2
-        # 0.0072 kcal/mol/A^2 = 0.0072 * 4.184 / 0.01 = 3.01248 kJ/mol/nm^2
+        # Standard surface area energy
+        # 0.0072 kcal/mol/A^2 = 3.01248 kJ/mol/nm^2
         sa_force.setSurfaceAreaEnergy(3.01248 * unit.kilojoules_per_mole / unit.nanometers**2)
         
         for atom in topology.atoms():
-             # Use standard radii (e.g. from connection or default)
-             # _get_gb_radius handles checks
              radius = self._get_gb_radius(atom) * 0.1 # nm
              scale = self._get_gb_scale(atom)
-             # Charge 0.0 to strictly calculate NonPolar SA energy
              sa_force.addParticle(0.0, radius, scale)
              
         print(f"✓ Added enhanced surface area force (GBSAOBC-ACE-SA) to system")
@@ -474,73 +326,36 @@ class GBSAForceManager:
         """Setup LCPO (Linear Combinations of Pairwise Overlaps) Surface Area Force"""
         print("✓ Setting up LCPO Surface Area Force...")
         
-        # 0.0072 kcal/mol/A^2 -> kJ/mol/nm^2
         surface_tension = 3.01248 * unit.kilojoules_per_mole / unit.nanometers**2
         
         if not HAS_LCPO_PARAMS:
             raise ImportError("LCPO parameters not available. Cannot use LCPO model.")
             
         lcpo_force = openmm.LCPOForce()
-        
         try:
              lcpo_force.setSurfaceTension(surface_tension)
         except AttributeError:
-             print("WARNING: LCPOForce.setSurfaceTension not found. Energy might be unscaled.")
+             pass
         
-        # Use OpenMM's internal helper to get parameters
-        # Returns list of (radius, p1, p2, p3, p4) tuples with units
         print("ℹ️  Calculating LCPO parameters from topology...")
         params_list = getLCPOParamsTopology(topology)
+        probe_radius_nm = 1.4 * 0.1
         
-        # LCPO probe radius (standard water probe radius: 1.4 Å)
-        probe_radius_nm = 1.4 * 0.1  # Convert Angstrom to nm
-        
-        count = 0
         for params in params_list:
-             # params is (radius, p1, p2, p3, p4) all with units
              r = params[0]
              p1, p2, p3, p4 = params[1], params[2], params[3], params[4]
-             
-             # Convert to OpenMM standard units (nm, kJ/mol/nm^2 etc) if needed
-             # LCPOForce expects pure numbers in specific units?
-             # No, addParticle expects floats.
-             # Check if they are Quantity
-             
              radius_nm = r.value_in_unit(unit.nanometer)
-             # p1, p2, p3 are dimensionless coefficients
-             # p4 is inverse area (1/A^2 or 1/nm^2). LCPOForce likely expects it in internal units (nm^-2?)
-             # Let's check debug output: (..., 0.00036247 /(A**2))
-             # If we pass .value_in_unit(unit.nanometer**-2), it should work.
-             
-             # Safely handle mixed types if p1/p2/p3 are just floats
              val_p1 = p1 if not unit.is_quantity(p1) else p1._value
              val_p2 = p2 if not unit.is_quantity(p2) else p2._value
              val_p3 = p3 if not unit.is_quantity(p3) else p3._value
-             
              val_p4 = p4.value_in_unit(unit.nanometer**-2) if unit.is_quantity(p4) else p4 * 100.0
              
-             # CRITICAL: Add probe radius to atom radius (matching openmm.app.internal.lcpo.addLCPOForce)
              effective_radius = (radius_nm + probe_radius_nm) if radius_nm > 0 else 0.0
-             
              lcpo_force.addParticle(effective_radius, val_p1, val_p2, val_p3, val_p4)
-             count += 1
              
         print(f"✓ Added LCPO Surface Area Force ({lcpo_force.getNumParticles()} particles using internal params)")
-        
-        # CRITICAL: Assign to force group 4 (Surface Area) for proper energy extraction
         lcpo_force.setForceGroup(4)
-        
         return lcpo_force
-
-
-
-
-
-
-
-
-
-
 
     def _get_gb_radius(self, atom):
         """Get GB radius for atom"""
@@ -552,18 +367,9 @@ class GBSAForceManager:
         element = atom.element.symbol
         return self.gb_scales.get(element, 0.80)  # Default 0.8
 
-    def _get_surface_radius(self, atom):
-        """Get surface area radius for atom"""
-        vdw_radii = {
-            'H': 1.20, 'C': 1.70, 'N': 1.55, 'O': 1.52, 'F': 1.47,
-            'P': 1.80, 'S': 1.80, 'Cl': 1.75, 'Br': 1.85, 'I': 1.98
-        }
-        return vdw_radii.get(atom.element.symbol, 1.50) * 0.1  # Convert to nm
-
     def _extract_charges_from_system(self, system):
         """Extract atomic charges from NonbondedForce"""
         charges = []
-        
         for force in system.getForces():
             if isinstance(force, openmm.NonbondedForce):
                 for i in range(force.getNumParticles()):
@@ -572,18 +378,14 @@ class GBSAForceManager:
                 break
         else:
             raise ValueError("No NonbondedForce found in system")
-        
         return charges
 
     def _remove_implicit_forces(self, system):
         """Remove existing implicit solvent forces"""
         forces_to_remove = []
-        
         for i, force in enumerate(system.getForces()):
             if isinstance(force, (openmm.GBSAOBCForce, openmm.CustomGBForce)):
                 forces_to_remove.append(i)
-        
-        # Remove in reverse order to maintain indices
         for i in reversed(forces_to_remove):
             system.removeForce(i)
             print(f"✓ Removed existing implicit solvent force")
@@ -618,52 +420,27 @@ class GBSAForceManager:
                     pass
         
         print(f"✓ Validation: {len(gb_forces)} GB forces, {len(sa_forces)} SA forces, {len(screening_forces)} screening forces")
-        
-        # Check particle counts
-        n_atoms = topology.getNumAtoms()
-        for force in gb_forces + sa_forces:
-            if hasattr(force, 'getNumParticles'):
-                n_particles = force.getNumParticles()
-                if n_particles != n_atoms:
-                    print(f"⚠ Warning: Force has {n_particles} particles, topology has {n_atoms} atoms")
-        
-        return len(gb_forces) > 0  # At least one GB force should be present
+        return len(gb_forces) > 0
 
     def decompose_energy_contributions(self, system, context, positions):
         """Decompose energy into individual force contributions"""
-        
         energy_decomposition = {}
-        
-        # Get all forces in the system
         for i, force in enumerate(system.getForces()):
             force_name = force.__class__.__name__
-            
             try:
-                # Create a temporary system with only this force
                 temp_system = openmm.System()
                 temp_system.setDefaultPeriodicBoxVectors(*system.getDefaultPeriodicBoxVectors())
-                
-                # Add particles
                 for j in range(system.getNumParticles()):
                     temp_system.addParticle(system.getParticleMass(j))
-                
-                # Add only this force
                 temp_system.addForce(force)
-                
-                # Calculate energy
                 temp_integrator = openmm.VerletIntegrator(0.001*unit.picoseconds)
                 temp_context = openmm.Context(temp_system, temp_integrator)
                 temp_context.setPositions(positions)
-                
                 energy = temp_context.getState(getEnergy=True).getPotentialEnergy()
                 energy_decomposition[force_name] = energy.value_in_unit(unit.kilocalories_per_mole)
-                
                 del temp_context
-                
             except Exception as e:
-                print(f"Warning: Could not decompose energy for force {force_name}: {e}")
                 energy_decomposition[force_name] = 0.0
-        
         return energy_decomposition
 
 
@@ -1420,52 +1197,49 @@ class GBSACalculator(GBSAForceManager):
                 else:
                     raise e
 
-            # Create Force Field
-            if self.ligand_forcefield == 'gaff':
-                 log.process("Parameterizing ligand with GAFF2 using Antechamber...")
-                 # GAFF workflow using openmmforcefields
-                 # We need to create a system using Amber params + GAFF generator
-                 # 1. Create empty system/topology or use existing? 
-                 # GAFFTemplateGenerator needs to be registered to a ForceField
-                 
-                 # Create a basic Amber ForceField provided by OpenMM, then register GAFF
-                 # Use 'amber14-all.xml' + tip3p usually for protein, but for ligand we just need generic
-                 # Actually we usually add it to a blank system?
-                 
-                 # OpenMMForceFields method:
-                 gaff_gen = GAFFTemplateGenerator(molecules=mol, forcefield='gaff-2.11')
-                 
-                 # We need an OpenMM Topology.
-                 ligand_top = mol.to_topology().to_openmm()
-                 
-                 # Create system using standard Amber xml (allowing custom GAFF types)
-                 # We can use a minimal xml or standard.
-                 omm_ff = app.ForceField('amber14-all.xml') 
-                 omm_ff.registerTemplateGenerator(gaff_gen.generator)
-                 
-                 ligand_system = omm_ff.createSystem(ligand_top, nonbondedMethod=app.NoCutoff)
-                 log.success(f"GAFF validation and generation successful via Antechamber")
-
-            else:
-                 # Default: OpenFF (Sage)
-                 ff = ForceField('openff-2.1.0.offxml')
-                 ligand_top = mol.to_topology().to_openmm()
-                 # Use the pre-charged molecule
-                 ligand_system = ff.create_openmm_system(mol.to_topology(), charge_from_molecules=[mol])
-                 log.success(f"OpenFF (Sage) parameterization successful ({time.time() - start_time:.1f}s)")
+            # Use SystemGenerator for robust handling of both OpenFF and GAFF
+            # and crucially to handle Implicit Solvent automatically via factory
             
+            # Constants
+            general_kwargs = {
+                'constraints': None, # Ligands usually don't have constraints unless specified
+                'rigidWater': False,
+                'removeCMMotion': False
+            }
+            nonperiodic_kwargs = {
+                'nonbondedMethod': app.NoCutoff,
+                'implicitSolvent': self.gbsa_manager.current_app_model,
+                'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
+            }
+            
+            sm_ff = 'openff-2.1.0'
+            if self.ligand_forcefield == 'gaff':
+                sm_ff = 'gaff-2.11'
+                
+            # Initialize Generator
+            generator = SystemGenerator(
+                forcefields=['amber14-all.xml'], # Minimal base
+                small_molecule_forcefield=sm_ff,
+                molecules=[mol],
+                forcefield_kwargs=general_kwargs,
+                nonperiodic_forcefield_kwargs=nonperiodic_kwargs
+            )
+            
+            # Create System (Automatically adds GBSA forces)
+            ligand_top = mol.to_topology().to_openmm()
+            ligand_system = generator.create_system(ligand_top, molecules=[mol])
+            log.success(f"Ligand parameterized with {sm_ff} and implicit solvent")
             
         except Exception as e:
             log.error(f"Error in OpenFF parameterization: {e}")
             raise e
         
-        # Add fixed enhanced GBSA forces to ligand system
+        # Refine fixed enhanced GBSA forces to ligand system
         try:
-            ligand_gbsa_system = self.gbsa_manager.add_gbsa_to_system(ligand_system, ligand_top)
-            log.success(f"Ligand parameterized with fixed enhanced GBSA ({ligand_gbsa_system.getNumParticles()} particles)")
+            ligand_gbsa_system = self.gbsa_manager.refine_gbsa_forces(ligand_system, ligand_top)
             
         except Exception as e:
-            log.error(f"Error adding GBSA forces to ligand: {e}")
+            log.error(f"Error refining GBSA forces for ligand: {e}")
             raise e
         
         # Save to cache
@@ -1489,10 +1263,15 @@ class GBSACalculator(GBSAForceManager):
              
              if mode in [EngineMode.AMBER, EngineMode.GROMACS, EngineMode.CHARMM]:
                   log.info(f"Detected Native Mode: {mode}")
-                  system, topology, positions = TopologyLoader.load_system(complex_pdb, mode)
+                  # Pass implicit solvent args to TopologyLoader (prmtop support)
+                  system, topology, positions = TopologyLoader.load_system(
+                      complex_pdb, mode, 
+                      implicitSolvent=self.gbsa_manager.current_app_model,
+                      implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
+                  )
                   
-                  # Add GBSA Forces (Separated GB/SA)
-                  system = self.gbsa_manager.add_gbsa_to_system(system, topology)
+                  # Refine GBSA Forces (Separate SA, etc.)
+                  system = self.gbsa_manager.refine_gbsa_forces(system, topology)
                   
                   # Generate temp PDB wrapper if needed, or just allow path
                   # Creating dummy positions for PDBFile write (or use native if available)
@@ -1636,7 +1415,9 @@ class GBSACalculator(GBSAForceManager):
                                 protein_top,
                                 nonbondedMethod=app.NoCutoff,
                                 constraints=None,
-                                ignoreExternalBonds=True
+                                ignoreExternalBonds=True,
+                                implicitSolvent=self.gbsa_manager.current_app_model,
+                                implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
                             )
                             
                             # If we got here, it worked!
@@ -1707,7 +1488,9 @@ class GBSACalculator(GBSAForceManager):
                     protein_system = forcefield.createSystem(
                         protein_top,
                         nonbondedMethod=app.NoCutoff,
-                        constraints=app.HBonds
+                        constraints=app.HBonds,
+                        implicitSolvent=self.gbsa_manager.current_app_model,
+                        implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
                     )
 
                 else:
@@ -1716,7 +1499,8 @@ class GBSACalculator(GBSAForceManager):
                 raise e
         
         # Add fixed enhanced GBSA forces to protein system
-        protein_gbsa_system = self.gbsa_manager.add_gbsa_to_system(protein_system, protein_top)
+        # Refine fixed enhanced GBSA forces in protein system
+        protein_gbsa_system = self.gbsa_manager.refine_gbsa_forces(protein_system, protein_top)
         
         log.success(f"Protein parameterized with fixed enhanced GBSA ({protein_gbsa_system.getNumParticles()} particles)")
         
@@ -1945,7 +1729,11 @@ class GBSACalculator(GBSAForceManager):
             'hydrogenMass': 4*unit.amu
         }
         
-        nonperiodic_kwargs = {'nonbondedMethod': app.NoCutoff}
+        nonperiodic_kwargs = {
+            'nonbondedMethod': app.NoCutoff,
+            'implicitSolvent': self.current_app_model,
+            'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
+        }
         
         system_generator = SystemGenerator(
             forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
@@ -1958,26 +1746,19 @@ class GBSACalculator(GBSAForceManager):
         # Ensure non-periodic
         modeller.topology.setPeriodicBoxVectors(None)
         
-        # Create system
-        log.process("Creating system with Amber forcefield...")
-        if 'molecules_list' not in locals():
-             molecules_list = []
-        
-        # Use a fresh variable to ensure clean handover
-        mols_to_use = []
-        try:
-             mols_to_use = molecules_list
-        except (NameError, UnboundLocalError):
-             log.warning("Recovering from molecules_list scope issue")
-             mols_to_use = []
-             
-        basic_system = system_generator.create_system(modeller.topology, molecules=mols_to_use)
+        # Create System (This now generates the correct GB force automatically)
+        system = system_generator.create_system(modeller.topology)
         
         if add_gbsa:
-            gbsa_system = self.gbsa_manager.add_gbsa_to_system(basic_system, modeller.topology)
-            self.gbsa_manager.validate_gbsa_setup(gbsa_system, modeller.topology)
-        else:
-            gbsa_system = basic_system
+            # Refine the generated forces (Separate SA, etc.)
+            system = self.refine_gbsa_forces(system, modeller.topology)
+        
+        # Ensure non-periodic
+        modeller.topology.setPeriodicBoxVectors(None)
+        
+        # Create system
+        log.process("Creating system with Amber forcefield...")
+        gbsa_system = system
         
         log.success(f"System created ({gbsa_system.getNumParticles()} particles)")
         
@@ -2509,8 +2290,12 @@ class GBSACalculator(GBSAForceManager):
                  # 4. CREATE OPENMM SYSTEMS
                  log.process("Creating and Enhancing OpenMM Systems from Unified Topology...")
                  def make_gbsa_system(struct, name):
-                     sys = StructureManager.create_openmm_system(struct) # constraints=None default now
-                     sys = self.gbsa_manager.add_gbsa_to_system(sys, struct.topology)
+                     sys = StructureManager.create_openmm_system(
+                         struct, 
+                         implicitSolvent=self.gbsa_manager.current_app_model,
+                         implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
+                     ) 
+                     sys = self.gbsa_manager.refine_gbsa_forces(sys, struct.topology)
                      return sys
 
                  complex_system = make_gbsa_system(complex_struct, "Complex")
@@ -2726,6 +2511,34 @@ class GBSACalculator(GBSAForceManager):
         delta_nb_values = []
         delta_gb_values = []
         delta_sa_values = []
+        delta_screen_values = []
+
+        # Ensure energies output structure exists for per-frame data
+        if 'complex' not in self.energies: self.energies['complex'] = []
+        if 'protein' not in self.energies: self.energies['protein'] = []
+        if 'ligand' not in self.energies: self.energies['ligand'] = []
+        if 'binding' not in self.energies: self.energies['binding'] = []
+        
+        if 'complex_nb' not in self.energies: self.energies['complex_nb'] = []
+        if 'complex_gb' not in self.energies: self.energies['complex_gb'] = []
+        if 'complex_sa' not in self.energies: self.energies['complex_sa'] = []
+        if 'complex_screen' not in self.energies: self.energies['complex_screen'] = []
+        if 'complex_bondsa' not in self.energies: self.energies['complex_bondsa'] = []
+        
+        if 'delta_nb' not in self.energies: self.energies['delta_nb'] = []
+        if 'delta_gb' not in self.energies: self.energies['delta_gb'] = []
+        if 'delta_sa' not in self.energies: self.energies['delta_sa'] = []
+        if 'delta_screen' not in self.energies: self.energies['delta_screen'] = []
+        
+        # Add VdW/Elec separation
+        if 'delta_vdw' not in self.energies: self.energies['delta_vdw'] = []
+        if 'delta_elec' not in self.energies: self.energies['delta_elec'] = []
+        
+        delta_vdw_values = []
+        delta_elec_values = []
+        
+        delta_gb_values = []
+        delta_sa_values = []
         
         for i, frame in enumerate(traj):
             if i % 10 == 0:
@@ -2843,11 +2656,54 @@ class GBSACalculator(GBSAForceManager):
                     for g in grps: mask |= (1 << g)
                     return ctx.getState(getEnergy=True, groups=mask).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 
-                # NB: Standard(0) + Custom(3)
+                # --- VdW / Electrostatic Separation (Parameter Toggle Method) ---
+                # 1. Calculate Total Non-Bonded (VdW + Elec)
                 c_nb = get_grp_E(complex_context, [0, 3])
                 p_nb = get_grp_E(protein_context, [0, 3])
                 l_nb = get_grp_E(ligand_context, [0, 3])
+                
+                # Helper to toggle charges for VdW-only calculation
+                def calc_vdw_only(ctx, sys):
+                    # Find NonbondedForce
+                    forces = [f for f in sys.getForces() if isinstance(f, openmm.NonbondedForce)]
+                    if not forces: return 0.0 # Should not happen
+                    nb = forces[0]
+                    
+                    # Backup charges & set to 0
+                    original_charges = []
+                    for i in range(nb.getNumParticles()):
+                        q, s, e = nb.getParticleParameters(i)
+                        original_charges.append(q)
+                        nb.setParticleParameters(i, 0.0, s, e) # Charge = 0
+                    
+                    # Update & Calculate
+                    nb.updateParametersInContext(ctx)
+                    e_vdw = get_grp_E(ctx, [0, 3])
+                    
+                    # Restore charges
+                    for i, q in enumerate(original_charges):
+                         _, s, e = nb.getParticleParameters(i)
+                         nb.setParticleParameters(i, q, s, e)
+                    nb.updateParametersInContext(ctx)
+                    
+                    return e_vdw
+
+                # 2. Calculate VdW Only (Toggle Charges)
+                c_vdw = calc_vdw_only(complex_context, complex_system)
+                p_vdw = calc_vdw_only(protein_context, protein_system)
+                l_vdw = calc_vdw_only(ligand_context, ligand_system)
+                
+                # 3. Derive Electrostatic
+                c_elec = c_nb - c_vdw
+                p_elec = p_nb - p_vdw
+                l_elec = l_nb - l_vdw
+                
+                # Store Delta Components
                 delta_nb_values.append(c_nb - p_nb - l_nb)
+                
+                # New Lists for VdW/Elec
+                delta_vdw_values.append(c_vdw - p_vdw - l_vdw)
+                delta_elec_values.append(c_elec - p_elec - l_elec)
                 
                 # GB: Standard(1) + Custom(2)
                 c_gb = get_grp_E(complex_context, [1, 2])
@@ -2965,6 +2821,10 @@ class GBSACalculator(GBSAForceManager):
         
         # Store Delta Components
         self.energies['delta_nb'] = delta_nb_values
+        
+        self.energies['delta_vdw'] = delta_vdw_values
+        self.energies['delta_elec'] = delta_elec_values
+             
         self.energies['delta_gb'] = delta_gb_values
         self.energies['delta_sa'] = delta_sa_values
         
@@ -3293,6 +3153,12 @@ class GBSACalculator(GBSAForceManager):
             })
             
         if 'delta_nb' in self.energies and len(self.energies['delta_nb']) > 0:
+            if 'delta_vdw' in self.energies and len(self.energies['delta_vdw']) > 0:
+                data['delta_vdw'] = self.energies['delta_vdw']
+            
+            if 'delta_elec' in self.energies and len(self.energies['delta_elec']) > 0:
+                data['delta_elec'] = self.energies['delta_elec']
+            
             data.update({
                 'delta_nb': self.energies['delta_nb'],
                 'delta_gb': self.energies['delta_gb'],

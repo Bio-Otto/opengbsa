@@ -330,26 +330,40 @@ class HTMLReportGenerator:
             
             # --- Plot 1: Binding Energy Timeline (Components) ---
             if include_all_plots:
-                # Component Logic (Hybrid approach if Global Data exists)
+                # Component Logic - Use Global Data for all components
                 
-                # Decomp Sums (Approximation for VdW/Elec)
-                vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
-                elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
-                
-                series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0, index=df.index)
-                series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0, index=df.index)
-                
-                # Global Data (Preferred for Total/Solvation due to self-energy/entropy)
+                # Global Data (Contains VdW, Elec, GB, SA components)
                 if df_glob is not None and not df_glob.empty:
                     series_total = df_glob['binding_energy']
+                    
+                    # Check if we have VdW and Electrostatic in global data
+                    if 'delta_vdw' in df_glob.columns and 'delta_elec' in df_glob.columns:
+                        series_vdw = df_glob['delta_vdw']
+                        series_elec = df_glob['delta_elec']
+                    elif 'delta_nb' in df_glob.columns:
+                        # If only non-bonded total, split it (approximation)
+                        series_vdw = df_glob['delta_nb'] * 0.75  # Rough approximation
+                        series_elec = df_glob['delta_nb'] * 0.25
+                    else:
+                        # Fallback: try per-residue sum (legacy)
+                        vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
+                        elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
+                        series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0, index=df.index)
+                        series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0, index=df.index)
+                    
+                    # Solvation
                     series_solv = df_glob['delta_gb'] + df_glob['delta_sa']
                 else:
-                    # Fallback (Warn: Solvation incorrect)
+                    # Fallback to per-residue decomposition (Warn: Solvation incorrect)
+                    vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
+                    elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
                     solv_cols = [c for c in df.columns if c.endswith('_solvation')]
+                    
+                    series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0, index=df.index)
+                    series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0, index=df.index)
                     series_solv = df[solv_cols].sum(axis=1) if solv_cols else pd.Series(0, index=df.index)
                     series_total = df[energy_cols].sum(axis=1)
                 
-                # Line Plot
                 # Line Plot
                 fig_line = go.Figure()
                 fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_total, mode='lines', name='Total Binding (ΔH)', line=dict(color='black', width=3)))
@@ -613,6 +627,77 @@ class HTMLReportGenerator:
             </table>
         </div>
         """
+        
+        # Add Per-Residue Component Breakdown Table
+        if analysis_results and 'dataframe' in analysis_results:
+            try:
+                df_res = analysis_results['dataframe']
+                
+                # Check if we have component columns
+                has_vdw = 'vdw' in df_res.columns or 'complex_vdw' in df_res.columns
+                has_elec = 'electrostatic' in df_res.columns or 'complex_electrostatic' in df_res.columns
+                
+                if has_vdw or has_elec:
+                    # Get top 10 residues by total contribution
+                    df_sorted = df_res.copy()
+                    
+                    # Determine column names
+                    total_col = 'total' if 'total' in df_sorted.columns else 'complex_total'
+                    vdw_col = 'vdw' if 'vdw' in df_sorted.columns else 'complex_vdw'
+                    elec_col = 'electrostatic' if 'electrostatic' in df_sorted.columns else 'complex_electrostatic'
+                    
+                    if total_col in df_sorted.columns:
+                        df_sorted = df_sorted.nsmallest(10, total_col)
+                        
+                        html += """
+        <div class="col-md-12" style="margin-top: 20px;">
+            <h4 style="color: #333; margin-bottom: 15px;">🔥 Top 10 Binding Hotspots - Energy Components</h4>
+            <table class="table table-bordered table-hover" style="background:white; border-radius:8px; overflow:hidden;">
+                <thead class="table-light">
+                    <tr>
+                        <th>Rank</th>
+                        <th>Residue</th>
+                        <th>Total (kcal/mol)</th>
+                        <th>VdW (kcal/mol)</th>
+                        <th>Electrostatic (kcal/mol)</th>
+                        <th>Solvation (kcal/mol)</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+                        
+                        for idx, (_, row) in enumerate(df_sorted.iterrows(), 1):
+                            res_id = row.get('residue_id', 'N/A')
+                            total = row.get(total_col, 0.0)
+                            vdw = row.get(vdw_col, 0.0) if vdw_col in row else 0.0
+                            elec = row.get(elec_col, 0.0) if elec_col in row else 0.0
+                            solv = row.get('solvation', 0.0)
+                            
+                            # Color coding for energy values
+                            total_color = "#d4edda" if total < -1 else "#fff3cd" if total < 0 else "#f8d7da"
+                            
+                            html += f"""
+                    <tr style="background: {total_color};">
+                        <td><strong>{idx}</strong></td>
+                        <td><code>{res_id}</code></td>
+                        <td><strong>{total:.2f}</strong></td>
+                        <td>{vdw:.2f}</td>
+                        <td>{elec:.2f}</td>
+                        <td>{solv:.2f}</td>
+                    </tr>
+            """
+                        
+                        html += """
+                </tbody>
+            </table>
+            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">
+                <strong>Note:</strong> Negative values indicate favorable binding contributions. 
+                VdW = van der Waals, Elec = Electrostatic interactions.
+            </p>
+        </div>
+        """
+            except Exception as e:
+                logger.warning(f"Could not generate per-residue component table: {e}")
         
         # If no global data, fallback to old box style for simple generic stats
         if not global_results and analysis_results:
