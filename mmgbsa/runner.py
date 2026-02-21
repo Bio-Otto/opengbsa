@@ -225,6 +225,8 @@ class MMGBSARunner:
             solvent_dielectric=analysis_settings.get('solvent_dielectric', 78.5),
             entropy_method=analysis_settings.get('entropy_method', 'none'),
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
+            sa_model=analysis_settings.get('sa_model', 'ACE'),
+            nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             cache_dir=cache_dir
         )
         
@@ -304,11 +306,10 @@ class MMGBSARunner:
                     input_files['complex_pdb'] = conversion_results['topology']       # dry complex
                     input_files['receptor_topology'] = conversion_results['receptor_topology']
                     input_files['ligand_topology'] = conversion_results['ligand_topology']
-                    # Only update solvated topology if it wasn't valid before or to ensure consistency
-                    # But convert_to_amber returns a 'solvated' which matches the dry one.
-                    # If user provided a specific solvated_topology, maybe keep it?
-                    # But for consistency with the new prmtops, using the generated one is safer.
-                    input_files['solvated_topology'] = conversion_results['solvated_topology']
+                    # We MUST use the .gro file as the solvated topology for MDTraj. 
+                    # If we use the generated .prmtop, we lose the experimental PDB residue numbers 
+                    # because PRMTOP format natively drops resSeq strings and forces a 1..N order.
+                    input_files['solvated_topology'] = str(coord_file)
                     
                 else:
                     log.warning("Could not find .gro file for GROMACS conversion. Proceeding without conversion (may fail).")
@@ -328,7 +329,7 @@ class MMGBSARunner:
         mmgbsa_results = calculator.run_comprehensive(
             ligand_mol=input_files.get('ligand_mol'),
             complex_pdb=input_files['complex_pdb'],
-            xtc_file=input_files['trajectory'],
+            xtc_file=input_files.get('trajectory'),
             ligand_pdb=input_files.get('ligand_pdb'),
             max_frames=analysis_settings.get('max_frames', 50),
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
@@ -445,8 +446,16 @@ class MMGBSARunner:
         
         log.header("ANALYSIS COMPLETE")
         log.result("Total time", f"{total_time:.1f}", "seconds")
-        log.result("Results saved to", output_dir)
-        log.result("Mean Binding Energy", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
+        log.result("Results saved to", str(output_dir))
+        
+        # Report Standard Deviation (SD) instead of SEM
+        mean_val = mmgbsa_results.get('mean_binding_energy', 0.0)
+        std_dev = mmgbsa_results.get('std_dev', 0.0)
+        if 'std_dev' not in mmgbsa_results and 'binding_energies' in mmgbsa_results:
+             import numpy as np
+             std_dev = np.std(mmgbsa_results['binding_energies'])
+             
+        log.result("Mean Binding Energy", f"{mean_val:.2f} ± {std_dev:.2f}", "kcal/mol (SD)")
         
         return self.results
     
@@ -598,7 +607,7 @@ class MMGBSARunner:
                     else:
                          pandamap_path = str(pandamap_path.resolve())
 
-                    html_gen = HTMLReportGenerator(output_dir)
+                    html_gen = HTMLReportGenerator(output_dir, config=self.config)
                     html_gen.generate_report(
                         analysis_results=decomp_results,
                         frame_data=decomp_analyzer.frame_data,
