@@ -1,0 +1,38 @@
+# Test CPU platform for analysis and decomposition with parallelization
+# Verifies that parallel decomposition is enabled when decomposition_platform=CPU
+
+analysis_settings:
+  decomp_frames: 2
+  entropy_method: none
+  frame_selection: sequential
+  frame_stride: 1
+  gb_model: GBn
+  max_frames: 2
+  report_raw_energies: false
+  run_entropy_analysis: false
+  run_per_residue_decomposition: true
+  sa_model: ACE
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: false
+  verbose: 1
+
+forcefield_settings:
+  protein_forcefield: amber
+
+# Platform configuration: CPU for both analysis and decomposition
+# This enables safe parallelization of decomposition calculations
+platform_settings:
+  preferred_platform: CPU
+  decomposition_platform: CPU
+
+input_files:
+  complex_pdb: test/data/6t1h_1151_comp/complex.prmtop
+  trajectory: test/data/6t1h_1151_comp/md_complex_prod.xtc
+  solvated_topology: test/data/6t1h_1151_comp/replica_1/gro/complex_solv_ions.gro
+
+output_settings:
+  analysis_name: test_platform_cpu_parallel_decomp
+  output_directory: test/results/comprehensive/test_platform_cpu_parallel_decomp
+  save_logs: true
+  save_plots: false
