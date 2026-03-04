@@ -245,3 +245,8 @@ temp_*.png
 
 # Testing log files
 *.log
+
+# Large binary test data (10GB - not suitable for git)
+test/data/
+test/results/
+test/manual/
