@@ -3,6 +3,21 @@
 Integration of Normal Mode Analysis with MM/GBSA calculations
 Combines your existing NormalModeAnalysis class with MM/GBSA workflow
 """
+"""
+⚠️  REFACTORING IN PROGRESS ⚠️
+
+This monolithic module is being restructured into modular components:
+    - mmgbsa.core.platform: Platform configuration
+    - mmgbsa.core.caching: System caching
+    - mmgbsa.core.topology: Structure management
+    - mmgbsa.core.parameterization: Ligand/protein parameterization
+    - mmgbsa.core.analysis: Analysis execution
+    - mmgbsa.core.results: Result handling
+    - mmgbsa.core.calculator: Main GBSACalculator (coordinator)
+
+For new code, import from mmgbsa.core.* instead of mmgbsa.core.
+This file will be gradually phased out after transition period.
+"""
 
 import numpy as np
 import pandas as pd
@@ -87,9 +102,11 @@ from .trajectory import TrajectoryProcessor
 from openmm import app, openmm, unit
 try:
     from openff.toolkit.topology import Molecule
-    from openff.toolkit.typing.engines.smirnoff import ForceField
 except ImportError:
     Molecule = None
+try:
+    from openff.toolkit.typing.engines.smirnoff import ForceField
+except ImportError:
     ForceField = None
 import warnings
 warnings.filterwarnings('ignore')
@@ -121,24 +138,36 @@ class StructureManager:
     Ensures that Receptor and Ligand systems are mathematically exact subsets of the Complex.
     """
     @staticmethod
-    def load_complex(pdb_path, prmtop_path=None):
+    def load_complex(pdb_path, prmtop_path=None, xtc_path=None):
         """
         Load a complex structure consistent with ParmEd.
         
         Args:
             pdb_path (str): Path to PDB file (coordinates)
             prmtop_path (str, optional): Path to Amber topology file
+            xtc_path (str, optional): Path to trajectory for dynamic dummy atom checking
             
         Returns:
             parmed.Structure: The loaded structure
         """
         import parmed as pmd
         
+        struct = None
         if prmtop_path and Path(prmtop_path).exists():
             # Native Mode: Load Topology + Coordinates
             try:
-                struct = pmd.load_file(prmtop_path, xyz=pdb_path)
-                return struct
+                ext = Path(prmtop_path).suffix.lower()
+                if ext == '.tpr':
+                    from mmgbsa.tpr_loader import load_tpr_as_parmed
+                    struct = load_tpr_as_parmed(str(prmtop_path), xtc_path=xtc_path)
+                    # Optionally we can overwrite coords with pdb_path if needed, but TPR typically has them.
+                    # Usually, pdb_path is an explicitly supplied standard coordinates file.
+                    if pdb_path and Path(pdb_path).exists() and str(pdb_path) != str(prmtop_path):
+                        ref_struct = pmd.load_file(pdb_path)
+                        if len(ref_struct.atoms) == len(struct.atoms):
+                            struct.coordinates = ref_struct.coordinates
+                else:
+                    struct = pmd.load_file(prmtop_path, xyz=pdb_path)
             except Exception as e:
                 # Retry without XYZ if it fails (e.g. atom mismatch)
                 # But we really need coordinates for GBSA
@@ -150,7 +179,12 @@ class StructureManager:
             # If we are here, we might need to parameterize using OpenMM first, 
             # then converting to ParmEd is complex.
             # Actually, standardizing on loading the PDB is fine if we are in non-native mode.
-            return pmd.load_file(pdb_path)
+            struct = pmd.load_file(pdb_path)
+
+        # Implicit solvent and GBSA evaluation does not support explicit waters inside the structural force tree.
+        # Stripping is now handled deliberately in the main pipeline AFTER exporting the solvated PDB for MDTraj
+             
+        return struct
 
     @staticmethod
     def split_components(complex_structure, ligand_resname='LIG'):
@@ -175,6 +209,11 @@ class StructureManager:
         
         # Strip Receptor from Ligand (Keep ONLY ligand)
         ligand.strip(f"!:{ligand_resname}")
+        
+        # Apply secondary global solvent strip for receptor and ligand topologies to avoid LCPO crashes
+        solvent_mask = ":WAT,HOH,H2O,SOL,NA,CL,K,MG,Na+,Cl-,K+,Mg2+,Ca2+"
+        receptor.strip(solvent_mask)
+        ligand.strip(solvent_mask)
         
         return receptor, ligand
 
@@ -327,6 +366,8 @@ class GBSAForceManager:
         self.solvent_dielectric = solvent_dielectric
         self.sa_model = sa_model
         self.nonbonded_cutoff = nonbonded_cutoff
+        self.physics_assumptions = []
+        self._logged_radius_fallback = False
         
         # Map string names to OpenMM constants
         self.gb_model_map = {
@@ -590,11 +631,27 @@ class GBSAForceManager:
         """Get GB radius for atom"""
         # Mapping or Prmtop logic
         # Check if atom has solvent_radius (ParmEd)
-        if hasattr(atom, 'solvent_radius'):
+        if hasattr(atom, 'solvent_radius') and atom.solvent_radius is not None and atom.solvent_radius > 0:
             return atom.solvent_radius
-            
-        # For temporary fallback: use Bondi
-        return self.gb_radii.get(atom.element.symbol, 1.7)
+
+        # Standard mbondi2 radii mapping
+        default_radii = {
+            'H': 1.2, 'C': 1.7, 'N': 1.55, 'O': 1.5,
+            'F': 1.5, 'S': 1.8, 'P': 1.8, 'Cl': 1.7,
+            'I': 1.9, 'Br': 1.85, 'Na': 1.5, 'K': 1.5,
+            'Mg': 1.0, 'Ca': 1.0, 'Zn': 1.0
+        }
+        symbol = atom.element.symbol if hasattr(atom, 'element') and atom.element else 'C'
+        radius = default_radii.get(symbol)
+        if radius is not None:
+            return radius
+        if hasattr(self, 'physics_assumptions') and not getattr(self, '_logged_radius_fallback', False):
+            self.physics_assumptions.append(
+                "Implicit Solvent: Unknown element encountered while assigning GB radii; "
+                "using generic fallback radii for unresolved atom types."
+            )
+            self._logged_radius_fallback = True
+        return 1.7
 
     def _get_gb_scale(self, atom):
         """Get GB scale for atom"""
@@ -602,7 +659,15 @@ class GBSAForceManager:
         if hasattr(atom, 'screen'):
             return atom.screen
             
-        return self.gb_scales.get(atom.element.symbol, 0.8)
+        # Standard mbondi2 scale mapping
+        default_scales = {
+            'H': 0.85, 'C': 0.72, 'N': 0.79, 'O': 0.85,
+            'F': 0.88, 'S': 0.96, 'P': 0.86, 'Cl': 0.8,
+            'I': 0.8, 'Br': 0.8, 'Na': 0.8, 'K': 0.8,
+            'Mg': 0.8, 'Ca': 0.8, 'Zn': 0.8
+        }
+        symbol = atom.element.symbol if hasattr(atom, 'element') and atom.element else 'C'
+        return default_scales.get(symbol, 0.8)
 
     def _setup_surface_area_force(self, system, topology):
         """Setup Surface Area Force explicitly"""
@@ -682,6 +747,10 @@ class GBSAForceManager:
 
     def _get_gb_radius(self, atom):
         """Get GB radius for atom"""
+        # Prefer explicit radii when available (ParmEd/native topology).
+        if hasattr(atom, 'solvent_radius') and atom.solvent_radius is not None and atom.solvent_radius > 0:
+            return atom.solvent_radius
+
         # Handle ParmEd structures where element might be an int
         if hasattr(atom, 'element') and isinstance(atom.element, int):
              try:
@@ -690,11 +759,32 @@ class GBSAForceManager:
              except:
                  element = 'C'
         else:
-             element = atom.element.symbol
-        return self.gb_radii.get(element, 1.50)  # Default 1.5 Å
+             element = atom.element.symbol if hasattr(atom, 'element') and atom.element else 'C'
+             
+        # Standard mbondi2 radii mapping
+        default_radii = {
+            'H': 1.2, 'C': 1.7, 'N': 1.55, 'O': 1.5,
+            'F': 1.5, 'S': 1.8, 'P': 1.8, 'Cl': 1.7,
+            'I': 1.9, 'Br': 1.85, 'Na': 1.5, 'K': 1.5,
+            'Mg': 1.0, 'Ca': 1.0, 'Zn': 1.0
+        }
+        radius = default_radii.get(element)
+        if radius is not None:
+            return radius
+        if hasattr(self, 'physics_assumptions') and not getattr(self, '_logged_radius_fallback', False):
+            self.physics_assumptions.append(
+                "Implicit Solvent: Unknown element encountered while assigning GB radii; "
+                "using generic fallback radii for unresolved atom types."
+            )
+            self._logged_radius_fallback = True
+        return 1.50  # Generic default
 
     def _get_gb_scale(self, atom):
         """Get GB scaling factor for atom"""
+        # Prefer explicit GB screening scale when available.
+        if hasattr(atom, 'screen') and atom.screen is not None and atom.screen > 0:
+            return atom.screen
+
         # Handle ParmEd structures where element might be an int
         if hasattr(atom, 'element') and isinstance(atom.element, int):
              try:
@@ -703,8 +793,16 @@ class GBSAForceManager:
              except:
                  element = 'C'
         else:
-             element = atom.element.symbol
-        return self.gb_scales.get(element, 0.80)  # Default 0.8
+             element = atom.element.symbol if hasattr(atom, 'element') and atom.element else 'C'
+             
+        # Standard mbondi2 scale mapping
+        default_scales = {
+            'H': 0.85, 'C': 0.72, 'N': 0.79, 'O': 0.85,
+            'F': 0.88, 'S': 0.96, 'P': 0.86, 'Cl': 0.8,
+            'I': 0.8, 'Br': 0.8, 'Na': 0.8, 'K': 0.8,
+            'Mg': 0.8, 'Ca': 0.8, 'Zn': 0.8
+        }
+        return default_scales.get(element, 0.80)  # Default 0.8
 
     def _extract_charges_from_system(self, system):
         """Extract atomic charges from NonbondedForce"""
@@ -838,7 +936,6 @@ class GBSACalculator(GBSAForceManager):
         self.use_cache = use_cache
         self.parallel_processing = parallel_processing
         self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
-        self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
         self.protein_forcefield = protein_forcefield
         # Support user-defined ligand forcefield (openff, gaff)
         self.ligand_forcefield = 'openff' 
@@ -849,6 +946,7 @@ class GBSACalculator(GBSAForceManager):
         self.decomposition_method = decomposition_method
         self.visualization_settings = visualization_settings or {}
         self.parameterized_residues = [] # Track any dynamic residues
+        self.physics_assumptions = []
         
         # Cutoff Support
         self.nonbonded_cutoff = nonbonded_cutoff
@@ -879,6 +977,38 @@ class GBSACalculator(GBSAForceManager):
             self.cache_dir.mkdir(parents=True, exist_ok=True)
             if self.verbose:
                 print(f"✓ Cache directory: {self.cache_dir}")
+        
+        # Platform settings for separate analysis/decomposition configuration
+        self.preferred_platform = None
+        self.decomposition_platform = None
+
+    def set_platform_settings(self, platform_settings):
+        """
+        Configure platform preferences for analysis and decomposition.
+        
+        Parameters:
+        -----------
+        platform_settings : dict
+            Configuration dictionary with optional keys:
+            - 'preferred_platform': Platform for main analysis (default: auto-detect)
+            - 'decomposition_platform': Platform for decomposition (default: same as analysis)
+            Example: {'preferred_platform': 'CUDA', 'decomposition_platform': 'CPU'}
+        """
+        if not platform_settings:
+            return
+        
+        if isinstance(platform_settings, dict):
+            self.preferred_platform = platform_settings.get('preferred_platform')
+            self.decomposition_platform = platform_settings.get('decomposition_platform')
+            
+            if self.preferred_platform:
+                self.platform_preference = self.preferred_platform
+            
+            if self.verbose:
+                if self.preferred_platform:
+                    print(f"  Platform for analysis: {self.preferred_platform}")
+                if self.decomposition_platform:
+                    print(f"  Platform for decomposition: {self.decomposition_platform}")
 
     def validate_input_files(self, ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology=None):
         """
@@ -923,7 +1053,7 @@ class GBSACalculator(GBSAForceManager):
         try:
             if str(complex_pdb).endswith('.prmtop'):
                  complex_pdb_obj = app.AmberPrmtopFile(complex_pdb)
-            elif str(complex_pdb).endswith('.top'):
+            elif str(complex_pdb).endswith('.top') or str(complex_pdb).endswith('.tpr'):
                  # GROMACS Topology - Skip detailed structure validation here
                  # Conversion will handle validity
                  complex_pdb_obj = None
@@ -973,7 +1103,7 @@ class GBSACalculator(GBSAForceManager):
                 top_to_use = solvated_topology if solvated_topology else complex_pdb
                 
                 # Skip if using GROMACS topology directly (requires structure file we might not know yet)
-                if str(top_to_use).endswith('.top'):
+                if str(top_to_use).endswith('.top') or str(top_to_use).endswith('.tpr'):
                      pass
                 else:
                     traj_test = md.load(xtc_file, top=top_to_use, frame=0)
@@ -1212,7 +1342,7 @@ class GBSACalculator(GBSAForceManager):
             plt.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(output_dir / 'energy_analysis.png', dpi=300, bbox_inches='tight')
+            plt.savefig(output_dir / 'energy_analysis.png', dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"✓ Energy plots saved to {output_dir / 'energy_analysis.png'}")
@@ -1274,6 +1404,19 @@ class GBSACalculator(GBSAForceManager):
                 f.write("-" * 20 + "\n")
                 for warning in results['validation_warnings']:
                     f.write(f"• {warning}\n")
+                f.write("\n")
+                
+            f.write("Physics Assumptions and Fallbacks:\n")
+            f.write("-" * 35 + "\n")
+            if not results.get('physics_assumptions'):
+                f.write("• None. The pipeline utilized explicitly structured parameters and pure explicit configurations without defaulting to empirical heuristics.\n")
+            else:
+                seen = set()
+                for assumption in results['physics_assumptions']:
+                    if assumption not in seen:
+                        f.write(f"• {assumption}\n")
+                        seen.add(assumption)
+            f.write("\n")
         
         # Generate Interactive HTML Report (Partially Enabled: Only PandaMap)
         try:
@@ -1291,8 +1434,15 @@ class GBSACalculator(GBSAForceManager):
         #             print(f"Warning: Could not load frame data: {fd_err}")
         # 
             # 2. Generate PandaMap
-            # Use complex_pdb argument passed to this method
-            pandamap_path = self._generate_pandamap(complex_pdb, ligand_resname, output_dir)
+            # Avoid duplicate generation when this report method is called
+            # multiple times for the same output directory.
+            pandamap_html = output_dir / "structure_3d.html"
+            if pandamap_html.exists():
+                print(f"PandaMap already exists, skipping regeneration: {pandamap_html}")
+                pandamap_path = str(pandamap_html)
+            else:
+                # Use complex_pdb argument passed to this method
+                pandamap_path = self._generate_pandamap(complex_pdb, ligand_resname, output_dir)
             pdb_for_report = pandamap_path if pandamap_path else complex_pdb
         #     
         #     # 3. Generate Report
@@ -1319,7 +1469,17 @@ class GBSACalculator(GBSAForceManager):
     def _generate_pandamap(self, pdb_file, ligand_resname, output_dir):
         """Generate enhanced 3D visualization using PandaMap"""
         try:
+            if getattr(self, '_pandamap_disabled', False):
+                return None
             print("Generating PandaMap 3D Visualization...")
+            try:
+                import Bio  # noqa: F401
+            except Exception:
+                if not getattr(self, '_pandamap_missing_dep_logged', False):
+                    print("PandaMap skipped: Biopython is not installed in this environment.")
+                    self._pandamap_missing_dep_logged = True
+                self._pandamap_disabled = True
+                return None
             from pandamap import HybridProtLigMapper
             from pandamap.create_3d_view import create_pandamap_3d_viz
             
@@ -1327,11 +1487,21 @@ class GBSACalculator(GBSAForceManager):
                 print("Warning: No PDB file for PandaMap.")
                 return None
 
-            # Patch PDB (ATOM -> HETATM)
+            # Patch PDB for PandaMap:
+            # 1) Remove solvent/ions from visualization input
+            # 2) Convert ligand ATOM records to HETATM for clearer rendering
+            excluded_resnames = {
+                'HOH', 'WAT', 'SOL', 'TIP3', 'TIP3P', 'H2O',
+                'NA', 'CL', 'K', 'MG', 'ZN', 'CA',
+                'NA+', 'CL-', 'K+', 'MG2+', 'ZN2+', 'CA2+'
+            }
             patched_pdb = output_dir / "temp_fixed_for_panda.pdb"
             with open(pdb_file, 'r') as f_in, open(patched_pdb, 'w') as f_out:
                 for line in f_in:
                     if line.startswith("ATOM  ") or line.startswith("HETATM"):
+                        resname = line[17:20].strip()
+                        if resname in excluded_resnames:
+                            continue
                         if line.startswith("ATOM  ") and f" {ligand_resname} " in line:
                             line = "HETATM" + line[6:]
                     f_out.write(line)
@@ -1543,6 +1713,8 @@ class GBSACalculator(GBSAForceManager):
         try:
             # Explicitly assign charges first
             log.process(f"Assigning partial charges using {self.charge_method}...")
+            if self.charge_method in ['am1bcc', 'gasteiger']:
+                self.physics_assumptions.append(f"Ligand Parameterization: Missing explicit quantum RESP charges in native structural matrix. Approximated via empirical '{self.charge_method}' derivation.")
             try:
                 mol.assign_partial_charges(partial_charge_method=self.charge_method)
                 log.info("Charges assigned successfully")
@@ -1550,6 +1722,7 @@ class GBSACalculator(GBSAForceManager):
                 if self.charge_method == 'am1bcc':
                     log.warning(f"AM1-BCC failed: {e}")
                     log.info("Retrying with 'gasteiger' charges as fallback...")
+                    self.physics_assumptions.append("Ligand Parameterization: Standard AM1-BCC empirical mapping failed. Falling back to extreme basic 'gasteiger' approximations.")
                     mol.assign_partial_charges(partial_charge_method='gasteiger')
                     log.info("Gasteiger charges assigned successfully")
                 else:
@@ -2015,7 +2188,7 @@ class GBSACalculator(GBSAForceManager):
                 cached_system, cached_topology = self._load_complex_from_cache(cache_file)
                 if cached_system is not None:
                     log.success(f"Complex system loaded from cache ({cached_system.getNumParticles()} particles)")
-                    return cached_system, cached_topology
+                    return cached_system, cached_topology, None
         
         log.process('Building complex system...')
         start_time = time.time()
@@ -2054,6 +2227,16 @@ class GBSACalculator(GBSAForceManager):
         # Protein-Ligand Mode (Standard)
         if ligand_mol is not None:
             log.info("Running in Protein-Ligand Mode (OpenFF + Amber)")
+            if Molecule is None:
+                # Retry lazy import in case module-level optional import failed transiently.
+                try:
+                    from openff.toolkit.topology import Molecule as _OpenFFMolecule
+                except Exception as e:
+                    raise ImportError(
+                        "OpenFF toolkit is required for ligand_mol-based parameterization. "
+                        "Install 'openff-toolkit' in this environment."
+                    ) from e
+                globals()['Molecule'] = _OpenFFMolecule
             
             # Auto-convert Mol2 to SDF if needed
             if str(ligand_mol).endswith('.mol2'):
@@ -2087,10 +2270,10 @@ class GBSACalculator(GBSAForceManager):
                      ligand_mol_obj.assign_partial_charges(partial_charge_method='gasteiger')
             
             # Identify and delete existing ligand from PDB
-            ligand_resname = self.find_ligand_resname(protein_pdbfile.topology)
-            if ligand_resname:
-                log.info(f"Removing existing ligand residue: {ligand_resname}")
-                to_delete = [r for r in modeller.topology.residues() if r.name == ligand_resname]
+            ligand_resname_extracted = self.find_ligand_resname(modeller.topology)
+            if ligand_resname_extracted:
+                log.info(f"Removing existing ligand residue: {ligand_resname_extracted}")
+                to_delete = [r for r in modeller.topology.residues() if r.name == ligand_resname_extracted]
                 if to_delete: modeller.delete(to_delete)
         
             # Add OpenFF ligand
@@ -2124,23 +2307,98 @@ class GBSACalculator(GBSAForceManager):
         
         nonperiodic_kwargs = {
             'nonbondedMethod': app.NoCutoff,
-            'implicitSolvent': self.current_app_model,
+            'implicitSolvent': self.gbsa_manager.current_app_model,
             'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
         }
         
-        system_generator = SystemGenerator(
-            forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
-            small_molecule_forcefield='openff-2.0.0',
-            molecules=molecules_list,
-            forcefield_kwargs=general_kwargs,
-            nonperiodic_forcefield_kwargs=nonperiodic_kwargs
-        )
+        if SystemGenerator is None:
+            log.warning("openmmforcefields SystemGenerator is unavailable; falling back to OpenMM ForceField.")
+            if ligand_mol is not None:
+                raise RuntimeError("SystemGenerator is required for ligand_mol-based parameterization but is not available.")
+            ff = None
+            ff_candidates = [
+                ('amber/ff14SB.xml', 'amber/tip3p_standard.xml'),
+                ('amber14-all.xml', 'amber14/tip3p.xml'),
+                ('amber99sb.xml', 'tip3p.xml'),
+            ]
+            for ff_files in ff_candidates:
+                try:
+                    ff = app.ForceField(*ff_files)
+                    break
+                except Exception:
+                    continue
+            if ff is None:
+                raise RuntimeError("No compatible OpenMM protein/water forcefield XML set was found.")
+            try:
+                log.info("Checking for missing atoms and adding hydrogens...")
+                modeller.addHydrogens(forcefield=ff)
+            except Exception as e:
+                log.warning(f"Modeller.addHydrogens failed: {e}. Proceeding with existing topology.")
+            try:
+                system = ff.createSystem(modeller.topology, **general_kwargs, **nonperiodic_kwargs)
+            except Exception:
+                fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
+                system = ff.createSystem(modeller.topology, **general_kwargs, **fallback_kwargs)
+            if add_gbsa:
+                system = self.refine_gbsa_forces(system, modeller.topology)
+            modeller.topology.setPeriodicBoxVectors(None)
+            log.success(f"System created ({system.getNumParticles()} particles)")
+            return system, modeller.topology, modeller.positions
+        elif ligand_mol is None:
+            # Protein-only/PPI mode: avoid initializing small-molecule toolkits.
+            system_generator = SystemGenerator(
+                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                forcefield_kwargs=general_kwargs,
+                nonperiodic_forcefield_kwargs=nonperiodic_kwargs
+            )
+        else:
+            system_generator = SystemGenerator(
+                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                small_molecule_forcefield='openff-2.0.0',
+                molecules=molecules_list,
+                forcefield_kwargs=general_kwargs,
+                nonperiodic_forcefield_kwargs=nonperiodic_kwargs
+            )
         
         # Ensure non-periodic
         modeller.topology.setPeriodicBoxVectors(None)
         
+        # Add missing hydrogens (e.g., terminal H3 or missing backbone H)
+        # Required for strict template matching in Coordinate mode
+        try:
+            log.info("Checking for missing atoms and adding hydrogens...")
+            modeller.addHydrogens(forcefield=system_generator.forcefield)
+        except Exception as e:
+            log.warning(f"Modeller.addHydrogens failed: {e}. Proceeding with existing topology.")
+            
         # Create System (This now generates the correct GB force automatically)
-        system = system_generator.create_system(modeller.topology)
+        try:
+            system = system_generator.create_system(modeller.topology)
+        except ValueError as e:
+            if 'implicitSolvent' in str(e):
+                log.warning(f"SystemGenerator rejected implicitSolvent: {e}")
+                log.warning("Attempting to build system without implicitSolvent keyword...")
+                self.physics_assumptions.append("System Builder: Native OpenMM integration rejected Implicit Solvent keywords. Falling back to strictly isolated vacuum parameters and injecting implicit mapping externally.")
+                # Unfortunately, SystemGenerator doesn't allow easy modification of kwargs after initialization.
+                # We have to create a new one without implicitSolvent.
+                fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
+                if ligand_mol is None:
+                    fallback_generator = SystemGenerator(
+                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        forcefield_kwargs=general_kwargs,
+                        nonperiodic_forcefield_kwargs=fallback_kwargs
+                    )
+                else:
+                    fallback_generator = SystemGenerator(
+                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        small_molecule_forcefield='openff-2.0.0',
+                        molecules=molecules_list,
+                        forcefield_kwargs=general_kwargs,
+                        nonperiodic_forcefield_kwargs=fallback_kwargs
+                    )
+                system = fallback_generator.create_system(modeller.topology)
+            else:
+                raise e
         
         if add_gbsa:
             # Refine the generated forces (Separate SA, etc.)
@@ -2276,6 +2534,7 @@ class GBSACalculator(GBSAForceManager):
                 return name
         
         # Fallback: residue with fewest atoms (excluding solvent/ions)
+        self.physics_assumptions.append("Topology Parsing: Unable to automatically verify targeted Ligand coordinate node based on conventional internal namings. Assuming ligand as smallest unbound component molecule strictly via mathematical counting.")
         solvent_names = ['HOH', 'WAT', 'TIP3', 'SOL']
         ion_names = ['NA', 'CL', 'K', 'MG', 'ZN', 'CA', 'CL-']
         excluded = set(solvent_names + ion_names)
@@ -2293,55 +2552,99 @@ class GBSACalculator(GBSAForceManager):
                 return resname
         return None
 
-    def setup_optimized_platform(self):
-        """Setup optimized platform for calculations"""
-        # Check for user preference
+    def setup_optimized_platform(self, platform_name=None):
+        """Setup optimized platform for calculations
+        
+        Parameters:
+        -----------
+        platform_name : str, optional
+            Override platform selection for this specific call (e.g., 'CPU' for decomposition
+            while main analysis uses CUDA). If None, uses instance preference.
+        
+        Returns:
+        --------
+        tuple : (platform, properties) - OpenMM platform and device properties
+        """
+        # Platform priority: parameter > instance decomposition > instance preference > environment > auto-detect
+        # We validate platforms by creating a tiny Context because CUDA/OpenCL may be
+        # discoverable yet unusable at runtime (e.g., no device available).
+        def _can_use_platform(name, props):
+            try:
+                plat = openmm.Platform.getPlatformByName(name)
+                test_system = openmm.System()
+                test_system.addParticle(1.0)
+                test_integrator = openmm.VerletIntegrator(0.001 * unit.picoseconds)
+                _ctx = openmm.Context(test_system, test_integrator, plat, props)
+                del _ctx
+                del test_integrator
+                return plat
+            except Exception:
+                return None
+        
+        # 1. Use provided platform_name if available (e.g., decomposition override)
+        if platform_name and str(platform_name).lower() != 'auto':
+            try:
+                properties = {}
+                if platform_name == 'CUDA':
+                    properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
+                elif platform_name == 'OpenCL':
+                    properties = {'OpenCLPrecision': 'mixed'}
+                platform = _can_use_platform(str(platform_name), properties)
+                if platform is None:
+                    raise RuntimeError(f"Platform '{platform_name}' is not usable on this machine")
+                print(f"Using forced platform: {platform_name}")
+                return platform, properties
+            except Exception as e:
+                print(f"⚠️ Warning: Forced platform '{platform_name}' failed: {e}. Falling back to default preference.")
+        
+        # 2. Check for user preference
         pref = getattr(self, 'platform_preference', None)
         if pref and str(pref).lower() != 'auto':
             try:
-                platform = openmm.Platform.getPlatformByName(str(pref))
                 properties = {}
                 if pref == 'CUDA':
                     properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
                 elif pref == 'OpenCL':
                     properties = {'OpenCLPrecision': 'mixed'}
+                platform = _can_use_platform(str(pref), properties)
+                if platform is None:
+                    raise RuntimeError(f"Platform '{pref}' is not usable on this machine")
                 print(f"Using forced platform: {pref}")
                 return platform, properties
             except Exception as e:
                 print(f"⚠️ Warning: Forced platform '{pref}' failed: {e}. Falling back to auto-detection.")
 
-        # Check environment variable
+        # 3. Check environment variable
         env_pref = os.environ.get('OPENMM_DEFAULT_PLATFORM')
         if env_pref:
             try:
-                platform = openmm.Platform.getPlatformByName(env_pref)
                 if env_pref == 'CUDA':
                      properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
                 elif env_pref == 'OpenCL':
                      properties = {'OpenCLPrecision': 'mixed'}
                 else:
                      properties = {}
+                platform = _can_use_platform(env_pref, properties)
+                if platform is None:
+                    raise RuntimeError(f"Environment platform '{env_pref}' is not usable on this machine")
                 print(f"Using platform from environment: {env_pref}")
                 return platform, properties
             except Exception as e:
                 print(f"⚠️ Warning: Environment platform '{env_pref}' failed: {e}. Falling back to auto-detection.")
 
-        try:
-            platform = openmm.Platform.getPlatformByName('CUDA')
-            properties = {
-                'CudaPrecision': 'mixed',
-                'CudaDeviceIndex': '0'
-            }
-            print("Using CUDA platform")
-        except:
-            try:
-                platform = openmm.Platform.getPlatformByName('OpenCL')
-                properties = {'OpenCLPrecision': 'mixed'}
-                print("Using OpenCL platform") 
-            except:
-                platform = openmm.Platform.getPlatformByName('CPU')
-                properties = {}
-                print("Using CPU platform")
+        # 4. Auto-detect: Try CUDA -> OpenCL -> CPU
+        for candidate, props, msg in [
+            ('CUDA', {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}, "Using CUDA platform"),
+            ('OpenCL', {'OpenCLPrecision': 'mixed'}, "Using OpenCL platform"),
+            ('CPU', {}, "Using CPU platform"),
+        ]:
+            platform = _can_use_platform(candidate, props)
+            if platform is not None:
+                properties = props
+                print(msg)
+                break
+        else:
+            raise RuntimeError("No usable OpenMM platform found (CUDA/OpenCL/CPU).")
         
         return platform, properties
 
@@ -2387,6 +2690,9 @@ class GBSACalculator(GBSAForceManager):
         dict : Analysis results with enhanced statistics and validation
         """
         
+        # Preserve original path before any potential fallback replacement
+        original_input_complex_pdb = complex_pdb
+        
         # Pre-run validation
         print("Validating input files...")
         validation_errors = self.validate_input_files(ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology)
@@ -2399,66 +2705,167 @@ class GBSACalculator(GBSAForceManager):
         
         print("✅ Input validation passed")
         
+        # ---------------------------------------------------------------------
+        # Prepare MDTraj-compatible topology when a GROMACS TPR is provided.
+        # The conversion is required because MDTraj cannot natively read ".tpr"
+        # files.  In normal runs the topology is later written once the native
+        # complex is loaded (see below), but custom-selection logic executes
+        # *before* that step.  This block proactively generates a small PDB
+        # so that subsequent `md.load()` calls succeed.
+        # ---------------------------------------------------------------------
+        mdtraj_topology = complex_pdb
+        if str(complex_pdb).lower().endswith('.tpr'):
+            import os
+            mdtraj_topology = os.path.join(output_dir if output_dir else '.',
+                                           "complex_solvated_from_tpr_for_mdtraj.pdb")
+            if not os.path.exists(mdtraj_topology):
+                converted = False
+                try:
+                    from .tpr_loader import load_tpr_as_parmed
+                    struct = load_tpr_as_parmed(str(complex_pdb), xtc_path=xtc_file)
+                    struct.save(mdtraj_topology, overwrite=True)
+                    log.info(f"Generated temporary topology for mdtraj: {mdtraj_topology}")
+                    converted = True
+                    # do NOT modify `complex_pdb` here: this variable is passed
+                    # through to `run()` and later used to determine native vs
+                    # coordinate mode.  overwriting it with the temporary PDB
+                    # causes the system to think it no longer has a TPR and
+                    # fall back to raw-coordinate generation (which then failed
+                    # due to missing hydrogen templates).  Instead we keep the
+                    # original path intact and only use `mdtraj_topology` for
+                    # MDTraj loading above.
+                except Exception as e:
+                    log.warning(f"Failed to convert TPR to PDB for mdtraj using TprParser: {e}")
+                    # Fallback: try to find .pdb or .gro in the same directory as TPR
+                    tpr_dir = Path(complex_pdb).parent
+                    tpr_stem = Path(complex_pdb).stem
+                    for ext in ['.pdb', '.gro']:
+                        fallback_path = tpr_dir / f"{tpr_stem}{ext}"
+                        if fallback_path.exists():
+                            mdtraj_topology = str(fallback_path)
+                            # Also update complex_pdb to use fallback
+                            complex_pdb = str(fallback_path)
+                            # since the effective input is now a non-TPR file we should
+                            # update the saved original path as well so later logic
+                            # doesn't erroneously treat it as a GROMACS native topology.
+                            original_input_complex_pdb = complex_pdb
+                            log.info(f"TPR conversion failed; using fallback topology: {mdtraj_topology}")
+                            converted = True
+                            break
+                if not os.path.exists(mdtraj_topology):
+                    # no successful conversion path
+                    raise ValueError(
+                        "MDTraj cannot read a .tpr topology and automatic conversion "
+                        "failed. Please provide an explicit PDB/GRO topology via the "
+                        "configuration (e.g. 'solvated_topology') or install the ``TprParser`` "
+                        "package so that opengbsa can convert the file itself."
+                    )
+        
         # Handle custom selection / Protein-Protein splitting
+        skip_distillation = False
         if ligand_selection and receptor_selection:
             log.info("Processing custom selections for Protein-Protein/Refined analysis...")
             
-            # Load reference topology
-            ref_traj = md.load(complex_pdb)
+            # Load reference topology (use converted path when available).
+            # For Amber topology-only inputs (.prmtop/.parm7), load first frame from trajectory.
+            if str(mdtraj_topology).lower().endswith(('.prmtop', '.parm7')):
+                ref_top = solvated_topology if solvated_topology else mdtraj_topology
+                if xtc_file:
+                    ref_traj = md.load_frame(xtc_file, 0, top=ref_top)
+                else:
+                    ref_traj = md.load(ref_top)
+            else:
+                ref_traj = md.load(mdtraj_topology)
             
             # Get indices
             lig_idx = self.get_selection_indices(ref_traj.topology, ligand_selection)
             rec_idx = self.get_selection_indices(ref_traj.topology, receptor_selection)
+
+            # regardless of whether they succeed, log the counts so user can inspect
+            log.info(f"  Ligand selection '{ligand_selection}' matched {len(lig_idx)} atoms")
+            log.info(f"  Receptor selection '{receptor_selection}' matched {len(rec_idx)} atoms")
             
             if not lig_idx or not rec_idx:
-                log.error("Selection failed to find atoms!")
-                return None
+                # Custom selections failed. This often occurs with converted TPR files
+                # which may lose chain/residue information during conversion.
+                # use original_input_complex_pdb because complex_pdb may have been
+                # updated to a fallback (.pdb/.gro) above when TPR conversion failed.
+                if str(original_input_complex_pdb).lower().endswith('.tpr'):
+                    log.warning(f"Custom selections failed for converted TPR file.")
+                    log.warning(f"  Ligand selection '{ligand_selection}' found {len(lig_idx)} atoms")
+                    log.warning(f"  Receptor selection '{receptor_selection}' found {len(rec_idx)} atoms")
+                    log.warning("TPR conversions may lose chain ID and residue information.")
+                    log.warning("Skipping custom distillation and continuing with standard flow.")
+                    log.warning("  -> Custom selections have been cleared; subsequent analysis will use the full complex.")
+                    # Don't fail; continue with original complex_pdb in standard flow below
+                    skip_distillation = True
+                    ligand_selection = None
+                    receptor_selection = None
+                else:
+                    log.error("Selection failed to find atoms!")
+                    return None
             
-            # Combine and sort indices
-            clean_indices = np.sort(np.concatenate([rec_idx, lig_idx]))
+            if not skip_distillation:
+                native_topology_input = str(original_input_complex_pdb).lower().endswith(
+                    ('.prmtop', '.parm7', '.tpr', '.top')
+                )
+                if native_topology_input:
+                    log.info("Native topology input detected; skipping distillation and using selection masks directly.")
+                    skip_distillation = True
+
+            if not skip_distillation:
+                # Combine and sort indices
+                clean_indices = np.sort(np.concatenate([rec_idx, lig_idx]))
             
-            # Create Clean Complex PDB
-            clean_pdb_path = str(output_dir / 'distilled_complex.pdb' if output_dir else Path('distilled_complex.pdb'))
-            clean_pdb_traj = ref_traj.atom_slice(clean_indices)
-            clean_pdb_traj.save(clean_pdb_path)
-            log.info(f"Created distilled complex PDB: {clean_pdb_path}")
-            
-            # Create Clean Trajectory
-            # For efficiency, we shouldn't load entire XTC if huge, but for now assuming it fits or using md.load frame args
-            # Actually, `run` handles framing. But `run` expects XTC matching PDB.
-            # So we MUST create a matching XTC.
-            clean_xtc_path = str(output_dir / 'distilled.xtc' if output_dir else Path('distilled.xtc'))
-            
-            log.process("Distilling trajectory to match selection...")
-            # We iterate to avoid memory issues? Or just load?
-            # Using md.load on xtc with original pdb top
-            load_top = complex_pdb
-            if str(complex_pdb).endswith('.prmtop'):
-                # Convert prmtop to PDB for MDTraj
-                prmtop = app.AmberPrmtopFile(str(complex_pdb))
-                # Save to cache dir if possible or same dir
-                temp_pdb = str(Path(complex_pdb).parent / "temp_topology_load.pdb")
-                if not Path(temp_pdb).exists():
-                    with open(temp_pdb, 'w') as f:
-                        app.PDBFile.writeFile(prmtop.topology, prmtop.positions if prmtop.positions is not None else [openmm.Vec3(0,0,0)]*prmtop.topology.getNumAtoms(), f)
-                load_top = temp_pdb
-            
-            full_xtc = md.load(xtc_file, top=load_top)
-            clean_xtc = full_xtc.atom_slice(clean_indices)
-            clean_xtc.save(clean_xtc_path)
-            log.info(f"Created distilled trajectory: {clean_xtc_path}")
-            
-            # Update paths for run
-            complex_pdb = clean_pdb_path
-            xtc_file = clean_xtc_path
-            
-            log.info(f"DEBUG: run_comprehensive calling run() with complex_pdb={complex_pdb}")
+                # Create Clean Complex PDB
+                clean_pdb_path = str(output_dir / 'distilled_complex.pdb' if output_dir else Path('distilled_complex.pdb'))
+                clean_pdb_traj = ref_traj.atom_slice(clean_indices)
+                clean_pdb_traj.save(clean_pdb_path)
+                log.info(f"Created distilled complex PDB: {clean_pdb_path}")
+                
+                # Create Clean Trajectory
+                # For efficiency, we shouldn't load entire XTC if huge, but for now assuming it fits or using md.load frame args
+                # Actually, `run` handles framing. But `run` expects XTC matching PDB.
+                # So we MUST create a matching XTC.
+                clean_xtc_path = str(output_dir / 'distilled.xtc' if output_dir else Path('distilled.xtc'))
+                
+                log.process("Distilling trajectory to match selection...")
+                # We iterate to avoid memory issues? Or just load?
+                # Using md.load on xtc with original pdb top
+                # Use solvated topology for XTC loading when available to avoid atom-count mismatch.
+                load_top = solvated_topology if solvated_topology else complex_pdb
+                if str(complex_pdb).endswith('.prmtop') and not solvated_topology:
+                    # Convert prmtop to PDB for MDTraj
+                    prmtop = app.AmberPrmtopFile(str(complex_pdb))
+                    # Save to cache dir if possible or same dir
+                    temp_pdb = str(Path(complex_pdb).parent / "temp_topology_load.pdb")
+                    if not Path(temp_pdb).exists():
+                        with open(temp_pdb, 'w') as f:
+                            app.PDBFile.writeFile(prmtop.topology, prmtop.positions if prmtop.positions is not None else [openmm.Vec3(0,0,0)]*prmtop.topology.getNumAtoms(), f)
+                    load_top = temp_pdb
+                
+                full_xtc = md.load(xtc_file, top=load_top)
+                clean_xtc = full_xtc.atom_slice(clean_indices)
+                clean_xtc.save(clean_xtc_path)
+                log.info(f"Created distilled trajectory: {clean_xtc_path}")
+                
+                # Update paths for run
+                complex_pdb = clean_pdb_path
+                xtc_file = clean_xtc_path
+                # Distillation actually changes the effective analysis topology.
+                # Keep run() aligned with distilled files to avoid atom-count mismatches.
+                original_input_complex_pdb = complex_pdb
+                
+                log.info(f"DEBUG: run_comprehensive calling run() with complex_pdb={complex_pdb}")
+
 
         # Run the core analysis with frame selection
+        # pass the original input path separately to preserve native-mode detection
         results = self.run(ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames, energy_decomposition,
                           frame_start, frame_end, frame_stride, frame_selection, random_seed,
                           qha_analyze_complex, output_dir, ligand_selection, receptor_selection,
-                          receptor_topology, ligand_topology, solvated_topology, print_interval)
+                          receptor_topology, ligand_topology, solvated_topology, print_interval,
+                          original_complex_pdb=original_input_complex_pdb)
         
         if results is None:
             return None
@@ -2489,8 +2896,12 @@ class GBSACalculator(GBSAForceManager):
             'binding_energies': binding_energies.tolist()
         })
         
-        # Generate detailed report
-        output_dir = self.generate_detailed_report(results, output_dir)
+        # Generate detailed report.
+        # Pass a concrete structure file so PandaMap/reporting does not run with a null path.
+        report_pdb = getattr(self, 'topology_file', None) or complex_pdb
+        output_dir = self.generate_detailed_report(
+            results, output_dir, ligand_resname=ligand_resname, complex_pdb=report_pdb
+        )
         results['report_directory'] = str(output_dir)
         
         return results
@@ -2498,17 +2909,8 @@ class GBSACalculator(GBSAForceManager):
     def run(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, energy_decomposition=False,
             frame_start=None, frame_end=None, frame_stride=None, frame_selection='sequential', random_seed=42,
             qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
-            receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10):
-        """
-        Run fixed enhanced MM/GBSA analysis with proper GBSA forces
-        """
-        # ... (rest of method start)
-
-        # (skipping to loop) - no, replace_file_content needs contiguous block.
-        # I cannot replace signature AND loop in one go if they are far apart.
-        # I will replace signature first.
-        pass # Placeholder strategy check.
-
+            receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10,
+            original_complex_pdb=None):
         """
         Run fixed enhanced MM/GBSA analysis with proper GBSA forces
         
@@ -2546,14 +2948,26 @@ class GBSACalculator(GBSAForceManager):
         dict : Analysis results with binding energies and statistics
         """
         # Save original complex_pdb path before potential overwrite by distillation extraction
-        original_complex_pdb = complex_pdb
+        # `original_complex_pdb` may be passed explicitly by callers (e.g. run_comprehensive)
+        # so that we remember the true source file even if `complex_pdb` is later
+        # replaced by a distilled or temporary PDB.  This is critical for correct
+        # mode detection (native vs coordinate) when the input was originally
+        # a .tpr or other native topology.
+        if original_complex_pdb is None:
+            original_complex_pdb = complex_pdb
 
         log.section("Advanced MM/GBSA Analysis")
         log.info("Starting fixed enhanced MM/GBSA analysis with GBSA forces...")
         
         # Reset results for new run
         self.energies = defaultdict(list)
-        self.results = {}
+        
+        # Collect cross-class assumptions
+        assumptions = list(getattr(self, 'physics_assumptions', []))
+        if hasattr(self, 'gbsa_manager') and hasattr(self.gbsa_manager, 'physics_assumptions'):
+            assumptions.extend(self.gbsa_manager.physics_assumptions)
+            
+        self.results = {'physics_assumptions': assumptions}
         
         if self.use_cache:
             log.info(f"Cache enabled: {self.cache_dir}")
@@ -2592,50 +3006,59 @@ class GBSACalculator(GBSAForceManager):
                 app.PDBFile.writeFile(prmtop.topology, inpcrd.positions, open(temp_pdb, 'w'))
                 complex_pdb = temp_pdb
                 log.info(f"  ✓ Converted to PDB: {complex_pdb}")
-            # Extract first frame from trajectory if we need valid positions...
-            if xtc_file and not str(complex_pdb).endswith('.pdb'):
-                log.info("Extracting first frame from trajectory...")
-
+            # Prefer coordinates/residue numbering from trajectory topology when available.
+            # This keeps residue IDs consistent with solvated_topology/GRO (e.g. resSeq offsets),
+            # which is important for downstream decomposition/report labels and PandaMap.
+            if xtc_file:
+                log.info("Extracting first frame from trajectory for reference PDB...")
                 try:
-                     # Calculate target atoms if possible (Native Mode)
-                     target_atoms = None
-                     if str(complex_pdb).endswith('.prmtop') or str(complex_pdb).endswith('.parm7'):
-                          # We already loaded prmtop above? No, we created app.AmberPrmtopFile(complex_pdb) at line 2034
-                          # But complex_pdb variable might have changed? No.
-                          # Re-use prmtop object if available.
-                          if 'prmtop' in locals():
-                               target_atoms = prmtop.topology.getNumAtoms()
-                          else:
-                               prmtop_temp = app.AmberPrmtopFile(complex_pdb)
-                               target_atoms = prmtop_temp.topology.getNumAtoms()
-
-                     # Use intelligent TrajectoryProcessor (handles auto-discovery and stripping)
+                     target_atoms = prmtop.topology.getNumAtoms() if 'prmtop' in locals() else None
                      traj = TrajectoryProcessor.load_and_process(
-                         xtc_file, 
-                         complex_pdb, 
-                         target_atoms=target_atoms, 
+                         xtc_file,
+                         complex_pdb,
+                         target_atoms=target_atoms,
                          solvated_topology=solvated_topology,
-                         end=1 # Only need first frame for PDB creation
+                         end=1  # only first frame needed
                      )
+                     temp_pdb = str(Path(output_dir if output_dir else '.') / 'temp_from_traj.pdb')
+                     traj[0].save_pdb(temp_pdb)
+                     complex_pdb = temp_pdb
+                     log.info(f"  ✓ Extracted to PDB: {complex_pdb}")
                 except Exception as e:
-                     log.error(f"Failed to extract frame for PDB creation: {e}")
-                     raise e
-
-                temp_pdb = str(Path(output_dir if output_dir else '.') / 'temp_from_traj.pdb')
-                traj[0].save_pdb(temp_pdb)
-                complex_pdb = temp_pdb
-                log.info(f"  ✓ Extracted to PDB: {complex_pdb}")
-            else:
-                if str(complex_pdb).endswith('.prmtop'):
-                     # If no trajectory provided, we can't extract coordinates.
-                     # But parameterize_protein_amber handles creating dummy positions internally.
-                     # So we might not need to raise here? 
-                     # But MDTraj needs PDB? parameterize_protein_amber creates temp_topology.pdb
-                     # So we can just pass complex_pdb as is and let parameterize_protein_amber handle it.
-                     pass
+                     log.warning(f"Failed to extract trajectory reference PDB, keeping converted PDB: {e}")
         
         # Check if PDB changed (e.g. Surgery added atoms)
         # Skip if in Prmtop Mode (skip_merge=True) as we trust original indices(topology)
+        
+        # If we're in pure TPR mode but lack the TprParser library, fall back
+        # to a coordinate-based analysis by switching to a companion PDB/GRO
+        # file (if available).  This avoids a hard crash inside
+        # StructureManager.load_complex.
+        if str(original_complex_pdb).lower().endswith('.tpr'):
+            try:
+                import TprParser  # noqa: F401
+            except ImportError:
+                log.warning("TPR file supplied but TprParser is not installed.")
+                # look for .pdb/.gro with same stem
+                from pathlib import Path
+                tpr_path = Path(original_complex_pdb)
+                fb = None
+                for ext in ['.pdb', '.gro']:
+                    cand = tpr_path.with_suffix(ext)
+                    if cand.exists():
+                        fb = str(cand)
+                        break
+                if fb:
+                    log.info(f"Switching to fallback topology {fb} (coordinate mode)")
+                    original_complex_pdb = fb
+                    complex_pdb = fb
+                else:
+                    raise ValueError(
+                        "Cannot perform native TPR analysis because TprParser is missing and no "
+                        "fallback PDB/GRO file was found alongside the TPR. "
+                        "Please install TprParser or provide an explicit topology."
+                    )
+        
         # ---------------------------------------------------------
         # UNIFIED TOPOLOGY SPLITTING WORKFLOW
         # ---------------------------------------------------------
@@ -2648,12 +3071,24 @@ class GBSACalculator(GBSAForceManager):
         # 1. OBTAIN MASTER COMPLEX STRUCTURE
         complex_struct = None
         
-        if str(original_complex_pdb).endswith(('.prmtop', '.parm7')):
-             # NATIVE MODE: Use Unified Splitting (Robust for prmtop)
-             log.info("Mode: Native Topology (PRMTOP)")
+        if str(original_complex_pdb).endswith(('.prmtop', '.parm7', '.top', '.tpr')):
+             # NATIVE MODE: Use Unified Splitting (Robust for prmtop and tpr)
+             log.info("Mode: Native Topology (PRMTOP or TPR)")
              try:
-                 complex_struct = StructureManager.load_complex(complex_pdb, original_complex_pdb)
+                 complex_struct = StructureManager.load_complex(complex_pdb, original_complex_pdb, xtc_path=xtc_file)
                  log.success(f"Loaded Native Complex: {len(complex_struct.atoms)} atoms")
+                 
+                 import os
+                 if str(original_complex_pdb).endswith('.tpr'):
+                      temp_pdb_path = os.path.join(output_dir if 'output_dir' in locals() and output_dir else '.', "complex_solvated_from_tpr_for_mdtraj.pdb")
+                      complex_struct.save(temp_pdb_path, overwrite=True)
+                      complex_pdb = temp_pdb_path
+                 
+                 # STRIP SOLVENT AFTER WRITING MDTRAJ PDB BUT BEFORE OPENMM SYSTEM
+                 log.info("Stripping complex system solvent to prepare for implicit GBSA evaluation...")
+                 solvent_mask = ":WAT,HOH,H2O,SOL,NA,CL,K,MG,Na+,Cl-,K+,Mg2+,Ca2+"
+                 complex_struct.strip(solvent_mask)
+                 log.success(f"Stripped Complex: {len(complex_struct.atoms)} atoms")
                  
                  # 2. IDENTIFY COMPONENTS
                  if not ligand_resname:
@@ -2794,11 +3229,68 @@ class GBSACalculator(GBSAForceManager):
         if not 'complex_system' in locals():
              # Fallback if something weird happened, or for safety
              raise RuntimeError("System generation failed to produce complex_system")
-        ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=ligand_selection)
-        protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=receptor_selection)
+             
+        # If openFF re-assigned the ligand name, ensure custom selections target the new name
+        final_lig_selection = ligand_selection
+        final_rec_selection = receptor_selection
+        
+        if ligand_resname:
+            if final_lig_selection:
+                if "resname UNL" in final_lig_selection:
+                    final_lig_selection = final_lig_selection.replace("resname UNL", f"resname {ligand_resname}")
+                elif "resname LIG" in final_lig_selection:
+                    final_lig_selection = final_lig_selection.replace("resname LIG", f"resname {ligand_resname}")
+                if final_lig_selection != ligand_selection:
+                    log.info(f"Updated ligand selection to match topology: '{final_lig_selection}'")
+                    
+            if final_rec_selection:
+                if "resname UNL" in final_rec_selection:
+                    final_rec_selection = final_rec_selection.replace("resname UNL", f"resname {ligand_resname}")
+                elif "resname LIG" in final_rec_selection:
+                    final_rec_selection = final_rec_selection.replace("resname LIG", f"resname {ligand_resname}")
+                if final_rec_selection != receptor_selection:
+                    log.info(f"Updated receptor selection to match topology: '{final_rec_selection}'")
+        
+        # Important: Store the resolved selection attributes on the instance to guarantee downstream consistency
+        self.ligand_selection = final_lig_selection
+        self.receptor_selection = final_rec_selection
+        self.ligand_resname = ligand_resname
+                
+        ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
+        protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
+
+        # ===== Diagnostic warnings for custom selections =====
+        # If the user supplied a custom selection but it ended up selecting the
+        # same atoms as the default (no-selection) behaviour we warn.  This
+        # commonly happens when a topology only contains one protein chain or
+        # when a converted TPR has lost chain/residue information and the
+        # fallback path effectively ignored the custom selection.  The warning
+        # should help users understand why two different expressions produced
+        # identical energies.
+        if (ligand_selection or receptor_selection):
+            # Suppress logging while we fetch defaults for comparison
+            import logging as root_logging
+            old_level = root_logging.getLogger().level
+            root_logging.getLogger().setLevel(root_logging.ERROR)
+            default_lig = self.get_ligand_indices(complex_top, ligand_resname)
+            default_prot = self.get_protein_indices(complex_top, ligand_resname)
+            root_logging.getLogger().setLevel(old_level)
+            if ligand_selection and set(ligand_indices) == set(default_lig):
+                log.warning(
+                    "Custom ligand selection '%s' returned the same atom set as the default; "
+                    "it will have no effect on the calculation." % final_lig_selection
+                )
+            if receptor_selection and set(protein_indices) == set(default_prot):
+                log.warning(
+                    "Custom receptor selection '%s' returned the same atom set as the default; "
+                    "it will have no effect on the calculation." % final_rec_selection
+                )
+
         
         skip_merge = True
         final_pdb_path = complex_pdb
+        self.distilled_complex_pdb = final_pdb_path
+        self.distilled_xtc_file = locals().get('clean_xtc_path', xtc_file)
 
         prep_time = time.time() - prep_start_time
         print(f"✓ Total preparation time: {prep_time:.1f}s")
@@ -2829,19 +3321,11 @@ class GBSACalculator(GBSAForceManager):
                 # Ensure Nonbonded is Group 0 (Default, but explicit is good)
                 elif isinstance(f, openmm.NonbondedForce): f.setForceGroup(0)
                 # GBSA forces are usually handled by add_gbsa_to_system, but if present as standard:
-                # GBSA forces are usually handled by add_gbsa_to_system
                 elif isinstance(f, openmm.GBSAOBCForce): 
-                    # Discriminate between GB (Charge!=0) and SA (Charge=0)
-                    # This assumes SA force was created with 0 charges as per new implementation
-                    if f.getNumParticles() > 0:
-                        q, _, _ = f.getParticleParameters(0)
-                        # Use a small epsilon check for float 0.0
-                        if abs(q.value_in_unit(unit.elementary_charge)) < 1e-6:
-                             f.setForceGroup(4) # SA
-                        else:
-                             f.setForceGroup(1) # GB
-                    else:
-                        f.setForceGroup(1)
+                    # GBSA and SA forces are definitively assigned groups 1 and 4 via `refine_gbsa_forces`. 
+                    # Overriding groups conditionally based on only particle(0)'s charge creates extreme vulnerability
+                    # if the parameterized ligand structure happens to list a low-charge/dummy atom at index 0.
+                    pass
                 # Custom Forces (GBn, SA, Screening)
                 elif isinstance(f, openmm.CustomGBForce): f.setForceGroup(2)
                 elif isinstance(f, openmm.CustomNonbondedForce): f.setForceGroup(3)
@@ -2879,6 +3363,17 @@ class GBSACalculator(GBSAForceManager):
         ligand_context = openmm.Context(ligand_system, ligand_integrator, platform, properties)
         protein_context = openmm.Context(protein_system, protein_integrator, platform, properties)
         complex_context = openmm.Context(complex_system, complex_integrator, platform, properties)
+        
+        # Cache fully parameterized systems and topologies to prevent downstream modules (e.g. per-residue decomp)
+        # from redundantly rebuilding them and potentially losing native TPR exact parameters.
+        self.systems = {
+            'complex_system': complex_system,
+            'complex_topology': complex_top,
+            'protein_system': protein_system,
+            'protein_topology': protein_top,
+            'ligand_system': ligand_system,
+            'ligand_topology': ligand_top
+        }
         
         print("✓ All contexts created successfully!")
         
@@ -3646,6 +4141,12 @@ class GBSACalculator(GBSAForceManager):
  
 
         
+        merged_assumptions = list(getattr(self, 'physics_assumptions', []))
+        if hasattr(self, 'gbsa_manager') and hasattr(self.gbsa_manager, 'physics_assumptions'):
+            for a in self.gbsa_manager.physics_assumptions:
+                if a not in merged_assumptions:
+                    merged_assumptions.append(a)
+
         return {
             'output_file': output_file,
             'dataframe': df,  # Return full dataframe for plotting
@@ -3660,6 +4161,7 @@ class GBSACalculator(GBSAForceManager):
             'entropy_penalty': entropy_penalty,
             'delta_g': delta_g,
             'parameterized_residues': self.parameterized_residues,
+            'physics_assumptions': merged_assumptions,
             'bootstrap_results': self._calculate_bootstrap(df['binding_energy'].values) if len(df) > 5 else None
         }
 

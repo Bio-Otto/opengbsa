@@ -194,6 +194,35 @@ class HTMLReportGenerator:
             logger.error(f"Entropy calculation error: {e}")
             return None, None
 
+    def _extract_global_entropy(self, global_results=None, df_glob=None):
+        """
+        Prefer entropy already computed by main MM/GBSA pipeline.
+        Falls back to local approximation only when unavailable.
+        Returns (neg_TdS, method_name, delta_g_total_or_none).
+        """
+        neg_tds = None
+        method = None
+        delta_g = None
+
+        if isinstance(global_results, dict):
+            if global_results.get('entropy_penalty') is not None:
+                try:
+                    neg_tds = float(global_results.get('entropy_penalty'))
+                    method = "Interaction Entropy"
+                except Exception:
+                    neg_tds = None
+                    method = None
+            if global_results.get('delta_g') is not None:
+                try:
+                    delta_g = float(global_results.get('delta_g'))
+                except Exception:
+                    delta_g = None
+
+        if neg_tds is None:
+            neg_tds, method = self._calculate_entropy_term(df_glob)
+
+        return neg_tds, method, delta_g
+
     def generate_report(self, analysis_results, frame_data, global_results=None, complex_pdb_path=None, ligand_resname=None):
         """
         Generate the publication-ready interactive HTML report.
@@ -204,23 +233,8 @@ class HTMLReportGenerator:
             import plotly.io as pio
             
             # 1. Prepare Base Template
-            html_content = self.html_template.replace(
-                '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>', 
-                '<!-- Plotly Embedded -->'
-            ).replace(
-                '<script src="https://3Dmol.org/build/3Dmol-min.js"></script>',
-                '<!-- 3Dmol Embedded -->'
-            ).replace(
-                '<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">',
-                '<style>/* Basic Reset */ body{margin:0;padding:20px;font-family:"Segoe UI",sans-serif;background:#f4f4f4;} .card{background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);margin-bottom:20px;padding:20px;} .row{display:flex;flex-wrap:wrap;gap:20px;} .col-md-12{width:100%;} .col-md-8{flex:2;} .col-md-4{flex:1;} .btn{padding:8px 16px;cursor:pointer;background:#007bff;color:#fff;border:none;border-radius:4px;} .btn:hover{background:#0056b3;} label{display:block;margin-top:10px;font-weight:600;} input[type=range]{width:100%;} .viewer_controls{background:#eee;padding:15px;border-radius:5px;} </style><!-- Bootstrap Removed -->'
-            )
-            
-            # Error Console
-            html_content = html_content.replace('<body>', '<body><div id="error-console" style="color:red; background:#ffe6e6; padding:10px; margin:20px; border:1px solid red; display:none;"></div>')
-            
-            # 2. Embed Libraries
-            threedmol_js = self._get_3dmol_js()
-            html_content = html_content.replace('<!-- 3Dmol Embedded -->', f'<script>{threedmol_js}</script>')
+            # Keep CDN includes in template and avoid duplicating error-console block.
+            html_content = self.html_template
             
             # 3. Fill Statistics
             stats_html = self._generate_stats_html(analysis_results, global_results=global_results)
@@ -236,14 +250,14 @@ class HTMLReportGenerator:
                                               f'<div style="width:100%;">{controls_html}</div>')
             
             # 5. Generate Plotly
-            plotly_div = self._generate_plotly_div(frame_data, global_results=global_results)
+            plotly_div = self._generate_plotly_div(
+                frame_data,
+                global_results=global_results,
+                analysis_results=analysis_results
+            )
             plotly_container = f'<div style="min-height: 700px; height: auto; width: 100%;">{plotly_div}</div>'
             html_content = html_content.replace('<div id="heatmap-plot" class="plot-container"></div>', plotly_container)
             html_content = html_content.replace('$(PLOTLY_SCRIPT)', '// Embedded Plotly')
-            
-            # Error Handler
-            error_script = """<script>window.onerror = function(msg, url, line) { document.getElementById('error-console').style.display = 'block'; document.getElementById('error-console').innerHTML += 'Page Error: ' + msg + '<br>'; }</script>"""
-            html_content = html_content.replace('</body>', f'{error_script}</body>')
             
             output_file = os.path.join(self.output_dir, "interactive_report.html")
             with open(output_file, "w", encoding="utf-8") as f:
@@ -254,269 +268,317 @@ class HTMLReportGenerator:
             import traceback
             traceback.print_exc()
             return None
-            
-            # 6. Generate Plotly Heatmap (Embedded)
-            # Include explicit height container to prevent collapse
-            plotly_div = self._generate_plotly_div(frame_data)
-            plotly_container = f'<div style="height: 700px; width: 100%;">{plotly_div}</div>'
-            
-            html_content = html_content.replace('<div id="heatmap-plot" class="plot-container"></div>', plotly_container)
-            html_content = html_content.replace('$(PLOTLY_SCRIPT)', '// Embedded Plotly')
-            
-            # Add global error handler
-            error_script = """
-            <script>
-            window.onerror = function(msg, url, line) {
-                var c = document.getElementById('error-console');
-                c.style.display = 'block';
-                c.innerHTML += 'Error: ' + msg + ' (' + line + ')<br>';
-            }
-            </script>
-            """
-            html_content = html_content.replace('</body>', f'{error_script}</body>')
-            
-            # Save Report
-            output_file = os.path.join(self.output_dir, "interactive_report.html")
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(html_content)
-                
-            logger.info(f"Report saved to: {output_file}")
-            print(f"  Interactive report saved: {output_file}")
-            return output_file
-            
-        except Exception as e:
-            logger.error(f"Failed to generate HTML report: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
 
     def _get_3dmol_js(self):
         """Not used with PandaMap iframe."""
         return "// 3Dmol.js not needed (PandaMap embedded)"
 
-    def _generate_plotly_div(self, frame_data, global_results=None):
-        """Generate Multiple Plotly Divs (Dashboard) with Embedded JS."""
+    def _generate_plotly_div(self, frame_data, global_results=None, analysis_results=None):
+        """Generate publication-ready Plotly dashboard HTML."""
         if not frame_data:
             return "<div>No Data</div>"
-        
+
         try:
             import pandas as pd
             import plotly.graph_objects as go
             import plotly.io as pio
-            from plotly.subplots import make_subplots
-            
-            # Check Config
+
             reporting_settings = self.config.get('reporting_settings', {})
             include_all_plots = reporting_settings.get('include_all_plots', True)
-            
-            df = pd.DataFrame(frame_data)
+
+            df = pd.DataFrame(frame_data).copy()
+            if 'frame_number' not in df.columns:
+                df['frame_number'] = np.arange(1, len(df) + 1, dtype=int)
+
+            # Plotly export configuration for publication-ready snapshots.
+            # Prefer SVG for vector-quality figures (journals), and provide high-res PNG fallback.
+            export_format = reporting_settings.get("export_format", "png")
+            export_width = int(reporting_settings.get("export_width", 4200))
+            export_height = int(reporting_settings.get("export_height", 2800))
+            plot_config = {
+                "responsive": True,
+                "displaylogo": False,
+                "toImageButtonOptions": {
+                    "format": export_format,
+                    "filename": "mmgbsa_publication_plot",
+                    "width": export_width,
+                    "height": export_height,
+                    "scale": 2
+                }
+            }
+
+            plotly_js_included = False
+
+            def _to_html(fig):
+                nonlocal plotly_js_included
+                fig.update_layout(
+                    template="plotly_white",
+                    font=dict(size=17, color="#111", family="Arial, Helvetica, sans-serif"),
+                    title=dict(font=dict(size=24, family="Arial, Helvetica, sans-serif")),
+                    plot_bgcolor="#fbfcff",
+                    paper_bgcolor="white",
+                    xaxis=dict(
+                        showline=True, linewidth=1.8, linecolor="black", mirror=True, ticks="outside",
+                        showgrid=True, gridcolor="rgba(31,41,55,0.12)", zeroline=False
+                    ),
+                    yaxis=dict(
+                        showline=True, linewidth=1.8, linecolor="black", mirror=True, ticks="outside",
+                        showgrid=True, gridcolor="rgba(31,41,55,0.12)", zeroline=False
+                    ),
+                    legend=dict(
+                        bgcolor="rgba(255,255,255,0.92)",
+                        bordercolor="rgba(0,0,0,0.2)",
+                        borderwidth=1
+                    )
+                )
+                include_js = 'inline' if not plotly_js_included else False
+                plotly_js_included = True
+                return pio.to_html(fig, full_html=False, include_plotlyjs=include_js, config=plot_config)
+
+            # Resolve global dataframe robustly
             df_glob = None
             if global_results is not None:
-                if isinstance(global_results, dict) and 'dataframe' in global_results:
-                     df_glob = global_results['dataframe']
-                else:
-                     try:
-                         df_glob = pd.DataFrame(global_results)
-                     except Exception:
-                         df_glob = None # Fallback if conversion fails
-            
-            # Data selection logic
+                try:
+                    if isinstance(global_results, dict) and 'dataframe' in global_results:
+                        candidate = global_results['dataframe']
+                        df_glob = candidate if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                    else:
+                        df_glob = pd.DataFrame(global_results)
+                except Exception:
+                    df_glob = None
+
+            if df_glob is not None and not df_glob.empty:
+                df_glob = df_glob.reset_index(drop=True).copy()
+                if 'binding_energy' in df_glob.columns:
+                    df_glob['binding_energy'] = pd.to_numeric(df_glob['binding_energy'], errors='coerce')
+                # Align frame counts; if impossible, disable global component plots.
+                if len(df_glob) != len(df):
+                    aligned = None
+                    if 'frame_index' in df.columns:
+                        try:
+                            idx = pd.to_numeric(df['frame_index'], errors='coerce').astype('Int64')
+                            idx_list = [int(i) for i in idx.tolist() if pd.notna(i)]
+                            if len(idx_list) == len(df) and max(idx_list, default=-1) < len(df_glob):
+                                aligned = df_glob.iloc[idx_list].reset_index(drop=True)
+                        except Exception:
+                            aligned = None
+                    if aligned is None and len(df_glob) > len(df):
+                        aligned = df_glob.iloc[:len(df)].reset_index(drop=True)
+                    df_glob = aligned
+                if df_glob is None or 'binding_energy' not in df_glob.columns:
+                    df_glob = None
+
+            # Residue selection for heatmap/top-bars
             energy_cols = [col for col in df.columns if col.endswith('_total')]
-            mean_energies = {col: df[col].mean() for col in energy_cols}
+            if not energy_cols:
+                return "<div class='alert alert-warning'>No per-residue frame decomposition columns found for plotting.</div>"
+
+            mean_energies = {col: pd.to_numeric(df[col], errors='coerce').mean() for col in energy_cols}
             top_n = 20
             sorted_residues = sorted(mean_energies.items(), key=lambda x: x[1])[:top_n]
-            
+            used_cols = set()
+            selected_top = []
+
+            df_res = None
+            if isinstance(analysis_results, dict) and 'dataframe' in analysis_results:
+                try:
+                    candidate = analysis_results['dataframe']
+                    df_res = candidate if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                except Exception:
+                    df_res = None
+
+            if df_res is not None and {'residue_name', 'residue_number', 'total'}.issubset(df_res.columns):
+                try:
+                    top_res_df = df_res.nsmallest(top_n, 'total')
+                    for _, row in top_res_df.iterrows():
+                        res_name = str(row['residue_name']).strip()
+                        res_num = int(row['residue_number'])
+                        target_mean = float(row['total'])
+                        candidates = [c for c in energy_cols if c.upper().startswith(res_name.upper()) and c not in used_cols]
+                        if not candidates:
+                            continue
+                        best_col = min(candidates, key=lambda c: abs(float(mean_energies.get(c, 0.0)) - target_mean))
+                        used_cols.add(best_col)
+                        selected_top.append((f"{res_name}{res_num}", best_col, target_mean))
+                except Exception:
+                    selected_top = []
+            if not selected_top:
+                for col, mean_val in sorted_residues:
+                    clean_name = col.replace('_total', '').replace('_A', '')
+                    selected_top.append((clean_name, col, float(mean_val)))
+
+            x_frames = df['frame_number']
             plots_html = []
-            
-            # --- Plot 1: Binding Energy Timeline (Components) ---
-            if include_all_plots:
-                # Component Logic - Use Global Data for all components
-                
-                # Global Data (Contains VdW, Elec, GB, SA components)
-                if df_glob is not None and not df_glob.empty:
-                    series_total = df_glob['binding_energy']
-                    
-                    # Check if we have VdW and Electrostatic in global data
-                    if 'delta_vdw' in df_glob.columns and 'delta_elec' in df_glob.columns:
-                        series_vdw = df_glob['delta_vdw']
-                        series_elec = df_glob['delta_elec']
-                    elif 'delta_nb' in df_glob.columns:
-                        # If only non-bonded total, split it (approximation)
-                        series_vdw = df_glob['delta_nb'] * 0.75  # Rough approximation
-                        series_elec = df_glob['delta_nb'] * 0.25
-                    else:
-                        # Fallback: try per-residue sum (legacy)
-                        vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
-                        elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
-                        series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0, index=df.index)
-                        series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0, index=df.index)
-                    
-                    # Solvation
-                    series_solv = df_glob['delta_gb'] + df_glob['delta_sa']
+
+            # Build canonical component series
+            vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
+            elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
+            solv_cols = [c for c in df.columns if c.endswith('_solvation')]
+
+            if df_glob is not None and not df_glob.empty:
+                series_total = pd.to_numeric(df_glob['binding_energy'], errors='coerce').reset_index(drop=True)
+                if {'delta_vdw', 'delta_elec'}.issubset(df_glob.columns):
+                    series_vdw = pd.to_numeric(df_glob['delta_vdw'], errors='coerce')
+                    series_elec = pd.to_numeric(df_glob['delta_elec'], errors='coerce')
+                elif 'delta_nb' in df_glob.columns:
+                    nb = pd.to_numeric(df_glob['delta_nb'], errors='coerce')
+                    series_vdw = nb * 0.75
+                    series_elec = nb * 0.25
                 else:
-                    # Fallback to per-residue decomposition (Warn: Solvation incorrect)
-                    vdw_cols = [c for c in df.columns if c.endswith('_vdw')]
-                    elec_cols = [c for c in df.columns if c.endswith('_electrostatic')]
-                    solv_cols = [c for c in df.columns if c.endswith('_solvation')]
-                    
-                    series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0, index=df.index)
-                    series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0, index=df.index)
-                    series_solv = df[solv_cols].sum(axis=1) if solv_cols else pd.Series(0, index=df.index)
-                    series_total = df[energy_cols].sum(axis=1)
-                
-                # Line Plot
+                    series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0.0, index=df.index)
+                    series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0.0, index=df.index)
+
+                if {'delta_gb', 'delta_sa'}.issubset(df_glob.columns):
+                    series_solv = pd.to_numeric(df_glob['delta_gb'], errors='coerce') + pd.to_numeric(df_glob['delta_sa'], errors='coerce')
+                elif 'delta_gb' in df_glob.columns:
+                    series_solv = pd.to_numeric(df_glob['delta_gb'], errors='coerce')
+                else:
+                    series_solv = df[solv_cols].sum(axis=1) if solv_cols else pd.Series(0.0, index=df.index)
+            else:
+                series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0.0, index=df.index)
+                series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0.0, index=df.index)
+                series_solv = df[solv_cols].sum(axis=1) if solv_cols else pd.Series(0.0, index=df.index)
+                series_total = df[energy_cols].sum(axis=1)
+
+            neg_TdS, _, _ = self._extract_global_entropy(global_results, df_glob)
+            series_free = (series_total + neg_TdS) if neg_TdS is not None else None
+
+            if include_all_plots:
+                # Plot 1: Time series
                 fig_line = go.Figure()
-                fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_total, mode='lines', name='Total Binding (ΔH)', line=dict(color='black', width=3)))
-                
-                # Add Free Energy (Evidence of Entropy)
-                neg_TdS, s_method = self._calculate_entropy_term(df_glob)
-                if neg_TdS is not None:
-                     series_free = series_total + neg_TdS
-                     fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_free, mode='lines', name='Est. Free Energy (ΔG)', line=dict(color='#d62728', width=2.5)))
-                     
-                fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_vdw, mode='lines', name='Van der Waals', line=dict(color='green', width=1.5, dash='dot')))
-                fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_elec, mode='lines', name='Electrostatic', line=dict(color='blue', width=1.5, dash='dot')))
-                fig_line.add_trace(go.Scatter(x=df['frame_number'], y=series_solv, mode='lines', name='Solvation', line=dict(color='orange', width=1.5, dash='dot')))
+                x_line = pd.to_numeric(x_frames, errors='coerce').fillna(0).astype(int).tolist()
+                y_total = pd.to_numeric(series_total, errors='coerce').fillna(0.0).astype(float).tolist()
+                fig_line.add_trace(go.Scatter(
+                    x=x_line, y=y_total, mode='lines', name='Total Binding (ΔH)',
+                    line=dict(color='#111827', width=3.4, shape='spline', smoothing=0.25)
+                ))
+                if series_free is not None:
+                    y_free = pd.to_numeric(series_free, errors='coerce').fillna(0.0).astype(float).tolist()
+                    fig_line.add_trace(go.Scatter(
+                        x=x_line, y=y_free, mode='lines', name='Est. Free Energy (ΔG)',
+                        line=dict(color='#D55E00', width=3.0, shape='spline', smoothing=0.2)
+                    ))
+                y_vdw = pd.to_numeric(series_vdw, errors='coerce').fillna(0.0).astype(float).tolist()
+                y_elec = pd.to_numeric(series_elec, errors='coerce').fillna(0.0).astype(float).tolist()
+                y_solv = pd.to_numeric(series_solv, errors='coerce').fillna(0.0).astype(float).tolist()
+                fig_line.add_trace(go.Scatter(x=x_line, y=y_vdw, mode='lines', name='Van der Waals', line=dict(color='#009E73', width=2.2, dash='dot')))
+                fig_line.add_trace(go.Scatter(x=x_line, y=y_elec, mode='lines', name='Electrostatic', line=dict(color='#0072B2', width=2.2, dash='dot')))
+                fig_line.add_trace(go.Scatter(x=x_line, y=y_solv, mode='lines', name='Solvation', line=dict(color='#CC79A7', width=2.2, dash='dot')))
+                fig_line.update_layout(
+                    title='Energy Components vs Time (inc. Entropy)',
+                    xaxis_title='Frame',
+                    yaxis_title='Energy (kcal/mol)',
+                    height=700,
+                    hovermode='x unified',
+                    legend=dict(orientation="h", y=1.10)
+                )
+                plots_html.append(_to_html(fig_line))
 
-                fig_line.update_layout(title='Energy Components vs Time (inc. Entropy)', xaxis_title='Frame', yaxis_title='Energy (kcal/mol)', height=500, legend=dict(orientation="h", y=1.1))
-                plots_html.append(pio.to_html(fig_line, full_html=False, include_plotlyjs=True)) 
-
-                # --- Plot 2: Mean Components Bar Chart (Summary) ---
+                # Plot 2: Mean components
                 means = {
-                    'Van der Waals': series_vdw.mean(),
-                    'Electrostatic': series_elec.mean(),
-                    'Solvation': series_solv.mean(),
-                    'Total Binding': series_total.mean()
+                    'Van der Waals': float(series_vdw.mean()),
+                    'Electrostatic': float(series_elec.mean()),
+                    'Solvation': float(series_solv.mean()),
+                    'Total Binding': float(series_total.mean())
                 }
                 sems = {
-                    'Van der Waals': series_vdw.sem(),
-                    'Electrostatic': series_elec.sem(),
-                    'Solvation': series_solv.sem(),
-                    'Total Binding': series_total.sem()
+                    'Van der Waals': float(series_vdw.sem()),
+                    'Electrostatic': float(series_elec.sem()),
+                    'Solvation': float(series_solv.sem()),
+                    'Total Binding': float(series_total.sem())
                 }
-                
                 fig_summary = go.Figure(go.Bar(
                     x=list(means.keys()),
                     y=list(means.values()),
-                    error_y=dict(type='data', array=list(sems.values())), # Add Error Bars (SEM)
-                    marker_color=['green', 'blue', 'orange', 'black']
+                    error_y=dict(type='data', array=list(sems.values())),
+                    marker_color=['#009E73', '#0072B2', '#CC79A7', '#1f1f1f']
                 ))
-                fig_summary.update_layout(title='Average Energy Components (kcal/mol)', yaxis_title='Energy (kcal/mol)', height=500)
-                plots_html.append(pio.to_html(fig_summary, full_html=False, include_plotlyjs=False))
+                fig_summary.update_layout(title='Average Energy Components (kcal/mol)', yaxis_title='Energy (kcal/mol)', height=700)
+                plots_html.append(_to_html(fig_summary))
 
-                # --- Plot 3: Top Residues (Bar Chart) ---
-                bar_names = [col.replace('_total', '').replace('_A', '') for col, _ in sorted_residues]
-                bar_values = [val for _, val in sorted_residues]
-                bar_names = bar_names[::-1]
-                bar_values = bar_values[::-1]
-                
-                fig_bar = go.Figure(go.Bar(x=bar_values, y=bar_names, orientation='h', marker=dict(color=bar_values, colorscale='RdBu_r', cmin=-5, cmax=5)))
-                fig_bar.update_layout(title=f'Top {top_n} Contributing Residues', xaxis_title='Mean Interaction Energy (kcal/mol)', height=500)
-                plots_html.append(pio.to_html(fig_bar, full_html=False, include_plotlyjs=False))
+                # Plot 3: Top residues
+                bar_names = [label for label, _, _ in selected_top][::-1]
+                bar_values = [mean_val for _, _, mean_val in selected_top][::-1]
+                fig_bar = go.Figure(go.Bar(
+                    x=bar_values,
+                    y=bar_names,
+                    orientation='h',
+                    marker=dict(color=bar_values, colorscale='RdBu_r', cmin=-5, cmax=5)
+                ))
+                fig_bar.update_layout(title=f'Top {top_n} Contributing Residues', xaxis_title='Mean Interaction Energy (kcal/mol)', height=700)
+                plots_html.append(_to_html(fig_bar))
 
-            # --- Plot 4: Heatmap (Always Included) ---
-            z_data = []
-            y_labels = []
-            x_labels = df['frame_number'].tolist()
-            
-            for col, mean_val in sorted_residues:
-                clean_name = col.replace('_total', '').replace('_A', '')
-                y_labels.append(f"{clean_name} ({mean_val:.1f})")
-                z_data.append(df[col].tolist())
-            
+            # Plot 4: Heatmap
+            z_data = [pd.to_numeric(df[col], errors='coerce').fillna(0.0).tolist() for _, col, _ in selected_top]
+            y_labels = [f"{label} ({mean_val:.1f})" for label, _, mean_val in selected_top]
             fig_heat = go.Figure(data=go.Heatmap(
                 z=z_data,
-                x=x_labels,
+                x=x_frames.tolist(),
                 y=y_labels,
                 colorscale='RdBu',
                 reversescale=True,
                 zmid=0,
-                zmin=-5.0, 
+                zmin=-5.0,
                 zmax=5.0,
                 colorbar=dict(title='Energy')
             ))
-            
             fig_heat.update_layout(
                 title='Per-Residue Interaction Energy Timeline',
                 xaxis_title='Frame Number',
                 yaxis_title='Residue',
-                autosize=True,
-                height=600,
-                margin=dict(l=150, r=50, b=50, t=50)
+                height=900,
+                margin=dict(l=220, r=60, b=70, t=80)
             )
-            
-            # If line/bar plots were skipped, this is the first plot, so include JS
-            include_js = True if not plots_html else False
-            plots_html.append(pio.to_html(fig_heat, full_html=False, include_plotlyjs=include_js))
+            plots_html.append(_to_html(fig_heat))
 
-            # --- Plot 5: Binding Energy Distribution (Histogram) ---
-            if include_all_plots and df_glob is not None:
+            # Plot 5: Distribution
+            if include_all_plots:
                 fig_dist = go.Figure()
-                
-                # Trace 1: Binding Energy (Enthalpy)
+                x_total_dist = pd.to_numeric(series_total, errors='coerce').dropna().astype(float).tolist()
                 fig_dist.add_trace(go.Histogram(
-                    x=series_total,
+                    x=x_total_dist,
                     histnorm='probability density',
+                    nbinsx=50,
                     name='Binding Energy (ΔH)',
-                    marker_color='#6f42c1',
-                    opacity=0.6
+                    marker_color='#0072B2',
+                    opacity=0.55
                 ))
-                
-                # Trace 2: Free Energy (Enthalpy + Entropy)
-                if neg_TdS is not None:
-                     series_free = series_total + neg_TdS
-                     fig_dist.add_trace(go.Histogram(
-                        x=series_free,
+                if series_free is not None:
+                    x_free_dist = pd.to_numeric(series_free, errors='coerce').dropna().astype(float).tolist()
+                    fig_dist.add_trace(go.Histogram(
+                        x=x_free_dist,
                         histnorm='probability density',
+                        nbinsx=50,
                         name='Est. Free Energy (ΔG)',
-                        marker_color='#d62728',
-                        opacity=0.6
+                        marker_color='#D55E00',
+                        opacity=0.55
                     ))
-                     # Add Mean Lines for both
-                     mean_G = series_free.mean()
-                     fig_dist.add_vline(x=mean_G, line_width=2, line_dash="dash", line_color="#d62728")
-                     fig_dist.add_annotation(x=mean_G, y=1.05, yref="paper", text=f"ΔG: {mean_G:.1f}", showarrow=False, bgcolor="white")
-
-                # Add Mean Line for Enthalpy
-                mean_H = series_total.mean()
-                fig_dist.add_vline(x=mean_H, line_width=2, line_dash="dash", line_color="#6f42c1")
-                fig_dist.add_annotation(x=mean_H, y=1.05, yref="paper", text=f"ΔH: {mean_H:.1f}", showarrow=False, bgcolor="white")
-
+                    mean_G = float(pd.Series(series_free).mean())
+                    fig_dist.add_vline(x=mean_G, line_width=2.4, line_dash="dash", line_color="#D55E00")
+                    fig_dist.add_annotation(x=mean_G, y=1.04, yref="paper", text=f"ΔG: {mean_G:.1f}", showarrow=False, bgcolor="white")
+                mean_H = float(pd.Series(series_total).mean())
+                fig_dist.add_vline(x=mean_H, line_width=2.4, line_dash="dash", line_color="#0072B2")
+                fig_dist.add_annotation(x=mean_H, y=1.10, yref="paper", text=f"ΔH: {mean_H:.1f}", showarrow=False, bgcolor="white")
                 fig_dist.update_layout(
                     title='Distribution: Binding Energy vs Free Energy',
                     xaxis_title='Energy (kcal/mol)',
                     yaxis_title='Density',
-                    height=500,
-                    bargap=0.1,
-                    barmode='overlay' # Crucial for overlapping histograms
+                    height=700,
+                    bargap=0.08,
+                    barmode='overlay',
+                    hovermode='x unified'
                 )
-                plots_html.append(pio.to_html(fig_dist, full_html=False, include_plotlyjs=False))
+                plots_html.append(_to_html(fig_dist))
 
-            # Concatenate
             dashboard_html = '<div class="row">'
             for plot in plots_html:
                 dashboard_html += f'<div class="col-12 mb-4">{plot}</div>'
             dashboard_html += '</div>'
-            
             return dashboard_html
-            
+
         except Exception as e:
             return f"<div>Plot Generation Failed: {e}</div>"
 
-    def _generate_stats_html(self, results):
-        """Generate HTML for summary statistics cards."""
-        if not results:
-            return "<div class='alert alert-warning'>No results available</div>"
-            
-        mean_bind = results.get('total_contribution', 0.0) # Note: 'total_contribution' in analysis_results refers to specific sum, verify structure
-        # Actually analysis_results structure from decomposition.py:
-        # 'total_contribution' = df['total'].sum() for one frame? No, it's averaged results.
-        # Let's use simple generic stats if available
-        
-        # We prefer Global Binding Energy if possible, but 'analysis_results' passed here is usually the Per-Residue summary.
-        # Let's assume we pass the global 'mmgbsa_results' mainly? 
-        # Or better, we just show Hotspot info.
-        
     def _generate_stats_html(self, analysis_results, global_results=None):
         """Generate Global Statistics HTML (Table)."""
         html = ""
@@ -528,24 +590,22 @@ class HTMLReportGenerator:
         
         df = None
         if global_results:
-             if isinstance(global_results, dict) and 'dataframe' in global_results:
-                 df = global_results['dataframe']
-             else:
-                 try:
-                     import pandas as pd
-                     df = pd.DataFrame(global_results)
-                 except Exception:
-                     df = None
-             
-             if 'binding_energy' in df.columns:
-                 mean_bind = f"{df['binding_energy'].mean():.2f}"
-                 std_bind = f"{df['binding_energy'].std():.2f}"
-                 sem_bind = f"{df['binding_energy'].sem():.2f}"
-             
-             if 'delta_nb' in df.columns:
-                 mean_nb = df['delta_nb'].mean()
-                 mean_gb = df['delta_gb'].mean()
-                 mean_sa = df['delta_sa'].mean()
+            if isinstance(global_results, dict) and 'dataframe' in global_results:
+                candidate = global_results['dataframe']
+                try:
+                    df = candidate if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
+                except Exception:
+                    df = None
+            else:
+                try:
+                    df = pd.DataFrame(global_results)
+                except Exception:
+                    df = None
+            
+            if df is not None and 'binding_energy' in df.columns:
+                mean_bind = f"{df['binding_energy'].mean():.2f}"
+                std_bind = f"{df['binding_energy'].std():.2f}"
+                sem_bind = f"{df['binding_energy'].sem():.2f}"
         
         # Create Enhanced Table
         html += """
@@ -565,7 +625,7 @@ class HTMLReportGenerator:
         # Total Binding
         html += f"""
                     <tr style="font-weight:bold; background:#f8f9fa;">
-                        <td>Total Binding Energy (ΔG)</td>
+                        <td>Total Binding Enthalpy (ΔH)</td>
                         <td>{mean_bind}</td>
                         <td>{std_bind}</td>
                         <td>{sem_bind}</td>
@@ -574,12 +634,12 @@ class HTMLReportGenerator:
         
         # Components (if DF available)
         if df is not None:
-             # Calculate Entropy using helper
-             neg_TdS, method_name = self._calculate_entropy_term(df)
+             # Prefer entropy reported by the main pipeline (terminal-consistent)
+             neg_TdS, method_name, delta_G_reported = self._extract_global_entropy(global_results, df)
              
              if neg_TdS is not None:
                  delta_H_mean = df['binding_energy'].mean()
-                 delta_G_total = delta_H_mean + neg_TdS
+                 delta_G_total = delta_G_reported if delta_G_reported is not None else (delta_H_mean + neg_TdS)
                  
                  html += f"""
                     <tr>
@@ -589,7 +649,7 @@ class HTMLReportGenerator:
                         <td>N/A</td>
                     </tr>
                     <tr style="background:#e8f4f8; font-weight:bold;">
-                        <td>Total ΔG (inc. Entropy)</td>
+                        <td>Total Binding Free Energy (ΔG)</td>
                         <td>{delta_G_total:.2f}</td>
                         <td>-</td>
                         <td>-</td>
@@ -631,7 +691,8 @@ class HTMLReportGenerator:
         # Add Per-Residue Component Breakdown Table
         if analysis_results and 'dataframe' in analysis_results:
             try:
-                df_res = analysis_results['dataframe']
+                candidate = analysis_results['dataframe']
+                df_res = candidate if isinstance(candidate, pd.DataFrame) else pd.DataFrame(candidate)
                 
                 # Check if we have component columns
                 has_vdw = 'vdw' in df_res.columns or 'complex_vdw' in df_res.columns
@@ -712,9 +773,13 @@ class HTMLReportGenerator:
         """Embed PandaMap HTML output."""
         if not pandamap_html_path or not os.path.exists(pandamap_html_path):
             return "// No PandaMap", "<div class='alert alert-warning'>PandaMap 3D report not found.</div>"
+        if not str(pandamap_html_path).lower().endswith(".html"):
+            return "// No PandaMap", "<div class='alert alert-warning'>PandaMap output is not an HTML file; 3D panel disabled.</div>"
 
         with open(pandamap_html_path, 'r', encoding='utf-8') as f:
             panda_content = f.read()
+        if "<html" not in panda_content.lower():
+            return "// No PandaMap", "<div class='alert alert-warning'>PandaMap HTML content is invalid; 3D panel disabled.</div>"
         
         # Escape for srcdoc
         import html

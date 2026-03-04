@@ -229,9 +229,48 @@ class MMGBSARunner:
             nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             cache_dir=cache_dir
         )
+
+        # Apply platform separation settings (analysis/decomposition) when provided.
+        platform_settings = self.config.get('platform_settings', {})
+        if platform_settings and hasattr(calculator, 'set_platform_settings'):
+            calculator.set_platform_settings(platform_settings)
         
         return calculator
     
+    def _resolve_binding_mode_selections(self):
+        """
+        Translate `binding_mode` config option into receptor/ligand MDTraj selections.
+        
+        Modes:
+          standard / dimer_ligand — all protein chains = receptor, small molecule = ligand.
+            This is the default behaviour. Both modes are identical; `dimer_ligand` is
+            provided as a self-documenting alias when the binding site spans both chains.
+          ppi — chain 0 = receptor, chain 1 = ligand.
+            For protein-protein interaction analysis. No small-molecule ligand_mol needed.
+        
+        Returns:
+            (receptor_selection, ligand_selection) — both may be None (= auto-detect).
+        """
+        analysis_settings = self.config.get('analysis_settings', {})
+        binding_mode = analysis_settings.get('binding_mode', 'standard')
+        
+        # Manual overrides always win
+        manual_rec = analysis_settings.get('receptor_selection')
+        manual_lig = analysis_settings.get('ligand_selection')
+        
+        if binding_mode == 'ppi':
+            receptor_selection = manual_rec if manual_rec else 'chainid 0'
+            ligand_selection   = manual_lig if manual_lig else 'chainid 1'
+            log.info(f"Binding mode: ppi  (receptor='{receptor_selection}', ligand='{ligand_selection}')")
+        else:
+            # standard / dimer_ligand — small molecule auto-detected, all protein = receptor
+            receptor_selection = manual_rec  # None = auto (all non-ligand)
+            ligand_selection   = manual_lig  # None = auto (detect by resname)
+            label = 'dimer_ligand' if binding_mode == 'dimer_ligand' else 'standard'
+            log.info(f"Binding mode: {label}  (receptor=all protein chains, ligand=small molecule)")
+        
+        return receptor_selection, ligand_selection
+
     def run_analysis(self):
         """Run complete MM/GBSA analysis pipeline"""
         
@@ -326,6 +365,9 @@ class MMGBSARunner:
             'frame_selection': analysis_settings.get('frame_selection', 'sequential')
         }
         
+        # Resolve receptor/ligand selections from binding_mode (or manual overrides)
+        resolved_receptor_sel, resolved_ligand_sel = self._resolve_binding_mode_selections()
+        
         mmgbsa_results = calculator.run_comprehensive(
             ligand_mol=input_files.get('ligand_mol'),
             complex_pdb=input_files['complex_pdb'],
@@ -333,10 +375,14 @@ class MMGBSARunner:
             ligand_pdb=input_files.get('ligand_pdb'),
             max_frames=analysis_settings.get('max_frames', 50),
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
+            frame_start=frame_params.get('frame_start'),
+            frame_end=frame_params.get('frame_end'),
+            frame_stride=frame_params.get('frame_stride'),
+            frame_selection=frame_params.get('frame_selection', 'sequential'),
             qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
             output_dir=output_dir,
-            ligand_selection=analysis_settings.get('ligand_selection'),
-            receptor_selection=analysis_settings.get('receptor_selection'),
+            ligand_selection=resolved_ligand_sel,
+            receptor_selection=resolved_receptor_sel,
             receptor_topology=input_files.get('receptor_topology'),
             ligand_topology=input_files.get('ligand_topology'),
             solvated_topology=input_files.get('solvated_topology'),
@@ -426,7 +472,10 @@ class MMGBSARunner:
             }
             
             decomp_results = self._run_per_residue_decomposition(
-                calculator, input_files, analysis_settings, frame_params, output_dir
+                calculator, input_files, analysis_settings, frame_params, output_dir,
+                receptor_selection=resolved_receptor_sel,
+                ligand_selection=resolved_ligand_sel,
+                mmgbsa_results=mmgbsa_results
             )
             if decomp_results:
                 self.results['decomposition'] = decomp_results
@@ -546,7 +595,8 @@ class MMGBSARunner:
             log.error(f"Entropy analysis failed: {e}")
             return None
     
-    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None):
+    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None,
+                                        receptor_selection=None, ligand_selection=None, mmgbsa_results=None):
         """Run per-residue energy decomposition"""
         try:
             # Enable Parallel Processing
@@ -571,10 +621,18 @@ class MMGBSARunner:
                     'random_seed': 42
                 }
             
+            # When custom selections triggered distillation in run_comprehensive, the
+            # calculator stores the distilled paths as instance attributes.  Use those
+            # so decomposition analyses exactly the same atom subset as the main calculation.
+            decomp_complex_pdb = getattr(calculator, 'distilled_complex_pdb', None) or input_files['complex_pdb']
+            decomp_xtc_file    = getattr(calculator, 'distilled_xtc_file',    None) or input_files['trajectory']
+            if hasattr(calculator, 'distilled_complex_pdb'):
+                log.info(f"Decomposition: using distilled complex PDB: {decomp_complex_pdb}")
+
             decomp_results = decomp_analyzer.run_per_residue_analysis(
                 ligand_mol=input_files.get('ligand_mol'),
-                complex_pdb=input_files['complex_pdb'],
-                xtc_file=input_files['trajectory'],
+                complex_pdb=decomp_complex_pdb,
+                xtc_file=decomp_xtc_file,
                 ligand_pdb=input_files.get('ligand_pdb'),
                 max_frames=analysis_settings.get('max_frames', 50),
                 decomp_frames=analysis_settings.get('decomp_frames', 10),
@@ -586,10 +644,16 @@ class MMGBSARunner:
                 solvated_topology=input_files.get('solvated_topology'),
                 receptor_topology=input_files.get('receptor_topology'),
                 ligand_topology=input_files.get('ligand_topology'),
-                ligand_resname=self.config.get('input_files', {}).get('ligand_resname'),
+                ligand_resname=getattr(calculator, 'ligand_resname', input_files.get('ligand_resname')),
+                decomposition_topology_file=input_files.get('complex_pdb'),
                 output_dir=output_dir,
-                plot_top_residues=analysis_settings.get('plot_top_residues', 10)
+                plot_top_residues=analysis_settings.get('plot_top_residues', 10),
+                receptor_selection=getattr(calculator, 'receptor_selection', receptor_selection),
+                ligand_selection=getattr(calculator, 'ligand_selection', ligand_selection),
+                skip_baseline=True,
+                baseline_results=mmgbsa_results
             )
+
             
             # Generate Interactive HTML Report
             if decomp_results and hasattr(decomp_analyzer, 'frame_data'):
@@ -602,10 +666,13 @@ class MMGBSARunner:
                         viz_pdb = str(temp_pdb)
                     
                     pandamap_path = output_dir / "structure_3d.html"
-                    if not pandamap_path.exists():
-                         pandamap_path = str(Path(viz_pdb).resolve()) if viz_pdb else None # Fallback to PDB if PandaMap missing
+                    # IMPORTANT: HTML reporter expects an HTML file for iframe embedding.
+                    # Do not fall back to a PDB path here, otherwise raw PDB text is embedded
+                    # into srcdoc and breaks interactive report rendering.
+                    if pandamap_path.exists():
+                        pandamap_path = str(pandamap_path.resolve())
                     else:
-                         pandamap_path = str(pandamap_path.resolve())
+                        pandamap_path = None
 
                     html_gen = HTMLReportGenerator(output_dir, config=self.config)
                     html_gen.generate_report(
@@ -660,6 +727,18 @@ class MMGBSARunner:
                         for res in mmgbsa['parameterized_residues']:
                                 f.write(f"  • {res}\n")
                         f.write("\n")
+                        
+                    f.write("PHYSICS ASSUMPTIONS AND FALLBACKS:\n")
+                    f.write("-" * 35 + "\n")
+                    if not mmgbsa.get('physics_assumptions'):
+                        f.write("  • None. The pipeline utilized explicitly structured parameters and pure explicit configurations without defaulting to empirical heuristics.\n\n")
+                    else:
+                        seen = set()
+                        for assumption in mmgbsa['physics_assumptions']:
+                            if assumption not in seen:
+                                f.write(f"  • {assumption}\n")
+                                seen.add(assumption)
+                        f.write("\n")
                 
                 # Additional analysis results
                 if 'entropy' in self.results:
@@ -689,13 +768,63 @@ class MMGBSARunner:
             # Save results summary
             results_file = output_dir / "results_summary.yaml"
             with open(results_file, 'w', encoding='utf-8') as f:
-                yaml.dump(self.results, f, default_flow_style=False, indent=2)
+                yaml.safe_dump(self._sanitize_results_for_yaml(self.results), f, default_flow_style=False, indent=2, sort_keys=False)
             
             log.success(f"Configuration saved: {config_file}")
             log.success(f"Results summary saved: {results_file}")
             
         except Exception as e:
             log.error(f"Results saving failed: {e}")
+
+    def _sanitize_results_for_yaml(self, data):
+        """
+        Convert runtime result objects (DataFrame, ndarray, Path, numpy scalars, etc.)
+        into compact YAML-safe summaries.
+        """
+        try:
+            import pandas as pd
+            import numpy as np
+        except Exception:
+            pd = None
+            np = None
+
+        if data is None:
+            return None
+
+        # Convert numpy scalar types before primitive checks; np.float64 is also
+        # an instance of float and would otherwise leak into safe_dump unchanged.
+        if np is not None and isinstance(data, np.generic):
+            return data.item()
+        if isinstance(data, (str, int, float, bool)):
+            return data
+        if isinstance(data, Path):
+            return str(data)
+        if np is not None and isinstance(data, np.ndarray):
+            return {
+                'type': 'ndarray',
+                'shape': list(data.shape),
+                'dtype': str(data.dtype)
+            }
+        if pd is not None and isinstance(data, pd.DataFrame):
+            return {
+                'type': 'DataFrame',
+                'rows': int(len(data)),
+                'columns': [str(c) for c in data.columns.tolist()]
+            }
+
+        if isinstance(data, dict):
+            return {str(k): self._sanitize_results_for_yaml(v) for k, v in data.items()}
+        if isinstance(data, (list, tuple, set)):
+            out = [self._sanitize_results_for_yaml(v) for v in list(data)]
+            if len(out) > 200:
+                return {
+                    'type': type(data).__name__,
+                    'count': len(out),
+                    'sample': out[:50]
+                }
+            return out
+
+        return str(data)
 
 
 def create_sample_config():

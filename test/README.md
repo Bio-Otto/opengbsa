@@ -12,9 +12,12 @@ Unit tests for individual components.
 - `test_gasteiger.py`: Charge assignment validation
 - `test_protein_param.py`: Protein parameterization checks
 
-### `test/integration/`
-Integration tests and main test runners.
-(Currently, main runner is at root `test/run_analysis_test.py`)
+### `test/manual/`
+Manual verification scripts and one-off report/visualization checks.
+- `run_viz_only.py`: Generate visualization artifacts from existing results
+- `check_entropy_values.py`: Quick entropy sanity checks from CSV
+- `verify_interactive_report_fix.py`: Validate interactive report behavior
+- `test_platform_settings.py`: Platform-setting behavior smoke script
 
 ### `test/diagnostics/`
 Debugging and system capability check scripts.
@@ -34,13 +37,14 @@ Helper scripts for fixing and preparing files.
 YAML configuration files for various test cases.
 - `test_complete_config.yaml`
 - `frame_test_config.yaml`
+- `comprehensive/*.yaml`: Comprehensive regression suite configs
 
 ### `test/data/`
 Raw data files (PDB, MOL2, etc.) used by diagnostics.
 (Note: Full test cases like `7khz_monomer_test` and `6xj3_test` remain as directories in `test/`)
 
 ### `test/run_analysis_test.py`
-The primary manual test runner script.
+Primary manual analysis runner script.
 **Usage:**
 ```bash
 python test/run_analysis_test.py test/configs/test_complete_config.yaml
@@ -62,6 +66,11 @@ Use these if you encounter specific errors.
 ```bash
 # Check if your system has correct charges
 python test/diagnostics/check_charges.py
+```
+
+### Running Comprehensive Regression
+```bash
+python test/run_comprehensive_tests.py
 ```
 
 ## 📝 Notes

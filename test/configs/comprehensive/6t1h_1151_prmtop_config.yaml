@@ -1,0 +1,36 @@
+input_files:
+  complex_pdb: test/data/6t1h_1151_comp/complex.prmtop
+  trajectory: test/data/6t1h_1151_comp/md_complex_prod.xtc
+  solvated_topology: test/data/6t1h_1151_comp/replica_1/gro/complex_solv_ions.gro
+  receptor_topology: test/data/6t1h_1151_comp/receptor.prmtop
+  ligand_topology: test/data/6t1h_1151_comp/ligand.prmtop
+output_settings:
+  output_directory: test/results/6t1h_1151_comp
+  analysis_name: 6t1h_1151_comp
+  save_plots: true
+  save_logs: true
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  decomposition_frames: 5
+  frame_start: 0
+  frame_end: 1000
+  frame_stride: 5
+  max_frames: 200
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: interaction
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  report_raw_energies: true
+  decomp_frames: 200
+  sa_model: LCPO
+  nonbonded_cutoff: null
+  parallel_processing: true
+forcefield_settings:
+  protein_forcefield: amber
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL

@@ -428,7 +428,7 @@ class AdvancedVisualization:
         
         plt.tight_layout()
         plt.savefig(plots_dir / f'interaction_analysis_{compound_name}.png', 
-                   dpi=300, bbox_inches='tight')
+                   dpi=600, bbox_inches='tight')
         plt.close()
     
     def _plot_comparison_analysis(self, plots_dir, compound_name):
@@ -496,7 +496,7 @@ class AdvancedVisualization:
         
         plt.tight_layout()
         plt.savefig(plots_dir / f'comparison_analysis_{compound_name}.png', 
-                   dpi=300, bbox_inches='tight')
+                   dpi=600, bbox_inches='tight')
         plt.close()
         
     def _plot_energy_heatmap(self, plots_dir, compound_name):
@@ -538,7 +538,7 @@ class AdvancedVisualization:
         sns.heatmap(plot_data, annot=True, cmap="coolwarm_r", center=0, fmt=".2f")
         plt.title(f"Top Energy Contributors: {compound_name}")
         plt.tight_layout()
-        plt.savefig(plots_dir / f'energy_heatmap_{compound_name}.png', dpi=300)
+        plt.savefig(plots_dir / f'energy_heatmap_{compound_name}.png', dpi=600)
         plt.close()
     
     def _plot_combined_analysis(self, plots_dir, compound_name):
@@ -669,7 +669,7 @@ class AdvancedVisualization:
         
         plt.tight_layout()
         plt.savefig(plots_dir / f'comprehensive_analysis_{compound_name}.png', 
-                   dpi=300, bbox_inches='tight')
+                   dpi=600, bbox_inches='tight')
         plt.close()
     
     def generate_2d_interaction_plot(self, compound_name="Ligand", output_dir=None):
@@ -729,7 +729,7 @@ class AdvancedVisualization:
             plt.grid(True, alpha=0.3)
             
             output_file = output_dir / f"rolling_average_{compound_name}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"  ✅ Rolling average plot saved: {output_file}")
@@ -776,7 +776,7 @@ class AdvancedVisualization:
             plt.grid(True, alpha=0.3)
             
             output_file = output_dir / f"convergence_plot_{compound_name}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"  ✅ Convergence plot saved: {output_file}")
@@ -836,7 +836,7 @@ class AdvancedVisualization:
             plt.title(f'Mean Energy Component Magnitude\n(Absolute Contribution)', fontsize=14)
             
             output_file = output_dir / f"components_pie_{compound_name}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"  ✅ Components Pie Chart saved: {output_file}")
@@ -913,7 +913,7 @@ class AdvancedVisualization:
             plt.legend()
             
             output_file = output_dir / f"entropy_convergence_{compound_name}.png"
-            plt.savefig(output_file, dpi=300, bbox_inches='tight')
+            plt.savefig(output_file, dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"  ✅ Entropy convergence plot saved: {output_file}")
@@ -942,11 +942,11 @@ class AdvancedVisualization:
                 plot = Barcode(df)
                 
                 # Display and save as PNG
-                fig, ax = plot.display(figsize=(10, 8), dpi=300)
+                fig, ax = plot.display(figsize=(10, 8), dpi=600)
                 
                 # Save as PNG
                 png_file = output_dir / f"prolif_barcode_{compound_name.replace(' ', '_')}.png"
-                fig.savefig(png_file, bbox_inches='tight', dpi=300)
+                fig.savefig(png_file, bbox_inches='tight', dpi=600)
                 plt.close(fig)
                 
                 print(f"  ✅ ProLIF Barcode plot saved: {png_file}")
@@ -1373,7 +1373,7 @@ class AdvancedVisualization:
             # Save plot with high quality
             plot_file = output_dir / f"2d_interaction_plot_{compound_name.replace(' ', '_')}.png"
             plt.tight_layout()
-            plt.savefig(plot_file, dpi=300, bbox_inches='tight', 
+            plt.savefig(plot_file, dpi=600, bbox_inches='tight', 
                        facecolor='white', edgecolor='none',
                        pad_inches=0.1)
             plt.close()

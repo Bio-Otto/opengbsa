@@ -1,0 +1,40 @@
+config_file: test/configs/6t1h_6466_gro_config.yaml
+input_files:
+  complex_pdb: /home/bio-otto/Desktop/opengbsa/test/data/6t1h_6466_comp/topol.top
+  trajectory: /home/bio-otto/Desktop/opengbsa/test/data/6t1h_6466_comp/md_complex_prod.xtc
+  solvated_topology: /home/bio-otto/Desktop/opengbsa/test/data/6t1h_6466_comp/topol.top
+  ligand_resname: LIG
+output_settings:
+  output_directory: test/results/6t1h_6466_comp
+  analysis_name: 6t1h_6466_comp
+  save_plots: true
+  save_logs: true
+analysis_settings:
+  method: mmgbsa
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  decomposition_frames: 5
+  frame_start: 0
+  frame_end: 1000
+  frame_stride: 5
+  max_frames: 200
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  solute_dielectric: 1.0
+  solvent_dielectric: 78.5
+  entropy_method: interaction
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  report_raw_energies: true
+  decomp_frames: 200
+  sa_model: LCPO
+  n_jobs: -1
+  force_gromacs_conversion: false
+  parallel_processing: true
+forcefield_settings:
+  protein_forcefield: amber
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL

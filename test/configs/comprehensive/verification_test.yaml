@@ -1,0 +1,27 @@
+input_files:
+  complex_pdb: test/data/3if6_dimer_test/3if6.tpr
+  ligand_mol: test/data/3if6_dimer_test/ligand.sdf
+  trajectory: test/data/3if6_dimer_test/3if6.xtc
+  ligand_resname: LIG
+output_settings:
+  output_directory: mmgbsa_results/verification_test
+  analysis_name: verify_opengbsa
+  save_plots: false
+  save_logs: true
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  max_frames: 10
+  frame_stride: 1
+  frame_selection: sequential
+  use_cache: true
+  verbose: 1
+  entropy_method: interaction
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  decomp_frames: 10
+  parallel_processing: true
+platform_settings:
+  preferred_platform: CUDA
+  decomposition_platform: CPU

@@ -93,6 +93,19 @@ analysis_settings:
   #   - 'none': Entropy is not calculated (Output is Enthalpy only).
   entropy_method: interaction
 
+  # [ADVANCED] Binding Mode — how to partition the complex into receptor and ligand.
+  # Options:
+  #   standard      → (default) all protein chains = receptor, small molecule = ligand.
+  #   dimer_ligand  → alias for standard; documents that the binding site spans both chains
+  #                   of a dimer. The small molecule bridges the two chains.
+  #   ppi           → protein-protein interaction mode: chain 0 = receptor, chain 1 = ligand.
+  #                   No small-molecule ligand_mol needed.
+  #
+  # You can also set manual MDTraj selections; they take precedence over binding_mode:
+  #   receptor_selection: "chainid 0 or chainid 1"
+  #   ligand_selection:   "resname LIG"
+  binding_mode: standard
+
   # [OPTIONAL] System Settings
   verbose: 1      # 1: Standard info, 2: Detailed debug.
   use_cache: true # Reuse previous calculations (Speeds up re-runs).

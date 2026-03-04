@@ -1,0 +1,35 @@
+analysis_settings:
+  dimer_mode: true
+  energy_decomposition: false
+  frame_end: null
+  frame_selection: sequential
+  frame_start: 0
+  frame_stride: 1
+  max_frames: 10
+  qha_analyze_complex: false
+  random_seed: 42
+  receptor_subunits:
+    unit_a: residue 0 to 98
+    unit_b: residue 99 to 197
+  run_per_residue_decomposition: true
+  decomp_frames: 10
+  parallel_processing: true
+  charge_method: gasteiger
+  entropy_method: none
+  gb_model: OBC2
+  protein_forcefield: amber
+  salt_concentration: 0.15
+  solute_dielectric: 2.0
+  solvent_dielectric: 80.0
+  verbose: 1
+input_files:
+  complex_pdb: test/data/3if6_dimer_test/3if6.tpr
+  ligand_mol: test/data/3if6_dimer_test/ligand.sdf
+  trajectory: test/data/3if6_dimer_test/3if6.xtc
+  ligand_resname: LIG
+
+output_settings:
+  output_directory: test/results/dimer_dual_test
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: CPU

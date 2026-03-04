@@ -1,0 +1,34 @@
+config_file: test/configs/7khz_gro_config.yaml
+input_files:
+  complex_pdb: /home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/topol.top
+  trajectory: /home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/md_complex_full.xtc
+  solvated_topology: /home/bio-otto/Desktop/opengbsa/test/data/7khz_gro_test/topol.top
+  ligand_resname: LIG
+output_settings:
+  output_directory: test/results/7khz_gro_test
+  analysis_name: 7khz_gro_test
+analysis_settings:
+  method: mmgbsa
+  max_frames: 50
+  frame_stride: 5
+  frame_selection: sequential
+  use_cache: false
+  verbose: true
+  salt_concentration: 0.15
+  solute_dielectric: 1.0
+  solvent_dielectric: 78.5
+  gb_model: OBC2
+  sa_model: LCPO
+  entropy_method: interaction
+  n_jobs: -1
+  run_per_residue_decomposition: true
+  decomp_frames: 10
+  parallel_processing: true
+advanced_settings:
+  force_gromacs_conversion: false
+  run_per_residue_decomposition: true
+  decomp_frames: 200
+  print_interval: 10
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL

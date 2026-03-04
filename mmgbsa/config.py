@@ -166,10 +166,25 @@ class ConfigManager:
                     continue
             
             value = settings[param]
+            
+            if param == 'max_frames' and value is None:
+                continue
+                
             param_type, min_val, max_val = validation_rule
             
             if not self._validate_parameter(param, value, param_type, min_val, max_val):
                 self.validation_errors.append(f"Invalid parameter value: {param} = {value}")
+        
+        # Validate binding_mode
+        valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
+        binding_mode = settings.get('binding_mode', 'standard')
+        if binding_mode not in valid_binding_modes:
+            self.validation_errors.append(
+                f"Invalid binding_mode '{binding_mode}'. Must be one of: {valid_binding_modes}"
+            )
+        else:
+            # Inject default so downstream code can always read it
+            self.config['analysis_settings']['binding_mode'] = binding_mode
     
     def _validate_cross_fields(self):
         """Validate cross-field dependencies."""
@@ -183,10 +198,11 @@ class ConfigManager:
                 self.validation_errors.append("frame_end must be greater than frame_start")
         
         # Decomposition frames validation
-        max_frames = settings.get('max_frames', 0)
-        decomp_frames = settings.get('decomp_frames', 0)
-        if decomp_frames > max_frames:
-            self.validation_errors.append("decomp_frames cannot be greater than max_frames")
+        max_frames = settings.get('max_frames')
+        decomp_frames = settings.get('decomp_frames')
+        if decomp_frames is not None and max_frames is not None:
+            if decomp_frames > max_frames:
+                self.validation_errors.append("decomp_frames cannot be greater than max_frames")
         
         # Random seed validation
         frame_selection = settings.get('frame_selection')

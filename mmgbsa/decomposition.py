@@ -75,7 +75,9 @@ class PerResidueDecomposition:
                                 frame_start=None, frame_end=None, frame_stride=None,
                                 frame_selection='sequential', random_seed=42, 
                                 solvated_topology=None, receptor_topology=None, ligand_topology=None,
-                                ligand_resname=None, plot_top_residues=10):
+                                ligand_resname=None, plot_top_residues=10,
+                                decomposition_topology_file=None,
+                                receptor_selection=None, ligand_selection=None, skip_baseline=False, baseline_results=None):
         """
         Run complete MM/GBSA analysis with per-residue decomposition
         
@@ -83,6 +85,10 @@ class PerResidueDecomposition:
         -----------
         decomp_frames : int
             Number of frames to use for decomposition (computationally expensive)
+        receptor_selection : str, optional
+            MDTraj selection string for receptor atoms (e.g. 'chainid 0')
+        ligand_selection : str, optional
+            MDTraj selection string for ligand atoms (e.g. 'resname UNK')
         """
         
         if output_dir:
@@ -91,33 +97,47 @@ class PerResidueDecomposition:
         log.section("MM/GBSA WITH PER-RESIDUE DECOMPOSITION")
         
         # Step 1: Run standard MM/GBSA analysis
-        log.info("Running Baseline MM/GBSA Analysis...")
-        
-        mmgbsa_results = self.mmgbsa_calculator.run(
-            ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames,
-            solvated_topology=solvated_topology,
-            receptor_topology=receptor_topology,
-            ligand_topology=ligand_topology
-        )
-        
-        if not mmgbsa_results:
-            log.error("MM/GBSA analysis failed!")
-            return None
-        
-        log.result("Baseline MM/GBSA Binding", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
+        if not skip_baseline:
+            log.info("Running Baseline MM/GBSA Analysis...")
+            
+            mmgbsa_results = self.mmgbsa_calculator.run(
+                ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames,
+                solvated_topology=solvated_topology,
+                receptor_topology=receptor_topology,
+                ligand_topology=ligand_topology,
+                output_dir=output_dir if output_dir else self.output_dir,
+                frame_start=frame_start,
+                frame_end=frame_end,
+                frame_stride=frame_stride,
+                frame_selection=frame_selection,
+                random_seed=random_seed
+            )
+            
+            if not mmgbsa_results:
+                log.error("MM/GBSA analysis failed!")
+                return None
+            
+            log.result("Baseline MM/GBSA Binding", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
+        else:
+            log.info("Skipping redundant Baseline Analysis (Systems already cached)")
+            mmgbsa_results = baseline_results or getattr(self.mmgbsa_calculator, 'results', {})
         
         # Step 2: Per-residue decomposition
         log.section("Per-Residue Energy Decomposition")
-        log.process(f"Analyzing {decomp_frames} frames for detailed decomposition...")
+        frames_msg = decomp_frames if decomp_frames else 'all available'
+        log.process(f"Analyzing {frames_msg} frames for detailed decomposition...")
         
         decomp_results = self._perform_per_residue_decomposition(
             ligand_mol, complex_pdb, xtc_file, ligand_pdb, decomp_frames,
             frame_start=frame_start, frame_end=frame_end, frame_stride=frame_stride,
             frame_selection=frame_selection, random_seed=random_seed,
             solvated_topology=solvated_topology, receptor_topology=receptor_topology,
+            decomposition_topology_file=decomposition_topology_file,
             ligand_resname=ligand_resname,
             salt_concentration=self.mmgbsa_calculator.salt_concentration,
-            plot_top_residues=plot_top_residues
+            plot_top_residues=plot_top_residues,
+            receptor_selection=receptor_selection,
+            ligand_selection=ligand_selection
         )
         
         if decomp_results:
@@ -207,14 +227,27 @@ class PerResidueDecomposition:
                                          xtc_file, ligand_pdb, n_frames,
                                          frame_start=None, frame_end=None, frame_stride=None,
                                          frame_selection='sequential', random_seed=42, solvated_topology=None,
-                                         receptor_topology=None, ligand_resname=None, salt_concentration=None, plot_top_residues=10):
+                                         receptor_topology=None, decomposition_topology_file=None,
+                                         ligand_resname=None, salt_concentration=None,
+                                         plot_top_residues=10, receptor_selection=None, ligand_selection=None):
         """
-        Perform detailed per-residue energy decomposition
+        Perform detailed per-residue energy decomposition.
+        
+        receptor_selection / ligand_selection mirror the same parameters in GBSACalculator.run().
+        When provided they restrict which atoms are treated as receptor vs ligand during
+        the residue-level energy decomposition, consistent with the main MM/GBSA calculation.
         """
         
         try:
             print(f"DEBUG_PERFORM: self.report_raw_energies={self.report_raw_energies}")
             # Load trajectory and get frames for decomposition
+            import os
+            if str(complex_pdb).endswith('.tpr'):
+                 temp_pdb = os.path.join(self.output_dir if self.output_dir else '.', "complex_solvated_from_tpr_for_mdtraj.pdb")
+                 if os.path.exists(temp_pdb):
+                      log.info(f"Intercepting dynamic Native TPR metadata in Decomposition module: {temp_pdb}")
+                      complex_pdb = temp_pdb
+            
             # Load trajectory (Use solvated_topology if available to avoid atom mismatch)
             load_top = solvated_topology if solvated_topology else complex_pdb
             
@@ -226,7 +259,7 @@ class PerResidueDecomposition:
 
             traj = md.load(xtc_file, top=load_top)
             
-            if len(traj) < n_frames:
+            if n_frames is None or len(traj) < n_frames:
                 n_frames = len(traj)
             
             # Select frames based on parameters
@@ -255,7 +288,12 @@ class PerResidueDecomposition:
 
             # Prepare systems for decomposition
             # Use complex_pdb for ParmEd (contains ALL atoms including ligand)
-            systems = self._prepare_decomposition_systems(ligand_mol, complex_pdb, ligand_pdb, complex_pdb)
+            # Use a native topology/parameter file for robust LJ (vdW) recovery when available.
+            # In many workflows `complex_pdb` here is a distilled/temporary PDB without full FF params.
+            topology_for_params = decomposition_topology_file or complex_pdb
+            systems = self._prepare_decomposition_systems(
+                ligand_mol, complex_pdb, ligand_pdb, topology_for_params
+            )
             
             if not systems:
                 return None
@@ -270,8 +308,18 @@ class PerResidueDecomposition:
                 ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
             
             log.info(f"Using Ligand Residue Name: {ligand_resname}")
-            
-            residue_map, ligand_indices = self._build_residue_mapping(complex_topology, ligand_resname)
+            if ligand_selection:
+                log.info(f"Using custom ligand_selection for decomposition: '{ligand_selection}'")
+            if receptor_selection:
+                log.info(f"Using custom receptor_selection for decomposition: '{receptor_selection}'")
+
+            residue_map, ligand_indices = self._build_residue_mapping(
+                complex_topology,
+                ligand_resname,
+                ligand_selection=ligand_selection,
+                receptor_selection=receptor_selection,
+                reference_topology=decomp_traj.topology
+            )
             
             log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
             if len(ligand_indices) == 0:
@@ -294,10 +342,14 @@ class PerResidueDecomposition:
                 n_cores = multiprocessing.cpu_count()
             
             # Prepare for Parallel Execution
-            run_parallel = (n_cores > 1 and len(decomp_traj) > 1)
+            # NOTE: Parallel decomposition is disabled for OpenCL/CUDA as GPU contexts
+            # cannot be safely shared across multiple worker processes.
+            # However, it can be safely enabled for CPU-based calculations.
+            decomposition_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
+            run_parallel = (n_cores > 1 and len(decomp_traj) > 1 and decomposition_platform == 'CPU')
             
             if run_parallel:
-                log.info(f"Running parallel decomposition on {n_cores} cores...")
+                log.info(f"✓ Running parallel decomposition on {n_cores} cores (CPU platform)")
                 
                 # 1. Serialize System for Workers
                 system_xml = openmm.XmlSerializer.serialize(systems['complex_system'])
@@ -337,6 +389,11 @@ class PerResidueDecomposition:
                 except Exception as e:
                     log.error(f"Parallel execution failed: {e}. Falling back to serial.")
                     run_parallel = False
+            else:
+                if decomposition_platform and decomposition_platform != 'CPU':
+                    log.info(f"• Serial decomposition (decomposition_platform={decomposition_platform} incompatible with GPU-unsafe parallelization)")
+                else:
+                    log.info(f"• Serial decomposition (no explicit CPU platform set; GPU parallelization disabled for safety)")
             
             # Processing Loop (Parallel Collection or Serial Execution)
             if run_parallel:
@@ -485,24 +542,84 @@ class PerResidueDecomposition:
             log.error(f"Decomposition failed: {e}")
             return None
     
-    def _build_residue_mapping(self, topology, ligand_resname):
+    def _build_residue_mapping(self, topology, ligand_resname, ligand_selection=None, receptor_selection=None, reference_topology=None):
         """
-        Build mapping from atoms to residues
+        Build mapping from atoms to residues.
+
+        When ligand_selection is provided it is used as an MDTraj selection string to
+        identify ligand atoms inside the OpenMM topology.  Otherwise atoms whose residue
+        name matches ligand_resname are treated as ligand atoms.
+
+        receptor_selection is accepted for symmetry / future use but is not needed here:
+        every atom that is NOT a ligand atom is treated as part of a receptor residue.
         """
-        
+        import mdtraj as md
+
         residue_map = {}  # {residue_id: [atom_indices]}
         ligand_indices = []
-        
+        ref_atoms = None
+
+        # Preserve original residue numbering when a reference MDTraj topology is provided.
+        if reference_topology is not None:
+            try:
+                ref_atoms = list(reference_topology.atoms)
+                if len(ref_atoms) != topology.getNumAtoms():
+                    log.warning(
+                        "_build_residue_mapping: reference_topology atom count mismatch "
+                        f"({len(ref_atoms)} vs {topology.getNumAtoms()}); falling back to OpenMM ids."
+                    )
+                    ref_atoms = None
+            except Exception as e:
+                log.warning(f"_build_residue_mapping: failed to use reference topology ({e})")
+                ref_atoms = None
+
+        # Pre-compute ligand atom index set when a custom selection is given
+        if ligand_selection:
+            try:
+                mdtraj_top = md.Topology.from_openmm(topology)
+                sel_result = mdtraj_top.select(ligand_selection)
+                if len(sel_result) == 0:
+                    # Selection matched nothing in the built topology (e.g. user wrote 'resname UNL'
+                    # but OpenFF renamed it to UNK).  Fall back to ligand_resname.
+                    log.warning(
+                        f"_build_residue_mapping: ligand_selection '{ligand_selection}' matched 0 atoms "
+                        f"in built topology — falling back to resname '{ligand_resname}'"
+                    )
+                    lig_set = None
+                else:
+                    lig_set = set(sel_result.tolist())
+                    log.info(f"_build_residue_mapping: ligand_selection '{ligand_selection}' matched {len(lig_set)} atoms")
+            except Exception as e:
+                log.warning(f"_build_residue_mapping: ligand_selection failed ({e}), falling back to resname '{ligand_resname}'")
+                lig_set = None
+        else:
+            lig_set = None
+
+
         for atom in topology.atoms():
-            if atom.residue.name == ligand_resname:
-                ligand_indices.append(atom.index)
+            is_ligand = (lig_set is not None and atom.index in lig_set) or \
+                        (lig_set is None and atom.residue.name == ligand_resname)
+            if is_ligand:
+                ligand_indices.append(int(atom.index))
             else:
-                res_id = f"{atom.residue.name}_{atom.residue.id}_{atom.residue.chain.id}"
+                if ref_atoms is not None:
+                    ref_res = ref_atoms[atom.index].residue
+                    res_name = ref_res.name
+                    res_num = int(getattr(ref_res, 'resSeq', ref_res.index + 1))
+                    chain = getattr(ref_res, 'chain', None)
+                    chain_id = str(getattr(chain, 'index', 'A')) if chain is not None else 'A'
+                else:
+                    res_name = atom.residue.name
+                    res_num = int(atom.residue.id)
+                    chain_id = str(atom.residue.chain.id)
+
+                res_id = f"{res_name}_{res_num}_{chain_id}"
                 if res_id not in residue_map:
                     residue_map[res_id] = []
-                residue_map[res_id].append(atom.index)
-        
+                residue_map[res_id].append(int(atom.index))
+
         return residue_map, ligand_indices
+
     
     def _select_frames(self, trajectory_length, max_frames=None, frame_start=None, frame_end=None,
                       frame_stride=None, frame_selection='sequential', random_seed=42):
@@ -577,28 +694,33 @@ class PerResidueDecomposition:
         """
         Prepare OpenMM systems for energy decomposition
         """
-        
         try:
             print("  Preparing systems for decomposition...")
             
-            # Use your existing system building methods
-            complex_system, complex_topology = self.mmgbsa_calculator.build_complex_system(
-                complex_pdb, ligand_mol, ligand_pdb
-            )
-            
+            # Use pre-built native systems if caller already instantiated them
+            if getattr(self.mmgbsa_calculator, 'systems', None) and 'complex_system' in self.mmgbsa_calculator.systems:
+                log.info("  Reusing pre-built native MM/GBSA OpenMM systems for decomposition...")
+                complex_system = self.mmgbsa_calculator.systems['complex_system']
+                complex_topology = self.mmgbsa_calculator.systems['complex_topology']
+            else:
+                # Use standard system building methods
+                complex_system, complex_topology, _ = self.mmgbsa_calculator.build_complex_system(
+                    complex_pdb, ligand_mol, ligand_pdb
+                )
             # Create contexts for energy evaluation
             integrator = openmm.LangevinMiddleIntegrator(
                 self.temperature, 1/unit.picosecond, 0.001*unit.picosecond
             )
             
             # Setup platform
-            platform, properties = self.mmgbsa_calculator.setup_optimized_platform()
+            decomp_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
+            platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
             
             context = openmm.Context(complex_system, integrator, platform, properties)
             
             # Load ParmEd structure for correct VdW parameters (Amber stores epsilon in exceptions)
             parmed_structure = None
-            if topology_file:
+            if topology_file and not str(topology_file).lower().endswith('.pdb'):
                 try:
                     parmed_structure = parmed.load_file(topology_file)
                     print(f"  ✓ Loaded ParmEd structure from {topology_file}")
@@ -652,6 +774,20 @@ class PerResidueDecomposition:
                 systems, positions, residue_map, ligand_indices
             )
             
+            # Pre-calculate complex interactions if needed (once per frame, not per residue!)
+            complex_int = None
+            complex_solv = None
+            if self.report_raw_energies:
+                n_particles = system.getNumParticles()
+                all_indices = list(range(n_particles))
+                complex_int = self._calculate_pairwise_interactions(
+                    systems, positions, residue_map, all_indices,
+                    salt_concentration=salt_concentration
+                )
+                complex_solv = self._approximate_solvation_decomposition(
+                    systems, positions, residue_map, all_indices
+                )
+            
             # Combine contributions
             for res_id in residue_map:
                 residue_contributions[res_id] = {
@@ -669,26 +805,8 @@ class PerResidueDecomposition:
                 )
 
                 # --- AMBER-LIKE RAW ENERGIES ---
-                if self.report_raw_energies:
-                    # Calculate Interaction with ALL atoms (Standard + Receptor + Self-Exclusions handled)
-                    # We use list(range(n_particles)) as target
-                    n_particles = system.getNumParticles()
-                    all_indices = list(range(n_particles))
-                    
-                    complex_int = self._calculate_pairwise_interactions(
-                        systems, positions, residue_map, all_indices,
-                        salt_concentration=salt_concentration
-                    )
-                    
-                    # Approximate Absolute Solvation (Burial by everything)
-                    complex_solv = self._approximate_solvation_decomposition(
-                        systems, positions, residue_map, all_indices
-                    )
-                    
-                    # Store Raw Components
-                    # Complex Total = Interaction(All) + Solvation(All)
-                    # Receptor Total = Complex - Ligand Interaction
-                    
+                if self.report_raw_energies and complex_int is not None:
+                    # Use pre-calculated complex interactions (computed once per frame above)
                     c_vdw = complex_int.get(res_id, {}).get('vdw', 0.0)
                     c_ele = complex_int.get(res_id, {}).get('elec', 0.0)
                     c_sol = complex_solv.get(res_id, 0.0)
@@ -875,7 +993,7 @@ class PerResidueDecomposition:
             parts = res_id.split('_')
             res_name = parts[0]
             res_num = int(parts[1])
-            chain = parts[2] if len(parts) > 2 else 'A'
+            chain = (parts[2].strip() if len(parts) > 2 else '') or 'A'
             
             # Base entry
             entry = {
@@ -1012,7 +1130,7 @@ class PerResidueDecomposition:
             else:
                 plot_path = plot_filename
             
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.savefig(plot_path, dpi=600, bbox_inches='tight')
             plt.close()
             
             print(f"  Plots saved to {plot_path}")
@@ -1101,7 +1219,7 @@ class PerResidueDecomposition:
             else:
                 plot_path = plot_filename
                 
-            plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+            plt.savefig(plot_path, dpi=600, bbox_inches='tight')
             plt.close()
             print(f"  Heatmap saved to {plot_path}")
             
@@ -1123,8 +1241,15 @@ class PerResidueDecomposition:
             
             print("  Generating advanced visualization with ProLIF integration...")
             
+            # Keep advanced visualization artifacts inside analysis outputs.
+            base_output_dir = getattr(self, 'report_dir', None) or getattr(self, 'output_dir', None)
+            if base_output_dir:
+                adv_viz_dir = os.path.join(base_output_dir, "advanced_decomposition_viz")
+            else:
+                adv_viz_dir = "advanced_decomposition_viz"
+
             # Initialize advanced visualization
-            adv_viz = AdvancedVisualization("advanced_decomposition_viz")
+            adv_viz = AdvancedVisualization(adv_viz_dir)
             
             # Load MM/GBSA results
             mmgbsa_results = {
@@ -1615,6 +1740,8 @@ def _calculate_pairwise_interactions_standalone(system, context, positions, resi
                 elif isinstance(force, openmm.CustomNonbondedForce):
                     if 'acoef' in force.getEnergyFunction():
                         custom_vdw_force = force
+                    elif 'epsilon' in force.getEnergyFunction() and 'sigma' in force.getEnergyFunction():
+                        custom_vdw_force = force
             
             # Extract Custom Tables if needed
             if custom_vdw_force:
@@ -1648,7 +1775,7 @@ def _calculate_pairwise_interactions_standalone(system, context, positions, resi
 
         # 1. Prepare Target Arrays (ligand_indices)
         n_targets = len(ligand_indices)
-        target_indices_arr = np.array(ligand_indices)
+        target_indices_arr = np.array(ligand_indices, dtype=np.int64)
         
         # Arrays for params
         t_charges = np.zeros(n_targets)
@@ -1660,14 +1787,26 @@ def _calculate_pairwise_interactions_standalone(system, context, positions, resi
         def get_params(idx):
              if pdb_params:
                  return pdb_params[idx] # (q, sig, eps)
-             elif nonbonded_force:
-                 c, s, e = nonbonded_force.getParticleParameters(idx)
+             
+             c, s, e = (0, 0, 0)
+             if nonbonded_force:
+                 c_nb, s_nb, e_nb = nonbonded_force.getParticleParameters(idx)
                  # strip units
-                 if unit.is_quantity(c): c = c.value_in_unit(unit.elementary_charge)
-                 if unit.is_quantity(s): s = s.value_in_unit(unit.nanometer)
-                 if unit.is_quantity(e): e = e.value_in_unit(unit.kilojoule_per_mole)
-                 return (c, s, e)
-             return (0, 0, 0)
+                 if unit.is_quantity(c_nb): c_nb = c_nb.value_in_unit(unit.elementary_charge)
+                 if unit.is_quantity(s_nb): s_nb = s_nb.value_in_unit(unit.nanometer)
+                 if unit.is_quantity(e_nb): e_nb = e_nb.value_in_unit(unit.kilojoule_per_mole)
+                 c, s, e = c_nb, s_nb, e_nb
+                 
+             if custom_vdw_force and custom_vdw_force.getNumPerParticleParameters() >= 2:
+                 if 'acoef' not in custom_vdw_force.getEnergyFunction():
+                     p_params = custom_vdw_force.getParticleParameters(idx)
+                     s_c = p_params[0]
+                     e_c = p_params[1]
+                     if unit.is_quantity(s_c): s_c = s_c.value_in_unit(unit.nanometer)
+                     if unit.is_quantity(e_c): e_c = e_c.value_in_unit(unit.kilojoule_per_mole)
+                     s, e = s_c, e_c
+                     
+             return (c, s, e)
 
         # Populate Target Params
         # This O(N) loop is fine (N~2500)

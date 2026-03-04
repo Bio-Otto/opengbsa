@@ -1,10 +1,10 @@
 analysis_settings:
-  decomp_frames: 1
+  decomp_frames: 10
   entropy_method: none
   frame_selection: sequential
   frame_stride: 1
   gb_model: OBC2
-  max_frames: 1
+  max_frames: 10
   report_raw_energies: true
   run_entropy_analysis: false
   run_per_residue_decomposition: true
@@ -13,6 +13,7 @@ analysis_settings:
   temperature: 300.0
   use_cache: false
   verbose: 1
+  parallel_processing: true
 forcefield_settings:
   protein_forcefield: amber
 input_files:
@@ -26,3 +27,6 @@ output_settings:
   output_directory: test/results/comprehensive/test_obc2_lcpo_decomp
   save_logs: true
   save_plots: true
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL
