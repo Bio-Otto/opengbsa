@@ -48,6 +48,9 @@ class ConfigManager:
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f)
             
+            # Normalize configuration (handle legacy 'input' section)
+            self._normalize_config()
+            
             self.config_path = config_path
             logger.info(f"Configuration loaded from: {config_path}")
             return True
@@ -62,6 +65,34 @@ class ConfigManager:
             logger.error(f"Error loading configuration: {e}")
             return False
     
+    
+    def _normalize_config(self):
+        """
+        Normalize configuration to standard format.
+        Handles legacy 'input' section alias to 'input_files'.
+        """
+        if 'input_files' not in self.config and 'input' in self.config:
+            logger.info("Normalizing legacy 'input' section to 'input_files'")
+            inp = self.config['input']
+            
+            # Create input_files section
+            self.config['input_files'] = {}
+            
+            # Map keys
+            mapping = {
+                'topology': 'complex_pdb',
+                'trajectory': 'trajectory',
+                'ligand_mol': 'ligand_mol',
+                'ligand_pdb': 'ligand_pdb',
+                'receptor_topology': 'receptor_topology',
+                'ligand_topology': 'ligand_topology',
+                'solvated_topology': 'solvated_topology'
+            }
+            
+            for legacy_key, new_key in mapping.items():
+                if legacy_key in inp:
+                    self.config['input_files'][new_key] = inp[legacy_key]
+
     def validate_config(self) -> bool:
         """
         Validate configuration.
@@ -96,7 +127,7 @@ class ConfigManager:
         """Validate input files section."""
         input_files = self.config.get('input_files', {})
         
-        required_files = ['ligand_mol', 'complex_pdb', 'ligand_pdb', 'trajectory']
+        required_files = ['complex_pdb', 'trajectory']
         for file_key in required_files:
             if file_key not in input_files:
                 self.validation_errors.append(f"Missing required file: {file_key}")
@@ -120,14 +151,40 @@ class ConfigManager:
         
         for param, validation_rule in required_params.items():
             if param not in settings:
-                self.validation_errors.append(f"Missing required parameter: {param}")
-                continue
+                # Inject defaults for common parameters instead of failing
+                defaults = {
+                    'temperature': 300.0,
+                    'salt_concentration': 0.15,
+                    'max_frames': 50
+                }
+                if param in defaults:
+                    settings[param] = defaults[param]
+                    self.config['analysis_settings'][param] = defaults[param] # Update actual config
+                    continue
+                else: 
+                    self.validation_errors.append(f"Missing required parameter: {param}")
+                    continue
             
             value = settings[param]
+            
+            if param == 'max_frames' and value is None:
+                continue
+                
             param_type, min_val, max_val = validation_rule
             
             if not self._validate_parameter(param, value, param_type, min_val, max_val):
                 self.validation_errors.append(f"Invalid parameter value: {param} = {value}")
+        
+        # Validate binding_mode
+        valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
+        binding_mode = settings.get('binding_mode', 'standard')
+        if binding_mode not in valid_binding_modes:
+            self.validation_errors.append(
+                f"Invalid binding_mode '{binding_mode}'. Must be one of: {valid_binding_modes}"
+            )
+        else:
+            # Inject default so downstream code can always read it
+            self.config['analysis_settings']['binding_mode'] = binding_mode
     
     def _validate_cross_fields(self):
         """Validate cross-field dependencies."""
@@ -141,10 +198,11 @@ class ConfigManager:
                 self.validation_errors.append("frame_end must be greater than frame_start")
         
         # Decomposition frames validation
-        max_frames = settings.get('max_frames', 0)
-        decomp_frames = settings.get('decomp_frames', 0)
-        if decomp_frames > max_frames:
-            self.validation_errors.append("decomp_frames cannot be greater than max_frames")
+        max_frames = settings.get('max_frames')
+        decomp_frames = settings.get('decomp_frames')
+        if decomp_frames is not None and max_frames is not None:
+            if decomp_frames > max_frames:
+                self.validation_errors.append("decomp_frames cannot be greater than max_frames")
         
         # Random seed validation
         frame_selection = settings.get('frame_selection')

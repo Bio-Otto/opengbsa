@@ -98,8 +98,8 @@ Examples:
     parser.add_argument(
         '--output-dir',
         type=str,
-        default='mmgbsa_results',
-        help='Output directory (default: mmgbsa_results)'
+        default=None,
+        help='Output directory (default: defined in config or mmgbsa_results)'
     )
     
     return parser
@@ -150,7 +150,7 @@ def create_config_command(complete: bool = False):
         print(f"✗ Error creating configuration file: {config_name}")
         return 1
 
-def run_analysis_command(config_file: str, complete: bool = False, output_dir: str = "mmgbsa_results"):
+def run_analysis_command(config_file: str, complete: bool = False, output_dir: Optional[str] = None):
     """Run analysis command."""
     print(f"Running MM/GBSA analysis with config: {config_file}")
     
@@ -170,12 +170,14 @@ def run_analysis_command(config_file: str, complete: bool = False, output_dir: s
         for warning in warnings:
             print(f"  - {warning}")
     
-    # Create output directory
-    try:
-        output_path = create_output_directory(output_dir)
-    except Exception as e:
-        print(f"✗ Error creating output directory: {e}")
-        return 1
+    # Create output directory (only if explicitly provided via CLI)
+    output_path = None
+    if output_dir is not None:
+        try:
+            output_path = create_output_directory(output_dir)
+        except Exception as e:
+            print(f"✗ Error creating output directory: {e}")
+            return 1
     
     # Run analysis
     try:
@@ -188,7 +190,7 @@ def run_analysis_command(config_file: str, complete: bool = False, output_dir: s
         
         if success:
             print(f"✓ Analysis completed successfully!")
-            print(f"Results saved in: {output_path}")
+            print(f"Results saved in: {runner.output_dir}")
             return 0
         else:
             print("✗ Analysis failed.")

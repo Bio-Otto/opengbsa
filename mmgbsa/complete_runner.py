@@ -283,11 +283,12 @@ class CompleteMMGBSARunner:
             'random_seed': analysis_settings.get('random_seed', 42)
         }
         
-        mmgbsa_results = calculator.run_enhanced(
-            ligand_mol=input_files['ligand_mol'],
-            complex_pdb=input_files['complex_pdb'],
-            xtc_file=input_files['trajectory'],
-            ligand_pdb=input_files['ligand_pdb'],
+        mmgbsa_results = calculator.run(
+            ligand_mol=input_files.get('ligand_mol'),
+            complex_pdb=input_files.get('complex_pdb'),
+            xtc_file=input_files.get('trajectory'),
+            ligand_pdb=input_files.get('ligand_pdb'),
+            output_dir=self.output_dir,
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
             **frame_params
         )
@@ -426,10 +427,10 @@ class CompleteMMGBSARunner:
             }
             
             decomp_results = decomp_analyzer.run_per_residue_analysis(
-                ligand_mol=input_files['ligand_mol'],
-                complex_pdb=input_files['complex_pdb'],
-                xtc_file=input_files['trajectory'],
-                ligand_pdb=input_files['ligand_pdb'],
+                ligand_mol=input_files.get('ligand_mol'),
+                complex_pdb=input_files.get('complex_pdb'),
+                xtc_file=input_files.get('trajectory'),
+                ligand_pdb=input_files.get('ligand_pdb'),
                 max_frames=analysis_settings.get('max_frames', 50),
                 decomp_frames=analysis_settings.get('decomp_frames', 10),
                 frame_start=frame_params.get('frame_start'),
@@ -475,9 +476,9 @@ class CompleteMMGBSARunner:
             print("Analyzing protein-ligand interactions with ProLIF...")
             
             interaction_results = adv_viz.analyze_protein_ligand_interactions(
-                complex_pdb=input_files['complex_pdb'],
-                ligand_mol=input_files['ligand_mol'],
-                trajectory_file=input_files['trajectory'],
+                complex_pdb=input_files.get('complex_pdb'),
+                ligand_mol=input_files.get('ligand_mol'),
+                trajectory_file=input_files.get('trajectory'),
                 frame_indices=list(range(0, 100, 10)),  # Every 10th frame
                 ligand_resname=analysis_settings.get('ligand_resname')
             )

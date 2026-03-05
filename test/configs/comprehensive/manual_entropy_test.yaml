@@ -1,0 +1,24 @@
+input_files:
+  complex_pdb: test/data/6t1h_prmtop_test/complex.prmtop
+  trajectory: test/data/6t1h_prmtop_test/md_complex_prod.xtc
+  solvated_topology: test/data/6t1h_prmtop_test/replica_1/gro/complex_solv_ions.gro
+  receptor_topology: test/data/6t1h_prmtop_test/receptor.prmtop
+  ligand_topology: test/data/6t1h_prmtop_test/ligand.prmtop
+analysis_settings:
+  gb_model: GBn
+  salt_concentration: 0.15
+  temperature: 300.0
+  run_entropy_analysis: true
+  entropy_method: interaction
+  max_frames: 10
+  frame_stride: 5
+  verbose: 1
+  run_per_residue_decomposition: true
+  decomp_frames: 10
+  parallel_processing: true
+output_settings:
+  output_directory: test/results/entropy_verification
+  save_logs: true
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL

@@ -1,0 +1,35 @@
+input_files:
+  complex_pdb: test/data/6t1h_prmtop_test/complex.prmtop
+  trajectory: test/data/6t1h_prmtop_test/md_complex_prod.xtc
+  solvated_topology: test/data/6t1h_prmtop_test/replica_1/gro/complex_solv_ions.gro
+  receptor_topology: test/data/6t1h_prmtop_test/receptor.prmtop
+  ligand_topology: test/data/6t1h_prmtop_test/ligand.prmtop
+output_settings:
+  output_directory: test/results/test_platform_separation
+  analysis_name: platform_separation_test
+  save_plots: false
+  save_logs: true
+analysis_settings:
+  temperature: 300.0
+  gb_model: GBn
+  salt_concentration: 0.15
+  decomposition_frames: 1
+  frame_start: 0
+  frame_end: 1
+  frame_stride: 1
+  max_frames: 10
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: none
+  run_entropy_analysis: false
+  run_per_residue_decomposition: true
+  report_raw_energies: false
+  decomp_frames: 10
+  sa_model: LCPO
+  parallel_processing: true
+platform_settings:
+  preferred_platform: CUDA
+  decomposition_platform: CPU
+forcefield_settings:
+  protein_forcefield: amber

@@ -1,0 +1,32 @@
+analysis_settings:
+  decomp_frames: 10
+  entropy_method: none
+  frame_selection: sequential
+  frame_stride: 1
+  gb_model: GBn
+  max_frames: 10
+  report_raw_energies: false
+  run_entropy_analysis: false
+  run_per_residue_decomposition: true
+  sa_model: ACE
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: false
+  verbose: 1
+  receptor_selection: protein
+  ligand_selection: resname LIG
+  parallel_processing: true
+forcefield_settings:
+  protein_forcefield: amber
+input_files:
+  complex_pdb: test/data/6t1h_1151_comp/complex.prmtop
+  trajectory: test/data/6t1h_1151_comp/md_complex_prod.xtc
+  solvated_topology: test/data/6t1h_1151_comp/replica_1/gro/complex_solv_ions.gro
+output_settings:
+  analysis_name: test_selection_warning
+  output_directory: test/results/comprehensive/test_selection_warning
+  save_logs: true
+  save_plots: false
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: OpenCL

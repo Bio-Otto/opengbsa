@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<ForceField>
+  <!-- KCX (Carbamylated Lysine) CHARMM36 Template -->
+  <!--  Extracted from openmmforcefields charmm36_d_modified.xml -->
+  
+  <!-- KCX-specific atom types (mapped to CHARMM36 classes) -->
+  <AtomTypes>
+    <Type class="NH1" element="N" mass="14.007" name="KCX-N"/>
+    <Type class="H" element="H" mass="1.008" name="KCX-HN"/>
+    <Type class="CT1" element="C" mass="12.011" name="KCX-CA"/>
+    <Type class="HB1" element="H" mass="1.008" name="KCX-HA"/>
+    <Type class="CT2" element="C" mass="12.011" name="KCX-CB"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HB1"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HB2"/>
+    <Type class="CT2" element="C" mass="12.011" name="KCX-CG"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HG1"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HG2"/>
+    <Type class="CT2" element="C" mass="12.011" name="KCX-CD"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HD1"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HD2"/>
+    <Type class="CT2" element="C" mass="12.011" name="KCX-CE"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HE1"/>
+    <Type class="HA2" element="H" mass="1.008" name="KCX-HE2"/>
+    <Type class="NC2" element="N" mass="14.007" name="KCX-NZ"/>
+    <Type class="HC" element="H" mass="1.008" name="KCX-HZ"/>
+    <Type class="C" element="C" mass="12.011" name="KCX-CX"/>
+    <Type class="OC" element="O" mass="15.999" name="KCX-OQ1"/>
+    <Type class="OC" element="O" mass="15.999" name="KCX-OQ2"/>
+    <Type class="C" element="C" mass="12.011" name="KCX-C"/>
+    <Type class="O" element="O" mass="15.999" name="KCX-O"/>
+  </AtomTypes>
+  
+  <Residues>
+    <Residue name="KCX">
+      <Atom charge="-0.47" name="N" type="KCX-N"/>
+      <Atom charge="0.31" name="HN" type="KCX-HN"/>
+      <Atom charge="0.07" name="CA" type="KCX-CA"/>
+      <Atom charge="0.09" name="HA" type="KCX-HA"/>
+      <Atom charge="-0.18" name="CB" type="KCX-CB"/>
+      <Atom charge="0.09" name="HB1" type="KCX-HB1"/>
+      <Atom charge="0.09" name="HB2" type="KCX-HB2"/>
+      <Atom charge="-0.18" name="CG" type="KCX-CG"/>
+      <Atom charge="0.09" name="HG1" type="KCX-HG1"/>
+      <Atom charge="0.09" name="HG2" type="KCX-HG2"/>
+      <Atom charge="-0.18" name="CD" type="KCX-CD"/>
+      <Atom charge="0.09" name="HD1" type="KCX-HD1"/>
+      <Atom charge="0.09" name="HD2" type="KCX-HD2"/>
+      <Atom charge="-0.046" name="CE" type="KCX-CE"/>
+      <Atom charge="0.09" name="HE1" type="KCX-HE1"/>
+      <Atom charge="0.09" name="HE2" type="KCX-HE2"/>
+      <Atom charge="-0.66" name="NZ" type="KCX-NZ"/>
+      <Atom charge="0.191" name="HZ" type="KCX-HZ"/>
+      <Atom charge="0.777" name="CX" type="KCX-CX"/>
+      <Atom charge="-0.721" name="OQ1" type="KCX-OQ1"/>
+      <Atom charge="-0.721" name="OQ2" type="KCX-OQ2"/>
+      <Atom charge="0.51" name="C" type="KCX-C"/>
+      <Atom charge="-0.51" name="O" type="KCX-O"/>
+      <Bond atomName1="N" atomName2="CA"/>
+      <Bond atomName1="C" atomName2="CA"/>
+      <Bond atomName1="CA" atomName2="HA"/>
+      <Bond atomName1="CA" atomName2="CB"/>
+      <Bond atomName1="N" atomName2="HN"/>
+      <Bond atomName1="CB" atomName2="HB1"/>
+      <Bond atomName1="CB" atomName2="HB2"/>
+      <Bond atomName1="CB" atomName2="CG"/>
+      <Bond atomName1="CG" atomName2="HG1"/>
+      <Bond atomName1="CG" atomName2="HG2"/>
+      <Bond atomName1="CG" atomName2="CD"/>
+      <Bond atomName1="CD" atomName2="HD1"/>
+      <Bond atomName1="CD" atomName2="HD2"/>
+      <Bond atomName1="CD" atomName2="CE"/>
+      <Bond atomName1="CE" atomName2="HE1"/>
+      <Bond atomName1="CE" atomName2="HE2"/>
+      <Bond atomName1="CE" atomName2="NZ"/>
+      <Bond atomName1="NZ" atomName2="HZ"/>
+      <Bond atomName1="NZ" atomName2="CX"/>
+      <Bond atomName1="CX" atomName2="OQ2"/>
+      <Bond atomName1="O" atomName2="C"/>
+      <Bond atomName1="CX" atomName2="OQ1"/>
+      <ExternalBond atomName="N"/>
+      <ExternalBond atomName="C"/>
+    </Residue>
+  </Residues>
+</ForceField>

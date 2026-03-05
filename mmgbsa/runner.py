@@ -21,7 +21,9 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 from .core import GBSACalculator
 from .entropy import run_ultra_robust_nma
 from .decomposition import PerResidueDecomposition
+from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
+from .reporting import HTMLReportGenerator
 
 # Initialize global logger
 log = ToolLogger()
@@ -48,7 +50,9 @@ class MMGBSARunner:
         else:
             self.config_file = None
             self.config = config_file
+        log.info(f"MMGBSARunner Initialized (Version: Fix-Decomposition-NativeMode-v3)")
         
+        # Load analysis settings = {}
         self.results = {}
         self.output_dir = output_dir
         
@@ -84,6 +88,10 @@ class MMGBSARunner:
         for file_type, file_path in input_files.items():
             # Skip None/null values
             if file_path is None:
+                continue
+                
+            # Skip known non-file keys
+            if file_type in ['ligand_resname', 'receptor_resname', 'ligand_charge']:
                 continue
             
             if not Path(file_path).exists():
@@ -181,6 +189,9 @@ class MMGBSARunner:
         
         output_path.mkdir(parents=True, exist_ok=True)
         
+        # Update instance variable so it can be retrieved
+        self.output_dir = output_path
+        
         log.info(f"Output directory established: {output_path}")
         return output_path
     
@@ -189,6 +200,17 @@ class MMGBSARunner:
         analysis_settings = self.config['analysis_settings']
         forcefield_settings = self.config.get('forcefield_settings', {})
         
+        
+        # Determine cache directory
+        cache_dir = None
+        if self.output_dir:
+            cache_dir = Path(self.output_dir) / "cache"
+        else:
+            # Fallback if output_dir not yet set
+             out_settings = self.config.get('output_settings', {})
+             base_out = out_settings.get('output_directory', 'mmgbsa_results')
+             cache_dir = Path(base_out) / "cache"
+
         calculator = GBSACalculator(
             temperature=analysis_settings.get('temperature', 300),
             verbose=analysis_settings.get('verbose', 1),
@@ -200,11 +222,55 @@ class MMGBSARunner:
             protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
             charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
-            entropy_method=analysis_settings.get('entropy_method', 'none')
+            solvent_dielectric=analysis_settings.get('solvent_dielectric', 78.5),
+            entropy_method=analysis_settings.get('entropy_method', 'none'),
+            decomposition_method=analysis_settings.get('decomposition_method', 'full'),
+            sa_model=analysis_settings.get('sa_model', 'ACE'),
+            nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
+            cache_dir=cache_dir
         )
+
+        # Apply platform separation settings (analysis/decomposition) when provided.
+        platform_settings = self.config.get('platform_settings', {})
+        if platform_settings and hasattr(calculator, 'set_platform_settings'):
+            calculator.set_platform_settings(platform_settings)
         
         return calculator
     
+    def _resolve_binding_mode_selections(self):
+        """
+        Translate `binding_mode` config option into receptor/ligand MDTraj selections.
+        
+        Modes:
+          standard / dimer_ligand — all protein chains = receptor, small molecule = ligand.
+            This is the default behaviour. Both modes are identical; `dimer_ligand` is
+            provided as a self-documenting alias when the binding site spans both chains.
+          ppi — chain 0 = receptor, chain 1 = ligand.
+            For protein-protein interaction analysis. No small-molecule ligand_mol needed.
+        
+        Returns:
+            (receptor_selection, ligand_selection) — both may be None (= auto-detect).
+        """
+        analysis_settings = self.config.get('analysis_settings', {})
+        binding_mode = analysis_settings.get('binding_mode', 'standard')
+        
+        # Manual overrides always win
+        manual_rec = analysis_settings.get('receptor_selection')
+        manual_lig = analysis_settings.get('ligand_selection')
+        
+        if binding_mode == 'ppi':
+            receptor_selection = manual_rec if manual_rec else 'chainid 0'
+            ligand_selection   = manual_lig if manual_lig else 'chainid 1'
+            log.info(f"Binding mode: ppi  (receptor='{receptor_selection}', ligand='{ligand_selection}')")
+        else:
+            # standard / dimer_ligand — small molecule auto-detected, all protein = receptor
+            receptor_selection = manual_rec  # None = auto (all non-ligand)
+            ligand_selection   = manual_lig  # None = auto (detect by resname)
+            label = 'dimer_ligand' if binding_mode == 'dimer_ligand' else 'standard'
+            log.info(f"Binding mode: {label}  (receptor=all protein chains, ligand=small molecule)")
+        
+        return receptor_selection, ligand_selection
+
     def run_analysis(self):
         """Run complete MM/GBSA analysis pipeline"""
         
@@ -234,6 +300,62 @@ class MMGBSARunner:
         input_files = self.config['input_files']
         analysis_settings = self.config['analysis_settings']
         
+        # GROMACS SMART DETECTION (Swap PDB for TOP if available)
+        complex_pdb = input_files.get('complex_pdb')
+        if complex_pdb and str(complex_pdb).endswith('.pdb'):
+            from pathlib import Path
+            pdb_path = Path(complex_pdb)
+            # Check for .top with same basename
+            candidate_top = pdb_path.with_suffix('.top')
+            if candidate_top.exists():
+                log.warning(f"Found GROMACS topology {candidate_top.name} matching input PDB.")
+                log.warning("Switching input to .top file to enable Native GROMACS Mode.")
+                complex_pdb = str(candidate_top)
+                input_files['complex_pdb'] = complex_pdb
+                # Also ensure we don't have conflicting ligand_mol if we are going native
+                # Native mode handles ligands via topology
+        
+        # GROMACS AUTO-CONVERSION CHECK
+        if complex_pdb and str(complex_pdb).endswith('.top'):
+            log.info("Detected GROMACS topology (.top). Attempting auto-conversion to Amber format...")
+            try:
+                from .conversion import GromacsPreprocessor
+                from pathlib import Path
+                
+                top_path = Path(complex_pdb)
+                # Infer coordinate file (.gro)
+                gro_files = list(top_path.parent.glob("*.gro"))
+                coord_file = None
+                
+                # Logic to find best matching .gro
+                if gro_files:
+                     for g in gro_files:
+                         if g.stem == top_path.stem:
+                             coord_file = g
+                             break
+                     if not coord_file:
+                         coord_file = gro_files[0]
+                
+                if coord_file:
+                    log.info(f"Found GROMACS coordinate file: {coord_file}")
+                    conversion_results = GromacsPreprocessor.convert_to_amber(top_path, coord_file)
+                    
+                    # UPDATE INPUT FILES WITH CONVERTED TOPOLOGIES
+                    log.success("GROMACS conversion successful. Updating input configuration.")
+                    input_files['complex_pdb'] = conversion_results['topology']       # dry complex
+                    input_files['receptor_topology'] = conversion_results['receptor_topology']
+                    input_files['ligand_topology'] = conversion_results['ligand_topology']
+                    # We MUST use the .gro file as the solvated topology for MDTraj. 
+                    # If we use the generated .prmtop, we lose the experimental PDB residue numbers 
+                    # because PRMTOP format natively drops resSeq strings and forces a 1..N order.
+                    input_files['solvated_topology'] = str(coord_file)
+                    
+                else:
+                    log.warning("Could not find .gro file for GROMACS conversion. Proceeding without conversion (may fail).")
+            except Exception as e:
+                log.error(f"GROMACS auto-conversion failed: {e}")
+                # We continue, likely to fail later, but error log is imperative.
+        
         # Get frame selection parameters for reporting
         frame_params = {
             'max_frames': analysis_settings.get('max_frames', 50),
@@ -243,15 +365,28 @@ class MMGBSARunner:
             'frame_selection': analysis_settings.get('frame_selection', 'sequential')
         }
         
-        mmgbsa_results = calculator.run_enhanced(
-            ligand_mol=input_files['ligand_mol'],
+        # Resolve receptor/ligand selections from binding_mode (or manual overrides)
+        resolved_receptor_sel, resolved_ligand_sel = self._resolve_binding_mode_selections()
+        
+        mmgbsa_results = calculator.run_comprehensive(
+            ligand_mol=input_files.get('ligand_mol'),
             complex_pdb=input_files['complex_pdb'],
-            xtc_file=input_files['trajectory'],
-            ligand_pdb=input_files['ligand_pdb'],
+            xtc_file=input_files.get('trajectory'),
+            ligand_pdb=input_files.get('ligand_pdb'),
             max_frames=analysis_settings.get('max_frames', 50),
             energy_decomposition=analysis_settings.get('energy_decomposition', False),
+            frame_start=frame_params.get('frame_start'),
+            frame_end=frame_params.get('frame_end'),
+            frame_stride=frame_params.get('frame_stride'),
+            frame_selection=frame_params.get('frame_selection', 'sequential'),
             qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
-            output_dir=output_dir
+            output_dir=output_dir,
+            ligand_selection=resolved_ligand_sel,
+            receptor_selection=resolved_receptor_sel,
+            receptor_topology=input_files.get('receptor_topology'),
+            ligand_topology=input_files.get('ligand_topology'),
+            solvated_topology=input_files.get('solvated_topology'),
+            print_interval=analysis_settings.get('print_interval', 10)
         )
         
         if not mmgbsa_results:
@@ -259,8 +394,57 @@ class MMGBSARunner:
             return None
         
         self.results['mmgbsa'] = mmgbsa_results
-        log.success(f"MM/GBSA completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
-        
+        log.success(f"MM/GBSA (Standard) completed: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
+
+        if mmgbsa_results.get('parameterized_residues'):
+            log.result("Parameterized Residues", ", ".join(mmgbsa_results['parameterized_residues']))
+
+        # DUAL MODE: Dimer Interface Analysis
+        if analysis_settings.get('dimer_mode', False):
+            log.section("STEP 4.5: Dimer Interface Analysis (Dual Mode)")
+            log.info("Calculating interface stability between defined subunits...")
+            
+            receptor_subunits = analysis_settings.get('receptor_subunits', {})
+            unit_a = receptor_subunits.get('unit_a')
+            unit_b = receptor_subunits.get('unit_b')
+            
+            if unit_a and unit_b:
+                try:
+                    interface_dir = output_dir / 'interface_stability'
+                    interface_dir.mkdir(exist_ok=True)
+                    
+                    log.info(f"  • Receptor Mask: {unit_a}")
+                    log.info(f"  • Ligand Mask:   {unit_b} (Treated as ligand for calculation)")
+                    
+                    interface_results = calculator.run_comprehensive(
+                        ligand_mol=None, # Force Protein-Protein mode
+                        complex_pdb=input_files['complex_pdb'],
+                        xtc_file=input_files['trajectory'],
+                        ligand_pdb=None,
+                        max_frames=analysis_settings.get('max_frames', 50),
+                        energy_decomposition=False, # Keep it simple for interface
+                        qha_analyze_complex=False,
+                        output_dir=interface_dir,
+                        ligand_selection=unit_b,
+                        receptor_selection=unit_a,
+                        print_interval=analysis_settings.get('print_interval', 10)
+                    )
+                    
+                    if interface_results:
+                        self.results['interface_stability'] = interface_results
+                        log.success(f"Interface Stability: {interface_results['mean_binding_energy']:.2f} ± {interface_results['std_error']:.2f} kcal/mol")
+                        
+                        # Compare energies
+                        binding_E = mmgbsa_results['mean_binding_energy']
+                        interface_E = interface_results['mean_binding_energy']
+                        log.result("Ligand Binding Energy", f"{binding_E:.2f}", "kcal/mol")
+                        log.result("Dimer Interface Energy", f"{interface_E:.2f}", "kcal/mol")
+                except Exception as e:
+                    log.error(f"Dimer Interface Analysis Failed: {e}")
+                    log.warning("Continuing with rest of analysis...")
+            else:
+                log.warning("dimer_mode is enabled but 'receptor_subunits' (unit_a, unit_b) are missing in config!")
+            
         # Step 5: Run entropy analysis (if enabled)
         if analysis_settings.get('run_entropy_analysis', False):
             log.section("STEP 5: Entropy Analysis")
@@ -271,7 +455,11 @@ class MMGBSARunner:
                 log.success("Entropy analysis completed")
         
         # Step 6: Run per-residue decomposition (if enabled)
-        if analysis_settings.get('run_per_residue_decomposition', False) or analysis_settings.get('per_residue_decomposition', False):
+        # Step 6: Run per-residue decomposition (if enabled)
+        advanced_settings = self.config.get('advanced_settings', {})
+        if (analysis_settings.get('run_per_residue_decomposition', False) or 
+            analysis_settings.get('per_residue_decomposition', False) or
+            advanced_settings.get('run_per_residue_decomposition', False)):
             log.section("STEP 6: Per-Residue Decomposition")
             
             # Get frame parameters for per-residue decomposition
@@ -284,7 +472,10 @@ class MMGBSARunner:
             }
             
             decomp_results = self._run_per_residue_decomposition(
-                calculator, input_files, analysis_settings, frame_params, output_dir
+                calculator, input_files, analysis_settings, frame_params, output_dir,
+                receptor_selection=resolved_receptor_sel,
+                ligand_selection=resolved_ligand_sel,
+                mmgbsa_results=mmgbsa_results
             )
             if decomp_results:
                 self.results['decomposition'] = decomp_results
@@ -304,8 +495,16 @@ class MMGBSARunner:
         
         log.header("ANALYSIS COMPLETE")
         log.result("Total time", f"{total_time:.1f}", "seconds")
-        log.result("Results saved to", output_dir)
-        log.result("Mean Binding Energy", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
+        log.result("Results saved to", str(output_dir))
+        
+        # Report Standard Deviation (SD) instead of SEM
+        mean_val = mmgbsa_results.get('mean_binding_energy', 0.0)
+        std_dev = mmgbsa_results.get('std_dev', 0.0)
+        if 'std_dev' not in mmgbsa_results and 'binding_energies' in mmgbsa_results:
+             import numpy as np
+             std_dev = np.std(mmgbsa_results['binding_energies'])
+             
+        log.result("Mean Binding Energy", f"{mean_val:.2f} ± {std_dev:.2f}", "kcal/mol (SD)")
         
         return self.results
     
@@ -396,13 +595,20 @@ class MMGBSARunner:
             log.error(f"Entropy analysis failed: {e}")
             return None
     
-    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None):
+    def _run_per_residue_decomposition(self, calculator, input_files, analysis_settings, frame_params=None, output_dir=None,
+                                        receptor_selection=None, ligand_selection=None, mmgbsa_results=None):
         """Run per-residue energy decomposition"""
         try:
+            # Enable Parallel Processing
+            # Get n_jobs from advanced settings, default to -1 (All Cores) for maximum performance
+            n_jobs = self.config.get('advanced_settings', {}).get('n_jobs', -1)
+            
             decomp_analyzer = PerResidueDecomposition(
                 calculator, 
                 temperature=analysis_settings.get('temperature', 300),
-                output_dir=output_dir
+                output_dir=output_dir,
+                n_jobs=n_jobs,
+                report_raw_energies=analysis_settings.get('report_raw_energies', False)
             )
             
             # Extract frame parameters
@@ -415,11 +621,19 @@ class MMGBSARunner:
                     'random_seed': 42
                 }
             
+            # When custom selections triggered distillation in run_comprehensive, the
+            # calculator stores the distilled paths as instance attributes.  Use those
+            # so decomposition analyses exactly the same atom subset as the main calculation.
+            decomp_complex_pdb = getattr(calculator, 'distilled_complex_pdb', None) or input_files['complex_pdb']
+            decomp_xtc_file    = getattr(calculator, 'distilled_xtc_file',    None) or input_files['trajectory']
+            if hasattr(calculator, 'distilled_complex_pdb'):
+                log.info(f"Decomposition: using distilled complex PDB: {decomp_complex_pdb}")
+
             decomp_results = decomp_analyzer.run_per_residue_analysis(
-                ligand_mol=input_files['ligand_mol'],
-                complex_pdb=input_files['complex_pdb'],
-                xtc_file=input_files['trajectory'],
-                ligand_pdb=input_files['ligand_pdb'],
+                ligand_mol=input_files.get('ligand_mol'),
+                complex_pdb=decomp_complex_pdb,
+                xtc_file=decomp_xtc_file,
+                ligand_pdb=input_files.get('ligand_pdb'),
                 max_frames=analysis_settings.get('max_frames', 50),
                 decomp_frames=analysis_settings.get('decomp_frames', 10),
                 frame_start=frame_params.get('frame_start'),
@@ -427,13 +641,56 @@ class MMGBSARunner:
                 frame_stride=frame_params.get('frame_stride'),
                 frame_selection=frame_params.get('frame_selection', 'sequential'),
                 random_seed=frame_params.get('random_seed', 42),
-                output_dir=output_dir
+                solvated_topology=input_files.get('solvated_topology'),
+                receptor_topology=input_files.get('receptor_topology'),
+                ligand_topology=input_files.get('ligand_topology'),
+                ligand_resname=getattr(calculator, 'ligand_resname', input_files.get('ligand_resname')),
+                decomposition_topology_file=input_files.get('complex_pdb'),
+                output_dir=output_dir,
+                plot_top_residues=analysis_settings.get('plot_top_residues', 10),
+                receptor_selection=getattr(calculator, 'receptor_selection', receptor_selection),
+                ligand_selection=getattr(calculator, 'ligand_selection', ligand_selection),
+                skip_baseline=True,
+                baseline_results=mmgbsa_results
             )
+
+            
+            # Generate Interactive HTML Report
+            if decomp_results and hasattr(decomp_analyzer, 'frame_data'):
+                try:
+                    # Select best PDB for visualization
+                    # Prioritize the temporary PDB extracted from trajectory if available
+                    viz_pdb = input_files.get('complex_pdb')
+                    temp_pdb = output_dir / "temp_from_traj.pdb"
+                    if temp_pdb.exists():
+                        viz_pdb = str(temp_pdb)
+                    
+                    pandamap_path = output_dir / "structure_3d.html"
+                    # IMPORTANT: HTML reporter expects an HTML file for iframe embedding.
+                    # Do not fall back to a PDB path here, otherwise raw PDB text is embedded
+                    # into srcdoc and breaks interactive report rendering.
+                    if pandamap_path.exists():
+                        pandamap_path = str(pandamap_path.resolve())
+                    else:
+                        pandamap_path = None
+
+                    html_gen = HTMLReportGenerator(output_dir, config=self.config)
+                    html_gen.generate_report(
+                        analysis_results=decomp_results,
+                        frame_data=decomp_analyzer.frame_data,
+                        global_results=decomp_results.get('mmgbsa_results'),
+                        complex_pdb_path=pandamap_path,
+                        ligand_resname=input_files.get('ligand_resname') or self.config.get('input_files', {}).get('ligand_resname')
+                    )
+                except Exception as e:
+                    log.warning(f"Interactive report generation failed: {e}")
             
             return decomp_results
             
         except Exception as e:
+            import traceback
             log.error(f"Per-residue decomposition failed: {e}")
+            traceback.print_exc()
             return None
     
     def _generate_final_report(self, output_dir):
@@ -462,6 +719,26 @@ class MMGBSARunner:
                     f.write(f"Standard Deviation: {mmgbsa['std_dev']:.2f} kcal/mol\n")
                     f.write(f"Frames Analyzed: {mmgbsa['n_frames']}\n")
                     f.write(f"GB Model: {mmgbsa['gb_model']}\n\n")
+                    
+                    if mmgbsa.get('parameterized_residues'):
+                        f.write("PARAMETERIZATION DETAILS:\n")
+                        f.write("-" * 25 + "\n")
+                        f.write("The following non-standard residues were parameterized on-the-fly via OpenFF:\n")
+                        for res in mmgbsa['parameterized_residues']:
+                                f.write(f"  • {res}\n")
+                        f.write("\n")
+                        
+                    f.write("PHYSICS ASSUMPTIONS AND FALLBACKS:\n")
+                    f.write("-" * 35 + "\n")
+                    if not mmgbsa.get('physics_assumptions'):
+                        f.write("  • None. The pipeline utilized explicitly structured parameters and pure explicit configurations without defaulting to empirical heuristics.\n\n")
+                    else:
+                        seen = set()
+                        for assumption in mmgbsa['physics_assumptions']:
+                            if assumption not in seen:
+                                f.write(f"  • {assumption}\n")
+                                seen.add(assumption)
+                        f.write("\n")
                 
                 # Additional analysis results
                 if 'entropy' in self.results:
@@ -491,13 +768,63 @@ class MMGBSARunner:
             # Save results summary
             results_file = output_dir / "results_summary.yaml"
             with open(results_file, 'w', encoding='utf-8') as f:
-                yaml.dump(self.results, f, default_flow_style=False, indent=2)
+                yaml.safe_dump(self._sanitize_results_for_yaml(self.results), f, default_flow_style=False, indent=2, sort_keys=False)
             
             log.success(f"Configuration saved: {config_file}")
             log.success(f"Results summary saved: {results_file}")
             
         except Exception as e:
             log.error(f"Results saving failed: {e}")
+
+    def _sanitize_results_for_yaml(self, data):
+        """
+        Convert runtime result objects (DataFrame, ndarray, Path, numpy scalars, etc.)
+        into compact YAML-safe summaries.
+        """
+        try:
+            import pandas as pd
+            import numpy as np
+        except Exception:
+            pd = None
+            np = None
+
+        if data is None:
+            return None
+
+        # Convert numpy scalar types before primitive checks; np.float64 is also
+        # an instance of float and would otherwise leak into safe_dump unchanged.
+        if np is not None and isinstance(data, np.generic):
+            return data.item()
+        if isinstance(data, (str, int, float, bool)):
+            return data
+        if isinstance(data, Path):
+            return str(data)
+        if np is not None and isinstance(data, np.ndarray):
+            return {
+                'type': 'ndarray',
+                'shape': list(data.shape),
+                'dtype': str(data.dtype)
+            }
+        if pd is not None and isinstance(data, pd.DataFrame):
+            return {
+                'type': 'DataFrame',
+                'rows': int(len(data)),
+                'columns': [str(c) for c in data.columns.tolist()]
+            }
+
+        if isinstance(data, dict):
+            return {str(k): self._sanitize_results_for_yaml(v) for k, v in data.items()}
+        if isinstance(data, (list, tuple, set)):
+            out = [self._sanitize_results_for_yaml(v) for v in list(data)]
+            if len(out) > 200:
+                return {
+                    'type': type(data).__name__,
+                    'count': len(out),
+                    'sample': out[:50]
+                }
+            return out
+
+        return str(data)
 
 
 def create_sample_config():

@@ -1,37 +1,94 @@
-.. OpenGBSA documentation master file, created by sphinx-quickstart
+OpenGBSA Manual
+===============
 
-Welcome to OpenGBSA's documentation!
-====================================
+.. image:: _static/logo.png
+   :align: center
+   :alt: OpenGBSA Logo
+   :width: 600px
 
-OpenGBSA is a comprehensive MM/GBSA analysis package for protein-ligand binding free energy calculations, featuring YAML-based configuration, advanced decomposition, entropy analysis, and CUDA/CPU support.
+**OpenGBSA** is a high-performance computational chemistry toolkit for estimating the relative binding free energies of protein-ligand and protein-protein complexes. It implements the **MM/GBSA** (Molecular Mechanics / Generalized Born Surface Area) method using **OpenMM** for rapid processing on CPUs and GPUs.
+
+Designed for both ease of use and scientific rigor, OpenGBSA automates the complex workflows of topology preparation, trajectory processing, and energy decomposition.
+
+.. grid:: 2
+
+    .. grid-item-card::  🚀  Getting Started
+        :link: installation
+        :link-type: doc
+
+        Installation guide and quickstart tutorial.
+
+    .. grid-item-card::  📘  User Guide
+        :link: user_guide/index
+        :link-type: doc
+
+        Detailed instructions on configuration, input structures, and output interpretation.
+
+    .. grid-item-card::  🧠  Theory Guide
+        :link: theory/index
+        :link-type: doc
+
+        Rigorous mathematical background, GB model definitions (OBC2, GBn), and entropy methods.
+
+    .. grid-item-card::  ⚙️  API Reference
+        :link: api_reference
+        :link-type: doc
+
+        Python API documentation for custom workflows and integration.
+
+--------------------------------------------------------------------------------
+
+Table of Contents
+-----------------
+.. toctree::
+   :maxdepth: 2
+   :caption: Introduction
+   :includehidden:
+
+   installation
+   multi_engine_guide
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents
+   :caption: User Guide
+   :includehidden:
 
-   installation
-   theory
-   usage
-   advanced
-   config_guide
-   outputs
+   user_guide/index
+   user_guide/configuration
+   user_guide/running_analysis
+   user_guide/outputs
+   user_guide/visualization
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Theory and Methods
+   :includehidden:
+
+   theory/index
+   theory/mmgbsa_theory
+   theory/gb_models
+   theory/entropy_methods
+
+.. toctree::
+   :maxdepth: 2
+   :caption: API and Development
+   :includehidden:
+
    api_reference
-   testing
-   troubleshooting
-   contributing
    changelog
+   contributing
 
-
-Getting Started
+Citing OpenGBSA
 ---------------
-- **Installation:** How to install OpenGBSA with conda (recommended) and environment requirements.
-- **Basic Usage:** Quick start for running an analysis with YAML configuration.
-- **Advanced Analysis:** Frame selection, per-residue decomposition, entropy, and frame-by-frame output.
-- **Configuration Guide:** All YAML parameters and best practices.
-- **Output Files:** Explanation of all result files and formats.
-- **Troubleshooting:** Common issues and solutions (Python/numpy/openmm/cuda).
-- **Contributing:** How to contribute, code style, and developer setup.
+If you use OpenGBSA in your research, please cite:
 
-.. note::
-   For the latest updates, see the `GitHub repository <https://github.com/Bio-Otto/opengbsa>`_.
+*   **OpenGBSA**: [Citation pending, currently link to GitHub repository]
+*   **OpenMM**: Eastman, P., et al. (2017). OpenMM 7: Rapid development of high performance algorithms for molecular dynamics. *PLoS Computational Biology*, 13(7), e1005659.
+*   **MDTraj**: McGibbon, R. T., et al. (2015). MDTraj: A modern open library for the analysis of molecular dynamics trajectories. *Biophysical Journal*, 109(8), 1528-1532.
 
+Indices and tables
+==================
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`

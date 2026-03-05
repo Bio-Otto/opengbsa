@@ -1,0 +1,32 @@
+analysis_settings:
+  decomp_frames: 10
+  entropy_method: interaction
+  frame_selection: sequential
+  frame_stride: 1
+  gb_model: HCT
+  max_frames: 10
+  report_raw_energies: false
+  run_entropy_analysis: true
+  run_per_residue_decomposition: true
+  sa_model: ACE
+  salt_concentration: 0.15
+  temperature: 300.0
+  use_cache: false
+  verbose: 1
+  parallel_processing: true
+forcefield_settings:
+  protein_forcefield: amber
+input_files:
+  complex_pdb: test/data/6t1h_prmtop_test/complex.prmtop
+  ligand_topology: test/data/6t1h_prmtop_test/ligand.prmtop
+  receptor_topology: test/data/6t1h_prmtop_test/receptor.prmtop
+  solvated_topology: test/data/6t1h_prmtop_test/replica_1/gro/complex_solv_ions.gro
+  trajectory: test/data/6t1h_prmtop_test/md_complex_prod.xtc
+output_settings:
+  analysis_name: test_hct_ie
+  output_directory: test/results/comprehensive/test_hct_ie
+  save_logs: true
+  save_plots: true
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: CUDA

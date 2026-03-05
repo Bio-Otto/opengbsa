@@ -183,10 +183,16 @@ cache/
 *.tmp
 *.temp
 temp/
+scripts/scratch/
+config/scratch/
 
 # Log files
 *.log
 logs/
+*.pid
+*.pid.lock
+debug_output.txt
+temp_*_interactions.png
 
 # Test output
 test_output/
@@ -226,3 +232,21 @@ Thumbs.db
 # Exclude installer and root CSVs
 miniconda.sh
 *.csv
+
+# Test output directories
+test/results/
+mmgbsa_results/
+mmgbsa_results_v*/
+
+# Temp/scratch files
+temp_*.pdb
+temp_*.png
+*_interactions.png
+
+# Testing log files
+*.log
+
+# Large binary test data (10GB - not suitable for git)
+test/data/
+test/results/
+test/manual/

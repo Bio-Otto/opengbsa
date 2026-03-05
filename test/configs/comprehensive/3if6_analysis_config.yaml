@@ -1,0 +1,52 @@
+input_files:
+  complex_pdb: test/data/3if6_dimer_test/3if6.tpr
+  trajectory: test/data/3if6_dimer_test/3if6.xtc
+  ligand_mol: test/data/3if6_dimer_test/ligand.sdf
+  ligand_resname: LIG
+output_settings:
+  output_directory: test/results/3if6_dimer_test
+  analysis_name: 3if6_dimer_test
+  output_formats:
+  - csv
+  - txt
+  - yaml
+  - json
+  save_plots: true
+  save_intermediate: true
+  save_logs: true
+analysis_settings:
+  salt_concentration: 0.15
+  gb_model: GBn2
+  receptor_selection: protein
+  ligand_selection: resname UNL
+  frame_start: 100
+  max_frames: 200
+  frame_stride: 50
+  run_per_residue_decomposition: true
+  decomp_frames: 200
+  solute_dielectric: 1.0
+  solvent_dielectric: 78.5
+  entropy_method: interaction
+  run_entropy_analysis: true
+  report_raw_energies: true
+  sa_model: LCPO
+  binding_mode: dimer_ligand
+  verbose: 1
+  n_jobs: -1
+  parallel_processing: true
+advanced_settings:
+  save_frame_by_frame_csv: true
+  frame_output_components:
+  - vdw
+  - electrostatic
+  - solvation
+  - total
+reporting_settings:
+  generate_final_report: true
+  include_plots: true
+  include_per_residue: true
+  include_hot_spots: true
+  report_format: html
+platform_settings:
+  decomposition_platform: CPU
+  preferred_platform: CUDA
