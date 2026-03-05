@@ -17,7 +17,7 @@ requirements:
     - wheel
   run:
     - python >=3.8,<3.13
-    - openmm >=8.0.0,<8.3
+    - openmm >=8.5.0
     - mdtraj >=1.9.0
     - openff-toolkit >=0.14.0
     - openmmforcefields
