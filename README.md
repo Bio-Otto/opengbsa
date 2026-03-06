@@ -41,7 +41,7 @@ conda install -c conda-forge openmm mdtraj rdkit parmed
 pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
 
 # Install the package (requires OpenMM 8.5.0beta from openmm_rc)
-conda install -c bio-otto -c conda-forge -c conda-forge/label/openmm_rc opengbsa=0.0.6
+conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.6
 ```
 
 ---
