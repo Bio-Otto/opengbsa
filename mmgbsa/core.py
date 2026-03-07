@@ -2313,7 +2313,6 @@ class GBSACalculator(GBSAForceManager):
         }
         
         # Resolve Forcefields dynamically
-        from pathlib import Path
         _ff_base = Path(__file__).parent / 'forcefields'
         if self.protein_forcefield.lower() == 'charmm':
             sys_ffs = [str(_ff_base / 'kcx_charmm36.xml'), 'charmm36.xml', 'charmm36/water.xml']
