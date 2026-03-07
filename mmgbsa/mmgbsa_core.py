@@ -2323,16 +2323,24 @@ class GBSACalculator(GBSAForceManager):
             'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
         }
         
+        # Resolve Forcefields dynamically
+        from pathlib import Path
+        _ff_base = Path(__file__).parent / 'forcefields'
+        if self.protein_forcefield.lower() == 'charmm':
+            sys_ffs = [str(_ff_base / 'kcx_charmm36.xml'), 'charmm36.xml', 'charmm36/water.xml']
+        elif self.protein_forcefield.lower() == 'charmm_gromacs':
+            sys_ffs = [str(_ff_base / 'kcx_charmm36_gromacs.xml'), str(_ff_base / 'charmm36_gromacs_final.xml'), 'charmm36/water.xml']
+        elif self.protein_forcefield.lower() == 'amber14':
+            sys_ffs = ['amber14-all.xml', 'amber14/tip3pfb.xml']
+        else:
+            sys_ffs = ['amber/ff14SB.xml', 'amber/tip3p_standard.xml']
+
         if SystemGenerator is None:
             log.warning("openmmforcefields SystemGenerator is unavailable; falling back to OpenMM ForceField.")
             if ligand_mol is not None:
                 raise RuntimeError("SystemGenerator is required for ligand_mol-based parameterization but is not available.")
             ff = None
-            ff_candidates = [
-                ('amber/ff14SB.xml', 'amber/tip3p_standard.xml'),
-                ('amber14-all.xml', 'amber14/tip3p.xml'),
-                ('amber99sb.xml', 'tip3p.xml'),
-            ]
+            ff_candidates = [sys_ffs]
             for ff_files in ff_candidates:
                 try:
                     ff = app.ForceField(*ff_files)
@@ -2359,13 +2367,13 @@ class GBSACalculator(GBSAForceManager):
         elif ligand_mol is None:
             # Protein-only/PPI mode: avoid initializing small-molecule toolkits.
             system_generator = SystemGenerator(
-                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                forcefields=sys_ffs,
                 forcefield_kwargs=general_kwargs,
                 nonperiodic_forcefield_kwargs=nonperiodic_kwargs
             )
         else:
             system_generator = SystemGenerator(
-                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                forcefields=sys_ffs,
                 small_molecule_forcefield='openff-2.0.0',
                 molecules=molecules_list,
                 forcefield_kwargs=general_kwargs,
@@ -2381,12 +2389,17 @@ class GBSACalculator(GBSAForceManager):
             log.info("Checking for missing atoms and adding hydrogens...")
             modeller.addHydrogens(forcefield=system_generator.forcefield)
         except Exception as e:
+            if "KCX" in str(e) and "amber" in str(self.protein_forcefield).lower():
+                log.error("KCX RESIDUE DETECTED! OpenMM's Amber forcefields do not support Carboxylated Lysine (KCX).")
+                log.error("Please change `protein_forcefield: charmm_gromacs` in your configuration file to use the included custom KCX parameters.")
             log.warning(f"Modeller.addHydrogens failed: {e}. Proceeding with existing topology.")
             
         # Create System (This now generates the correct GB force automatically)
         try:
             system = system_generator.create_system(modeller.topology)
         except ValueError as e:
+            if "KCX" in str(e) and "amber" in str(self.protein_forcefield).lower():
+                raise ValueError("KCX RESIDUE DETECTED! OpenMM's Amber forcefields do not support Carboxylated Lysine (KCX). Please change `protein_forcefield: charmm_gromacs` in your config file.") from e
             if 'implicitSolvent' in str(e):
                 log.warning(f"SystemGenerator rejected implicitSolvent: {e}")
                 log.warning("Attempting to build system without implicitSolvent keyword...")
@@ -2396,13 +2409,13 @@ class GBSACalculator(GBSAForceManager):
                 fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
                 if ligand_mol is None:
                     fallback_generator = SystemGenerator(
-                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        forcefields=sys_ffs,
                         forcefield_kwargs=general_kwargs,
                         nonperiodic_forcefield_kwargs=fallback_kwargs
                     )
                 else:
                     fallback_generator = SystemGenerator(
-                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        forcefields=sys_ffs,
                         small_molecule_forcefield='openff-2.0.0',
                         molecules=molecules_list,
                         forcefield_kwargs=general_kwargs,

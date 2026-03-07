@@ -7,7 +7,7 @@ source:
 
 build:
   noarch: python
-  number: 5
+  number: 6
   entry_points:
     - opengbsa = mmgbsa.cli:main
   script: pip install . --no-deps --ignore-installed
