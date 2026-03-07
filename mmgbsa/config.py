@@ -330,21 +330,49 @@ class ConfigManager:
 
 input_files:
   # Path to the ligand file (SDF format is highly recommended over PDB for preserving bond orders and formal charges)
-  ligand_mol: 'path/to/ligand.sdf'
+  ligand_mol: 'test/ligand.sdf'
   
   # Path to the complex PDB file (receptor + ligand)
-  complex_pdb: 'path/to/complex.pdb'
+  complex_pdb: 'test/complex.pdb'
   
   # Path to the ligand-only PDB file
-  ligand_pdb: 'path/to/ligand.pdb'
+  ligand_pdb: 'test/ligand.pdb'
   
   # Path to the MD trajectory file (XTC, DCD, TRR, etc.)
-  trajectory: 'path/to/trajectory.xtc'
+  trajectory: 'test/complex.xtc'
   
   # Optional: Explicit Gromacs/Amber topology files (leave commented if using PDB)
   # receptor_topology: 'path/to/receptor.top'
   # ligand_topology: 'path/to/ligand.top'
   # solvated_topology: 'path/to/complex_solvated.top'
+
+output_settings:
+  # Main directory where all analysis results will be saved
+  output_directory: 'mmgbsa_results'
+  
+  # Name of this specific analysis run (used for subdirectories)
+  analysis_name: 'sample_analysis'
+  
+  # Output formats to save results in
+  output_formats: ['csv', 'txt', 'yaml']
+  
+  # Enable saving plots automatically
+  save_plots: true
+  
+  # Formats for saving plots
+  plot_formats: ['png', 'pdf']
+  
+  # Save intermediate generated files (useful for debugging, takes more space)
+  save_intermediate: false
+  
+  # Save aligned/processed trajectories
+  save_trajectories: false
+  
+  # Save detailed log files
+  save_logs: true
+  
+  # Compress large output files automatically
+  compress_output: false
 
 analysis_settings:
   # === Core Execution Settings ===
@@ -405,6 +433,21 @@ analysis_settings:
   
   # Enable pairwise energy decomposition (Residue-Residue interaction matrix). True/False.
   energy_decomposition: true
+  
+  # Save frame-by-frame decomposition energies to CSV
+  save_frame_by_frame_csv: true
+  
+  # Filename for the frame-by-frame CSV
+  frame_by_frame_csv_name: "frame_by_frame_decomposition"
+  
+  # Include overall residue averages in the output summaries
+  include_residue_summary: true
+  
+  # Components to output in the frame-by-frame file
+  frame_output_components: ['vdw', 'electrostatic', 'solvation', 'total']
+  
+  # Format for detailed decomposition outputs (csv, json, hdf5)
+  frame_output_format: 'csv'
 
   # === Hardware & Performance ===
   
@@ -414,12 +457,70 @@ analysis_settings:
   # Use Python multiprocessing to calculate frames in parallel (CPU only). True/False.
   parallel_processing: true
   
-  # Use GPU acceleration for OpenMM calculations. True/False.
-  # GPU calculates 1 frame per process. Disable parallel_processing if using GPU to avoid VRAM exhaustion.
-  use_gpu: false
+  # Maximum number of parallel workers (leave null for auto-detect based on CPU cores)
+  max_workers: null
+
+forcefield_settings:
+  # Protein forcefield to use for parameterization
+  protein_forcefield: 'amber14-all.xml'
   
-  # Specific GPU platform to use if use_gpu is true. Options: 'CUDA', 'OpenCL', or null (auto-detect)
-  gpu_platform: null
+  # Specific variant of the protein forcefield (optional)
+  protein_variant: null
+  
+  # Ligand parameterization forcefield
+  ligand_forcefield: 'openff-2.1.0.offxml'
+  
+  # Water model to use
+  water_model: null
+  
+  # Ion parameters to use
+  ion_forcefield: null
+
+advanced_settings:
+  # Tolerance for OpenMM energy minimization
+  minimization_tolerance: 1.0e-06
+  
+  # Maximum steps for energy minimization before analysis
+  max_minimization_steps: 10000
+  
+  # Normal Mode Analysis quality threshold
+  nma_quality_threshold: 'Good'
+  
+  # Hot spot interaction energy threshold (kcal/mol). Residues below this are flagged as hot spots.
+  hot_spot_threshold: -1.0
+  
+  # Bootstrap confidence interval (e.g. 0.95 for 95%)
+  bootstrap_confidence: 0.95
+  
+  # Number of bootstrap samples for error estimation
+  bootstrap_samples: 1000
+
+platform_settings:
+  # Preferred OpenMM platform. Options: 'CUDA', 'OpenCL', 'CPU', 'Reference'
+  preferred_platform: 'CUDA'
+  
+  # CUDA device index to use if platform is CUDA
+  cuda_device: 0
+  
+  # Precision for CUDA calculations. Options: 'single', 'mixed', 'double'
+  cuda_precision: 'mixed'
+
+reporting_settings:
+  # Generate a comprehensive final report
+  generate_final_report: true
+  
+  # Automatically generate result plots
+  include_plots: true
+  
+  # Include summary of configuration in the final report
+  include_config_summary: true
+
+reproducibility_settings:
+  # Save a copy of the configuration next to the results
+  save_configuration: true
+  
+  # Save environment info to track Python/package versions
+  save_environment: true
 """
         
         try:
