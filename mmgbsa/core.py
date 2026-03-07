@@ -1065,11 +1065,12 @@ class GBSACalculator(GBSAForceManager):
                 ligand_pdb_obj = app.PDBFile(ligand_pdb)
                 
                 # Check if complex contains ligand
-                complex_residues = set(res.name for res in complex_pdb_obj.topology.residues())
-                ligand_residues = set(res.name for res in ligand_pdb_obj.topology.residues())
-                
-                if not ligand_residues.issubset(complex_residues):
-                    validation_errors.append("Ligand residues not found in complex PDB")
+                if complex_pdb_obj is not None:
+                    complex_residues = set(res.name for res in complex_pdb_obj.topology.residues())
+                    ligand_residues = set(res.name for res in ligand_pdb_obj.topology.residues())
+                    
+                    if not ligand_residues.issubset(complex_residues):
+                        validation_errors.append("Ligand residues not found in complex PDB")
             
         except Exception as e:
             validation_errors.append(f"PDB validation error: {e}")
