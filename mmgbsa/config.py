@@ -317,7 +317,7 @@ class ConfigManager:
     
     def create_complete_config(self, output_path: str) -> bool:
         """
-        Create complete configuration file with all options.
+        Create complete configuration file with all options and explanations.
         
         Args:
             output_path: Path to save configuration file
@@ -325,44 +325,106 @@ class ConfigManager:
         Returns:
             True if successful, False otherwise
         """
-        complete_config = {
-            'input_files': {
-                'ligand_mol': 'path/to/ligand.sdf',
-                'complex_pdb': 'path/to/complex.pdb',
-                'ligand_pdb': 'path/to/ligand.pdb',
-                'trajectory': 'path/to/trajectory.xtc'
-            },
-            'analysis_settings': {
-                # Core parameters
-                'temperature': 300.0,
-                'gb_model': 'OBC2',
-                'salt_concentration': 0.15,
-                
-                # Frame selection
-                'max_frames': 50,
-                'frame_start': None,
-                'frame_end': None,
-                'frame_stride': None,
-                'frame_selection': 'sequential',
-                'random_seed': None,
-                
-                # Analysis options
-                'run_entropy_analysis': True,
-                'run_per_residue_decomposition': True,
-                'decomp_frames': 10,
-                'energy_decomposition': True,
-                
-                # Performance
-                'use_cache': True,
-                'parallel_processing': True,
-                'use_gpu': False,
-                'gpu_platform': None
-            }
-        }
+        complete_config_yaml = """# OpenGBSA Complete Configuration File
+# This file contains all available settings with explanations and alternative options.
+
+input_files:
+  # Path to the ligand file (SDF format is highly recommended over PDB for preserving bond orders and formal charges)
+  ligand_mol: 'path/to/ligand.sdf'
+  
+  # Path to the complex PDB file (receptor + ligand)
+  complex_pdb: 'path/to/complex.pdb'
+  
+  # Path to the ligand-only PDB file
+  ligand_pdb: 'path/to/ligand.pdb'
+  
+  # Path to the MD trajectory file (XTC, DCD, TRR, etc.)
+  trajectory: 'path/to/trajectory.xtc'
+  
+  # Optional: Explicit Gromacs/Amber topology files (leave commented if using PDB)
+  # receptor_topology: 'path/to/receptor.top'
+  # ligand_topology: 'path/to/ligand.top'
+  # solvated_topology: 'path/to/complex_solvated.top'
+
+analysis_settings:
+  # === Core Execution Settings ===
+  
+  # Analytical binding mode. Options:
+  # - 'standard': Standard Receptor-Ligand binding.
+  # - 'dimer_ligand': Dimer-Ligand binding (Ligand is extracted from dimer interface).
+  # - 'ppi': Protein-Protein Interaction (Treats one protein chain as the ligand).
+  binding_mode: 'standard'
+  
+  # Temperature in Kelvin for calculations
+  temperature: 310.0
+  
+  # Generalized Born (GB) model for solvation free energy. Options:
+  # - 'OBC2' (Default, recommended for proteins)
+  # - 'OBC1' 
+  # - 'HCT'
+  # - 'GBn'
+  # - 'GBn2'
+  gb_model: 'OBC2'
+  
+  # Salt concentration in Molar (M) for the implicit solvent model
+  salt_concentration: 0.15
+
+  # === Frame Selection Strategy ===
+  
+  # Maximum number of frames to process
+  max_frames: 100
+  
+  # Starting frame index (0-indexed). If null, starts from the beginning.
+  frame_start: null
+  
+  # Ending frame index. If null, goes to the end of the trajectory.
+  frame_end: null
+  
+  # Stride (step size) between frames. Use 1 for every frame, 10 for every 10th frame.
+  frame_stride: null
+  
+  # How to select frames if the trajectory has more than max_frames. Options:
+  # - 'sequential': Selects frames evenly spaced across the trajectory.
+  # - 'random': Selects frames randomly (requires random_seed).
+  frame_selection: 'sequential'
+  
+  # Random seed for reproducible random frame selection. Used only if frame_selection is 'random'.
+  random_seed: 42
+
+  # === Advanced Analysis Options ===
+  
+  # Calculate entropy (Interaction Entropy method). True/False.
+  # Note: Entropy calculations can be computationally expensive.
+  run_entropy_analysis: true
+  
+  # Perform per-residue energy decomposition. True/False.
+  run_per_residue_decomposition: true
+  
+  # Number of frames to use for per-residue decomposition. Must be <= max_frames.
+  decomp_frames: 20
+  
+  # Enable pairwise energy decomposition (Residue-Residue interaction matrix). True/False.
+  energy_decomposition: true
+
+  # === Hardware & Performance ===
+  
+  # Cache intermediate topologies and calculations to speed up re-runs. True/False.
+  use_cache: true
+  
+  # Use Python multiprocessing to calculate frames in parallel (CPU only). True/False.
+  parallel_processing: true
+  
+  # Use GPU acceleration for OpenMM calculations. True/False.
+  # GPU calculates 1 frame per process. Disable parallel_processing if using GPU to avoid VRAM exhaustion.
+  use_gpu: false
+  
+  # Specific GPU platform to use if use_gpu is true. Options: 'CUDA', 'OpenCL', or null (auto-detect)
+  gpu_platform: null
+"""
         
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
-                yaml.dump(complete_config, f, default_flow_style=False, indent=2)
+                f.write(complete_config_yaml)
             
             logger.info(f"Complete configuration created: {output_path}")
             return True
