@@ -7,7 +7,7 @@ source:
 
 build:
   noarch: python
-  number: 8
+  number: 9
   entry_points:
     - opengbsa = mmgbsa.cli:main
   script: pip install . --no-deps --ignore-installed
@@ -35,6 +35,8 @@ requirements:
     - seaborn >=0.11.0
     - pyyaml >=6.0
     - pathlib2 >=2.3.0
+    - pip:
+        - TprParser
 
 about:
   home: https://github.com/Bio-Otto/opengbsa
