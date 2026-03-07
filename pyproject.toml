@@ -99,6 +99,7 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "*" = ["*.yaml", "*.yml", "*.txt", "*.md"]
+"mmgbsa" = ["forcefields/*", "forcefields/**/*"]
 
 [tool.setuptools.packages.find]
 where = ["."]
