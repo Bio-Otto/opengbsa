@@ -165,6 +165,19 @@ class GBSACalculator:
         return self.analysis.run(*args, **kwargs)
 
     def run_comprehensive(self, *args, **kwargs):
+        """
+        Run the full MM/GBSA pipeline (frame selection, energy calculation,
+        optional decomposition/entropy, validation, reporting).
+
+        This facade forwards all arguments unchanged to
+        `AnalysisEngine.run_comprehensive`, which in turn forwards to the
+        underlying calculator's own `run_comprehensive`/`run` -- in practice
+        this is `mmgbsa.mmgbsa_core.GBSACalculator.run`, since that is the
+        `legacy` instance `AnalysisEngine` was constructed with (see
+        `GBSACalculator.legacy` above). For the accepted parameters, see
+        `mmgbsa.mmgbsa_core.GBSACalculator.run`'s docstring -- this facade
+        does not re-validate or transform them.
+        """
         return self.analysis.run_comprehensive(*args, **kwargs)
 
     def __getattr__(self, name):
@@ -179,4 +192,6 @@ class GBSACalculator:
 
     # Minimal compatibility methods
     def save_results(self, results, filename='results.json'):
+        """Serialize `results` (as returned by `run`/`run_comprehensive`) to
+        `filename` via the facade's `ResultsManager`."""
         return self.results.save_results(results, filename=filename)

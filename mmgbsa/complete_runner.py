@@ -96,9 +96,17 @@ class CompleteMMGBSARunner:
     def _setup_output_directory(self):
         """Setup comprehensive output directory structure"""
         if self.output_dir is None:
-            output_settings = self.config['output_settings']
+            # See mmgbsa.runner.MMGBSARunner._create_output_directory for the
+            # same fix and its rationale: the documented/canonical config
+            # schema puts this under 'params.output_directory', not
+            # 'output_settings.output_directory'; indexing 'output_settings'
+            # directly crashes with a KeyError for any config that only has
+            # 'params' (which is every config following config_master.yaml).
+            output_settings = self.config.get('output_settings', {})
+            output_dir_value = self.config.get('params', {}).get('output_directory') \
+                or output_settings.get('output_directory', 'mmgbsa_results')
             # Create main output directory
-            main_dir = Path(output_settings.get('output_directory', 'mmgbsa_results'))
+            main_dir = Path(output_dir_value)
             main_dir.mkdir(parents=True, exist_ok=True)
             # Create analysis-specific subdirectory
             analysis_name = output_settings.get('analysis_name', 'analysis')

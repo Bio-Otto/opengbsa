@@ -19,11 +19,72 @@ from xml.dom import minidom
 log = logging.getLogger(__name__)
 
 class ResidueParameterizer:
+    """
+    Generates an OpenMM force-field residue-template XML for a non-standard
+    residue (e.g. KCX, carbamylated lysine) that no bundled force field
+    recognizes, by capping the isolated residue with ACE/NME blocking groups
+    so OpenFF/SMIRNOFF can parameterize it as a chemically valid small
+    molecule, then stripping the cap contributions back out of the resulting
+    OpenMM System before writing the residue template.
+
+    Pipeline (see `simple_run` for the end-to-end entry point):
+      1. `extract_and_cap_residue`: pull the residue's atoms out of a PDB,
+         infer any missing intra-residue bonds by distance, attach ACE
+         (-C(=O)-CH3) at the residue's backbone N and NME (-NH-CH3) at its
+         backbone C, saturate the caps with hydrogens, and embed 3D
+         coordinates -- producing a capped SDF plus an atom-index-to-PDB-name
+         JSON map and a protonated (cap-free) reference PDB.
+      2. `parameterize_with_openff`: parameterize the capped fragment with an
+         OpenFF SMIRNOFF force field (optionally assigning partial charges
+         via `charge_method`, e.g. 'am1bcc'/'gasteiger'), producing an OpenMM
+         System for the FULL capped molecule (core residue + ACE + NME).
+      3. `_convert_system_to_residue_xml`: using the JSON atom map, keep only
+         the "core" (non-cap) atoms and any bonded term entirely among core
+         atoms, discard everything touching a cap atom (recording an
+         `ExternalBond` at the core atom name where a bond crossed the
+         core/cap boundary, so OpenMM's ForceField can reconnect the residue
+         to its real neighbors in a normal polymer chain), and write the
+         result as a `<Residue>` template XML.
+    """
+
     def __init__(self, work_dir="parameterization_work"):
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
     def extract_and_cap_residue(self, pdb_path, res_name, output_sdf):
+        """
+        Extract residue `res_name` from `pdb_path`, cap it with ACE/NME, and
+        write a 3D-embedded SDF ready for OpenFF parameterization.
+
+        Index-mapping invariant this method establishes and relies on
+        (see the inline "Indices:" comment below for the authoritative
+        layout): after capping and saturating with hydrogens, the resulting
+        RDKit molecule's atom indices are partitioned into three contiguous
+        blocks, in this order:
+          [0, num_res_atoms)         -- original residue atoms from the PDB
+                                         (heavy atoms + any H already present)
+          [num_res_atoms, num_capped_atoms) -- new ACE/NME heavy cap atoms
+          [num_capped_atoms, end)    -- new hydrogens added to saturate the
+                                         caps (classified as "core" or "cap"
+                                         by which block their bonded
+                                         neighbor falls into)
+        Every atom's `is_cap` (bool) and `atom_name`/`name` RDKit properties
+        are set according to this partition, and `final_mapping` (also
+        written alongside the SDF as `<output_sdf stem>_map.json`) records
+        {atom_index: pdb_atom_name} for every non-cap atom. Downstream code
+        (`_convert_system_to_residue_xml`) uses this map, not a recomputed
+        partition, to decide which atoms/bonds belong in the final residue
+        template -- so any change to this partitioning logic must keep the
+        JSON map's semantics consistent with what gets written into the SDF.
+
+        Returns
+        -------
+        (str, str)
+            Path to the capped SDF, and path to a protonated, cap-free PDB
+            of just the core residue (used for later PDB-level "surgery"
+            when inserting the parameterized residue back into a full
+            protein structure).
+        """
         print(f"DEBUG: Extracting {res_name} from {pdb_path}")
         mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=False, sanitize=False)
         if not mol:
@@ -257,6 +318,33 @@ class ResidueParameterizer:
         return output_sdf, protonated_pdb_path
 
     def parameterize_with_openff(self, sdf_path, output_xml_path, res_name, charge_method=None):
+        """
+        Parameterize the capped SDF from `extract_and_cap_residue` with an
+        OpenFF SMIRNOFF force field ("openff-2.0.0.offxml"), then strip the
+        cap contributions and write a residue-template XML via
+        `_convert_system_to_residue_xml`.
+
+        Parameters
+        ----------
+        sdf_path : str
+            Path to the capped SDF (as produced by `extract_and_cap_residue`);
+            its sibling `<stem>_map.json` (core atom index -> PDB atom name)
+            is loaded automatically if present.
+        output_xml_path : str
+            Where to write the resulting OpenMM ForceField residue template.
+        res_name : str
+            Residue name to use in the generated template (should match the
+            PDB residue name, e.g. "KCX").
+        charge_method : str, optional
+            If given, assign partial charges on the (capped, full) molecule
+            via this method (e.g. 'am1bcc', 'gasteiger') before parameterizing,
+            instead of using OpenFF's own default charge assignment.
+
+        Returns
+        -------
+        str
+            `output_xml_path`, unchanged, for convenience chaining.
+        """
         if not HAS_OPENFF:
             raise ImportError("OpenFF Toolkit not installed.")
             
@@ -285,6 +373,48 @@ class ResidueParameterizer:
         return output_xml_path
 
     def _convert_system_to_residue_xml(self, system, openff_mol, res_name, output_path, atom_map=None, sdf_path=None):
+        """
+        Strip ACE/NME cap contributions out of an OpenMM System built for the
+        FULL capped molecule, and write an OpenMM ForceField `<Residue>`
+        template XML containing only the core (non-cap) residue's atom
+        types, charges/LJ parameters, and bonded terms.
+
+        `atom_map` (core RDKit atom index -> PDB atom name, as produced by
+        `extract_and_cap_residue`) is the authoritative source of which atom
+        indices are "core" vs. "cap": an index present in `atom_map` is core
+        regardless of any `is_cap` RDKit property; only in the no-map
+        fallback path is `is_cap` consulted directly. Bonded terms (bonds/
+        angles/torsions) are included in the template only if ALL of their
+        atom indices are in the core set; a bond with exactly one core and
+        one cap endpoint becomes an `<ExternalBond>` entry (named by the
+        core atom), which is how OpenMM's ForceField knows to connect this
+        residue template to its real neighbor in an actual polymer chain
+        instead of to the (discarded) synthetic cap.
+
+        Parameters
+        ----------
+        system : openmm.System
+            System built by `parameterize_with_openff` for the capped
+            molecule (core + ACE + NME).
+        openff_mol : openff.toolkit.topology.Molecule
+            The same capped molecule, used for its bond list.
+        res_name : str
+            Residue name for the generated template and its atom-type prefix
+            (`"{res_name}-{atom_name}"`).
+        output_path : str
+            Where to write the resulting XML.
+        atom_map : dict[int, str], optional
+            Core atom index -> PDB atom name, from `extract_and_cap_residue`'s
+            JSON sidecar. If omitted, falls back to using each RDKit atom's
+            `is_cap` property directly (only correct if `rdmol`'s indices
+            still carry that property, i.e. it wasn't reloaded from a plain
+            SDF that doesn't preserve custom RDKit properties).
+        sdf_path : str, optional
+            If given, reload this SDF for atom ordering/identity in place of
+            `openff_mol.to_rdkit()`'s own conversion, when their atom counts
+            match -- guards against index drift introduced by OpenFF's own
+            RDKit round-trip.
+        """
         # Reload SDF to ensure index matching if needed
         rdmol = openff_mol.to_rdkit()
         if sdf_path:
@@ -419,6 +549,18 @@ class ResidueParameterizer:
         log.info(f"Generated XML at {output_path}")
 
     def simple_run(self, pdb_path, res_name, output_xml, charge_method=None):
+        """
+        End-to-end entry point: extract+cap `res_name` from `pdb_path`,
+        parameterize it with OpenFF, and write the residue-template XML.
+        Equivalent to calling `extract_and_cap_residue` followed by
+        `parameterize_with_openff`.
+
+        Returns
+        -------
+        (str, str)
+            `output_xml` (unchanged) and the protonated, cap-free reference
+            PDB path from `extract_and_cap_residue`.
+        """
         sdf = self.work_dir / f"{res_name}_capped.sdf"
         _, protonated_pdb = self.extract_and_cap_residue(pdb_path, res_name, sdf)
         self.parameterize_with_openff(sdf, output_xml, res_name, charge_method=charge_method)

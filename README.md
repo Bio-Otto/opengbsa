@@ -61,7 +61,7 @@ cp config_master.yaml my_analysis.yaml
 
 ```bash
 # Using the CLI entry point
-mmgbsa my_analysis.yaml
+opengbsa my_analysis.yaml
 
 # Or reference the CLI module directly
 python -m mmgbsa.cli my_analysis.yaml

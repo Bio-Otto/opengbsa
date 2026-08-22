@@ -4,8 +4,21 @@ from openmm import unit
 
 def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
     """
-    Calculate theoretical IC50/Kd from Binding Free Energy with confidence intervals.
-    
+    Calculate a theoretical Kd (reported as 'ic50') from Binding Free Energy,
+    with a confidence interval from `delta_g_std`.
+
+    NOTE: despite the name, this computes Kd = exp(delta_g / RT), the
+    thermodynamic dissociation constant -- NOT a true IC50. For a competitive
+    inhibitor, IC50 relates to Kd via the Cheng-Prusoff equation,
+    IC50 = Kd * (1 + [S]/Km), which depends on substrate concentration and Km
+    and is NOT applied here. Treat this function's output as a Kd estimate,
+    not a literal IC50 prediction, unless [S]/Km happens to be negligible.
+
+    Also note: as of this writing, neither this function nor the module that
+    calls it (`mmgbsa.plotting`) is imported/reachable from the main
+    pipeline (`mmgbsa.runner`/`mmgbsa.cli`) -- this is effectively unused
+    code. Verify it is wired in before relying on its output.
+
     Parameters
     ----------
     delta_g : float or unit.Quantity
@@ -14,12 +27,12 @@ def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
         Standard deviation or Standard Error of the Mean (kcal/mol)
     temperature : unit.Quantity
         Temperature (default: 300K)
-        
+
     Returns
     -------
     dict
         Dictionary containing:
-        - 'ic50': Theoretical IC50 (micromolar)
+        - 'ic50': Theoretical Kd, labeled IC50 (micromolar)
         - 'ic50_low': Lower bound of 95% CI
         - 'ic50_high': Upper bound of 95% CI
         - 'unit': 'micromolar'
