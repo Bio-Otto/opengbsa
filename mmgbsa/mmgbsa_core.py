@@ -724,13 +724,27 @@ class GBSAForceManager:
                 soluteDielectric=self.solute_dielectric,
                 SA=None, cutoff=cutoff_nm, kappa=kappa,
             )
-            offset = 0.009  # nm, standard OBC offset (matches GBSAOBC2Force's own OFFSET)
+            # NOTE: GBSAOBC2Force's addParticle (inherited from
+            # CustomAmberGBForceBase) already subtracts the 0.009 nm OBC
+            # offset from the radius AND multiplies scale by that
+            # offset-subtracted radius internally -- confirmed against
+            # OpenMM's own getStandardParameters()/ParmEd's own
+            # createSystem(implicitSolvent=OBC2), both of which pass raw
+            # (un-offset, un-multiplied) radius/scale straight through.
+            # This code previously pre-applied both transformations itself,
+            # so they were applied TWICE (once here, once inside
+            # addParticle), corrupting every Born radius and roughly
+            # doubling the magnitude of the resulting GB energy -- verified
+            # numerically against a direct sander (Amber igb=5) single-frame
+            # energy: the double-applied version gave -4992 kcal/mol vs
+            # sander's -2482 kcal/mol for the same structure, while raw
+            # (correctly single-applied) parameters give -2473 kcal/mol,
+            # a 0.4% match.
             for i, atom in enumerate(atoms_list):
                 charge = charges[i]
-                raw_radius = self._get_gb_radius(atom)
-                or_radius = raw_radius * 0.1 - offset
-                sr_radius = self._get_gb_scale(atom) * or_radius
-                gb_force.addParticle([charge, or_radius, sr_radius])
+                raw_radius_nm = self._get_gb_radius(atom) * 0.1
+                raw_scale = self._get_gb_scale(atom)
+                gb_force.addParticle([charge, raw_radius_nm, raw_scale])
             try:
                 gb_force.finalize()
             except AttributeError:
