@@ -1,13 +1,12 @@
 """
-MM/GBSA Analysis Package
+OpenGBSA
 
-A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) 
-analysis package with advanced features including entropy analysis, 
+A comprehensive Molecular Mechanics/Generalized Born Surface Area (MM/GBSA)
+analysis package with advanced features including entropy analysis,
 per-residue decomposition, and YAML-based configuration.
 
 Author: H. Ibrahim Özdemir
 License: MIT
-Version: 0.0.2
 """
 
 from ._version import __version__, __author__, __email__, __link__, __license__

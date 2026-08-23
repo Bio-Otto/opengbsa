@@ -1,5 +1,5 @@
 """
-Utility Functions for MM/GBSA Analysis Package
+Utility Functions for OpenGBSA
 
 This module contains utility functions used throughout the package.
 """

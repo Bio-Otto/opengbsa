@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Removed dead `mmgbsa/core.py`:** the old monolithic module was fully shadowed by the `mmgbsa/core/` package and unreachable; deleted (~4,570 lines).
+- **Native TPR mode (`tpr_loader.py`):** bonded parameters (bonds/angles/dihedrals/impropers) are now parsed from the `.tpr` file instead of being fabricated; triclinic box vectors are now computed correctly. CMAP terms are detected and warned about (not yet supported for native TPR).
+- **GB-derived per-residue decomposition:** implemented a full analytical OBC2 decomposition (`_gb_solvation_decomposition`) and fixed a ~50% systematic undercounting bug in the Gohlke-Kollman pair-energy split when the decomposition target (e.g. the ligand) has no entry of its own in the residue map.
+- **vdW decomposition:** the extracted CHARMM NBFIX `acoef`/`bcoef` pair table is now actually used in the standalone per-residue pairwise vdW calculation (previously silently fell back to Lorentz-Berthelot combining rules even when a real NBFIX table was available).
+- **Electrostatic decomposition:** removed an incorrectly-applied Debye-Huckel salt-screening factor from the pairwise electrostatic decomposition term.
+- **Salt screening (kappa):** `OBC1`/`OBC2` GB models now correctly apply Debye-Huckel salt screening when `salt_concentration > 0`, via a `CustomGBForce`-based `GBSAOBC2Force`; previously this was silently ignored for every run.
+- **GB radii for GROMACS-origin systems:** the configured GB radii set (e.g. `mbondi2` for OBC2) is now actually applied when converting a GROMACS `.top` to Amber format (`GromacsPreprocessor.convert_to_amber`), which is the code path real GROMACS-input runs go through.
+- **1-4 nonbonded exception detection:** fixed a heuristic that only sampled the first 5 `NonbondedForce` exceptions to decide whether Amber-style 1-4 scaling needed to be substituted in; it now scans all exceptions, and prefers the structure's own CHARMM-native `adjusts` list over hardcoded Amber SCEE/SCNB values when available.
+- **Force-group assignment:** fixed a collision where all `CustomBondForce` instances (including the 1-4 VDW correction) were unconditionally reassigned to one force group, and where CHARMM improper torsions collided with the surface-area force's group; both are now identified by their energy-function signature and given dedicated groups.
+- **Interaction entropy:** rewrote using `scipy.special.logsumexp` for numerical stability; now raises instead of silently returning 0.0 on failure, and warns when `sigma(dE)` exceeds the reliability threshold from Duan et al. 2016.
+- **Normal-mode vibrational entropy (`getVibrationalEntropyCM`):** corrected a formula that omitted `hbar` entirely.
+- **Output directory resolution:** fixed a `KeyError` crash in `runner.py`/`complete_runner.py` when a config used the documented `params.output_directory` key instead of an undocumented alternate location.
+- Removed two non-importable orphaned code fragments (`mmgbsa/combined_system.py`, `mmgbsa/config_patch.py`) left over from the `mmgbsa/core/` package extraction; their logic already exists properly in `mmgbsa_core.py`/`config.py`.
+- Removed stale root-level scratch scripts (`run_mmpbsa.py`, `mmgbsa_cli.py`) that imported the deleted `mmgbsa.core` module and duplicated the packaged `opengbsa` CLI entry point; installation docs now reference `opengbsa --help` directly.
+- Removed two broken `test/unit/` scripts (`test_combined_system.py`, `test_gasteiger.py`) that referenced a hardcoded developer machine path and the deleted `mmgbsa.core` module, breaking `pytest test/` collection for anyone running it from a fresh checkout.
+
+### Changed
+- Docstrings added/expanded across most of `mmgbsa/*.py`, documenting actual behavior and known limitations rather than stale stubs.
+- Removed leftover `print(f"DEBUG...")` statements from `mmgbsa_core.py`, `parameterizer.py`, and `decomposition.py` (including one in a per-frame multiprocessing worker), converting the still-useful ones to `log.debug()`.
+
 ## [0.0.6] - 2026-03-04
 
 ### Added

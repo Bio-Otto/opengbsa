@@ -1,3 +1,11 @@
+"""
+GROMACS-to-Amber format conversion via ParmEd.
+
+Provides `GromacsPreprocessor`, which loads a GROMACS `.top`/`.gro` system
+and writes out equivalent Amber `.prmtop`/`.inpcrd` files (applying the
+configured GB radii set along the way), so downstream code can treat a
+GROMACS-origin system uniformly with native Amber input.
+"""
 import parmed as pmd
 import logging
 from pathlib import Path

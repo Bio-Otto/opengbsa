@@ -210,12 +210,6 @@ test_results/
 *.itp
 *.ndx
 
-# Keep small test files
-!test/*.pdb
-!test/*.sdf
-!test/*.xtc
-!test/*.dcd
-
 # Configuration files with sensitive data
 *_local.yaml
 *_private.yaml

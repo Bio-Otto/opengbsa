@@ -3547,9 +3547,9 @@ class GBSACalculator(GBSAForceManager):
         # specific discrepancy). CustomBondForce is therefore identified by
         # its energy function string rather than being reassigned wholesale.
         def assign_force_groups(sys_obj):
-            print(f"DEBUG: Inspecting forces for system with {sys_obj.getNumParticles()} particles")
+            log.debug(f"Inspecting forces for system with {sys_obj.getNumParticles()} particles")
             for f in sys_obj.getForces():
-                print(f"  - Found Force: {type(f).__name__}")
+                log.debug(f"  - Found Force: {type(f).__name__}")
                 if isinstance(f, openmm.HarmonicBondForce): f.setForceGroup(10)
                 elif isinstance(f, openmm.HarmonicAngleForce): f.setForceGroup(11)
                 elif isinstance(f, openmm.PeriodicTorsionForce): f.setForceGroup(12)
@@ -3599,8 +3599,6 @@ class GBSACalculator(GBSAForceManager):
         
         fric = 1.0 # 1/ps
         step = 0.001 # 1fs
-        
-        print(f"DEBUG INTEGRATOR ARGS: temp_k={temp_k} ({type(temp_k)}), fric={fric} ({type(fric)}), step={step} ({type(step)})")
 
         ligand_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
         protein_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
@@ -3735,14 +3733,12 @@ class GBSACalculator(GBSAForceManager):
                 })
 
             try:
-                # DEBUG SIZES
                 if i == 0:
-                    print(f"DEBUG SIZE CHECK Frame {i}:")
-                    print(f"  Ligand System: {ligand_system.getNumParticles()}, Pos: {len(ligand_pos)}")
-                    print(f"  Protein System: {protein_system.getNumParticles()}, Pos: {len(protein_pos)}")
-                    # Combined
+                    log.debug(f"Frame {i} particle/position count check:")
+                    log.debug(f"  Ligand System: {ligand_system.getNumParticles()}, Pos: {len(ligand_pos)}")
+                    log.debug(f"  Protein System: {protein_system.getNumParticles()}, Pos: {len(protein_pos)}")
                     comb_len = len(protein_pos) + len(ligand_pos)
-                    print(f"  Complex System: {complex_system.getNumParticles()}, Pos Combined: {comb_len}")
+                    log.debug(f"  Complex System: {complex_system.getNumParticles()}, Pos Combined: {comb_len}")
 
                 # Calculate fixed enhanced GBSA energies
                 ligand_context.setPositions(ligand_pos)

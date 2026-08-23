@@ -1,4 +1,11 @@
+"""
+Binding free energy -> Kd/IC50/pIC50 conversion helpers.
 
+See `calculate_ic50`'s docstring for an important caveat: despite the
+name, it reports a thermodynamic Kd (via Kd = exp(dG/RT)), not a true
+Cheng-Prusoff-corrected IC50, and is not currently wired into the main
+`mmgbsa.runner`/`mmgbsa.cli` pipeline.
+"""
 import numpy as np
 from openmm import unit
 
@@ -68,6 +75,7 @@ def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
     # The relation is Kd = exp(dG/RT). For inhibitors, IC50 ~ Kd (Cheng-Prusoff for competitive)
     
     def to_ic50_uM(dg_val):
+        """Convert a binding free energy (kcal/mol) to a Kd estimate in uM."""
         # Kd in Molar
         kd_molar = np.exp(dg_val / RT)
         # Convert to micromolar

@@ -1,0 +1,27 @@
+package:
+  name: tprparser
+  version: "0.1.65"
+
+source:
+  url: https://files.pythonhosted.org/packages/2d/9c/87a57e36e94695b90cd60097c04fb72e8c4d5653b8940ca770b160223212/TprParser-0.1.45.tar.gz
+  # using older source that builds without numpy requirement
+
+build:
+  noarch: python
+  script: |
+    pip install .
+
+requirements:
+  host:
+    - "python >=3.8,<3.13"
+    - pip
+    - numpy
+  run:
+    - "python >=3.8,<3.13"
+    - numpy
+    - typing_extensions<=4.12.2
+
+about:
+  home: https://pypi.org/project/TprParser/
+  license: GPL
+  summary: A reader of gromacs tpr file

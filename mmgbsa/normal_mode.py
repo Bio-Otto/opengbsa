@@ -1,3 +1,11 @@
+"""
+Normal-mode (vibrational) entropy analysis via finite-difference Hessians.
+
+Implements `NormalModeAnalysis`, which builds a mass-weighted Hessian for
+an OpenMM System by finite differences, diagonalizes it to get vibrational
+frequencies, and derives the classical/quantum vibrational entropy terms
+used for the `entropy_method='normal_mode'` free-energy correction.
+"""
 from openmm.unit import *
 from openmm import *
 from openmm.app import *
@@ -5,7 +13,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.constants import pi, Boltzmann, hbar, Avogadro
 from math import pi
-from copy import deepcopy 
+from copy import deepcopy
 from warnings import warn
 import matplotlib
 import matplotlib.pyplot as plt
@@ -331,6 +339,18 @@ class NormalModeAnalysis(object):
         self.VibrationalEntropyCM = VibrationalEntropyCM.in_units_of(kilocalorie/mole)
     
     def getVibrationalEntropyQM(self, Temperature=300*unit.kelvin):
+        """
+        Quantum harmonic-oscillator vibrational entropy, summed over all
+        internal (non-translational/rotational) normal modes.
+
+        Per-mode entropy: S_i = (hbar*omega_i)/(e^(hbar*omega_i/k_B*T) - 1)
+                                 - k_B*T*ln(1 - e^(-hbar*omega_i/k_B*T))
+
+        Unlike `getVibrationalEntropyCM` (the classical high-temperature
+        limit), this does not assume hbar*omega_i << k_B*T, so it remains
+        accurate for high-frequency modes (e.g. X-H stretches) where the
+        classical approximation overestimates entropy.
+        """
         SquareAngularFreqAKMA = self.SquareAngularFreq.value_in_unit(kilocalorie/(gram*angstrom**2))[6:]
         AngularFreqSI = np.sqrt((4.184*10**26)*SquareAngularFreqAKMA)
         NumAtoms = self.CUDASimulation.system.getNumParticles()

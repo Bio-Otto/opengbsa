@@ -1,4 +1,11 @@
+"""
+Quasi-harmonic vibrational entropy from a trajectory's covariance matrix.
 
+Implements `QuasiHarmonicAnalysis`, an alternative to normal-mode analysis
+(`mmgbsa/normal_mode.py`) for `entropy_method='quasiharmonic'`: it builds
+the mass-weighted atomic-fluctuation covariance matrix directly from
+sampled trajectory frames rather than a single-structure Hessian.
+"""
 import numpy as np
 import mdtraj as md
 from scipy.constants import k as k_B, h, N_A, c, calorie

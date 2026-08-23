@@ -1,4 +1,10 @@
+"""
+Static (matplotlib/seaborn) and interactive (plotly) result plots.
 
+Each `plot_*` function saves a static PNG figure to `output_dir`; each
+`get_plotly_*` function returns an interactive `plotly.graph_objects.Figure`
+for embedding in the HTML report (see `mmgbsa/reporting.py`).
+"""
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd

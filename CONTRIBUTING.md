@@ -1,6 +1,6 @@
-# Contributing to MM/GBSA Analysis Package
+# Contributing to OpenGBSA
 
-Thank you for your interest in contributing to the MM/GBSA Analysis Package! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to OpenGBSA! This document provides guidelines and information for contributors.
 
 ## 🚀 Quick Start
 

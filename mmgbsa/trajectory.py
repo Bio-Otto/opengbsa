@@ -1,3 +1,11 @@
+"""
+Trajectory loading with automatic solvated/dry topology reconciliation.
+
+Provides `TrajectoryProcessor`, which loads a trajectory against a given
+topology and, on an atom-count mismatch, attempts to auto-discover a
+matching solvated topology or strip water/ions on the fly so the frame
+count lines up with the dry system used for energy evaluation.
+"""
 import mdtraj as md
 from pathlib import Path
 import logging

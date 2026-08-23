@@ -5,21 +5,28 @@ package:
 source:
   path: ..
 
+channels:
+  - conda-forge
+  - defaults
+
 build:
   noarch: python
-  number: 9
+  number: 20
   entry_points:
     - opengbsa = mmgbsa.cli:main
-  script: pip install . --no-deps --ignore-installed
+  script: |
+    pip install --no-index --find-links=conda-recipe/wheels TprParser
+    pip install . --no-deps
 
 requirements:
   host:
-    - python >=3.8,<3.13
+    - python =3.10
     - pip
     - setuptools
     - wheel
+    - numpy >=1.21.0,<2.0.0
   run:
-    - python >=3.8,<3.13
+    - python =3.10
     - openmm ==8.5.0beta
     - mdtraj >=1.9.0
     - openff-toolkit >=0.14.0
@@ -35,8 +42,7 @@ requirements:
     - seaborn >=0.11.0
     - pyyaml >=6.0
     - pathlib2 >=2.3.0
-    - pip:
-        - TprParser
+    - plotly >=5.0.0
 
 about:
   home: https://github.com/Bio-Otto/opengbsa

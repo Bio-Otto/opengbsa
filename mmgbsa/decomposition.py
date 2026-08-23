@@ -79,9 +79,8 @@ class PerResidueDecomposition:
         self.temperature = temperature * unit.kelvin
         self.output_dir = output_dir
         self.n_jobs = n_jobs
-        self.n_jobs = n_jobs
         self.report_raw_energies = report_raw_energies
-        print(f"DEBUG_INIT: report_raw_energies={self.report_raw_energies}")
+        log.debug(f"PerResidueDecomposition init: report_raw_energies={self.report_raw_energies}")
         
         # Storage for decomposition results
         self.residue_contributions = {}
@@ -258,7 +257,7 @@ class PerResidueDecomposition:
         """
         
         try:
-            print(f"DEBUG_PERFORM: self.report_raw_energies={self.report_raw_energies}")
+            log.debug(f"perform_decomposition: report_raw_energies={self.report_raw_energies}")
             # Load trajectory and get frames for decomposition
             import os
             if str(complex_pdb).endswith('.tpr'):
@@ -2035,8 +2034,7 @@ def _worker_analyze_frame(args):
     Analyze a single frame in the worker process.
     """
     frame_idx, positions, residue_map, ligand_indices, salt_concentration, ligand_resname, report_raw_energies = args
-    print(f"DEBUG_WORKER: Frame {frame_idx} report_raw_energies={report_raw_energies}")
-    
+
     global _worker_context
     try:
         system = _worker_context.get('system')

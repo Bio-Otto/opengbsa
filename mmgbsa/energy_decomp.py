@@ -1,4 +1,11 @@
+"""
+Fast, vectorized per-residue vdW + electrostatic decomposition.
 
+Implements `EnergyDecomposer`, the `decomposition_method='fast'` path used
+as a lighter alternative to the full GB-derived decomposition in
+`mmgbsa/decomposition.py` (see that module for the physical difference
+between the two: this one has no polar-solvation/GB term).
+"""
 import openmm
 import openmm.app as app
 import openmm.unit as unit

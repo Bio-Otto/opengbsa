@@ -58,9 +58,9 @@ dependencies = [
     # "h5py>=3.7.0",
     "matplotlib>=3.5.0",
     "seaborn>=0.11.0",
+    "plotly>=5.0.0",
     "pyyaml>=6.0",
-    "pathlib2>=2.3.0",
-    "TprParser>=0.1.65"
+    "pathlib2>=2.3.0"
 ]
 
 [project.optional-dependencies]
@@ -82,12 +82,12 @@ full = [
     "mbuild>=0.11.0",
     "foyer>=0.11.0"
 ]
+tpr = [
+    "tprparser>=0.1.65"
+]
 
 [project.scripts]
 opengbsa = "mmgbsa.cli:main"
-#mmgbsa = "mmgbsa.cli:main"  # Backward compatibility
-#mmgbsa-runner = "mmgbsa.cli:main"
-#mmgbsa-cli = "mmgbsa_cli:main"
 
 [project.urls]
 Homepage = "https://github.com/bio-otto/opengbsa"
@@ -104,7 +104,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["mmgbsa*"]
+include = ["mmgbsa*", "pandamap*"]
 exclude = ["test*", "tests*", "examples*"]
 
 # Development tools configuration

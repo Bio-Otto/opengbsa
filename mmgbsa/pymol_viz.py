@@ -1,3 +1,10 @@
+"""
+PyMOL (.pml) script generation for per-residue decomposition results.
+
+Provides `PyMOLVisualizer`, which turns a per-residue energy-contribution
+table into a standalone PyMOL script that colors/labels the binding
+interface by contribution magnitude for visual inspection.
+"""
 import pandas as pd
 from pathlib import Path
 import logging

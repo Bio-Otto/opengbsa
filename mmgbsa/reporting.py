@@ -1,3 +1,10 @@
+"""
+Interactive HTML report generation for MM/GBSA analysis results.
+
+Provides `HTMLReportGenerator`, which assembles summary statistics and
+the interactive plots from `mmgbsa/plotting.py` into a single standalone
+HTML file for a completed run.
+"""
 import os
 import json
 import logging

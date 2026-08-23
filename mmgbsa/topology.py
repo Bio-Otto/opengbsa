@@ -1,3 +1,10 @@
+"""
+Engine-agnostic topology loading dispatch.
+
+Provides `TopologyLoader`, which routes a topology file to the correct
+OpenMM System-construction path based on its detected `EngineMode`
+(see `mmgbsa/inputs.py`).
+"""
 import openmm.app as app
 import openmm.unit as unit
 from pathlib import Path

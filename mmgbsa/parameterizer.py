@@ -1,3 +1,11 @@
+"""
+On-the-fly OpenMM residue-template generation for non-standard residues.
+
+Provides `ResidueParameterizer`, which extracts a non-standard residue
+(e.g. KCX, carbamylated lysine) from a PDB, caps it with ACE/NME blocking
+groups, parameterizes it via OpenFF, and writes an OpenMM ForceField XML
+residue template so it can be loaded like any other supported residue.
+"""
 import logging
 import os
 import shutil
@@ -85,7 +93,7 @@ class ResidueParameterizer:
             when inserting the parameterized residue back into a full
             protein structure).
         """
-        print(f"DEBUG: Extracting {res_name} from {pdb_path}")
+        log.debug(f"Extracting {res_name} from {pdb_path}")
         mol = Chem.MolFromPDBFile(str(pdb_path), removeHs=False, sanitize=False)
         if not mol:
             raise ValueError(f"Could not load PDB: {pdb_path}")
@@ -122,13 +130,13 @@ class ResidueParameterizer:
                 if dist < 1.9:
                     bond = mol.GetBondBetweenAtoms(idx1, idx2)
                     if not bond:
-                        print(f"DEBUG: Adding bond {idx1}-{idx2} dist={dist}")
+                        log.debug(f"Adding bond {idx1}-{idx2} dist={dist}")
                         em_bond.AddBond(idx1, idx2, Chem.BondType.SINGLE)
                         added_bonds += 1
-                        
+
         if added_bonds > 0:
             mol = em_bond.GetMol()
-            print(f"DEBUG: Inferred {added_bonds} internal bonds.")
+            log.debug(f"Inferred {added_bonds} internal bonds.")
         
         # 2. Extract Substructure
         em = Chem.EditableMol(mol)
@@ -156,6 +164,7 @@ class ResidueParameterizer:
         # 4. Cap with ACE and NME
         em_cap = Chem.EditableMol(res_mol)
         def add_cap_atom(atomic_num):
+            """Add a bare atom (by atomic number) to the editable mol and return its index."""
             return em_cap.AddAtom(Chem.Atom(atomic_num))
 
         # ACE
@@ -313,7 +322,7 @@ class ResidueParameterizer:
 
         protonated_pdb_path = str(output_sdf).replace("_capped.sdf", "_protonated.pdb")
         Chem.MolToPDBFile(protonated_mol, protonated_pdb_path)
-        print(f"DEBUG: Saved protonated residue PDB to {protonated_pdb_path}")
+        log.debug(f"Saved protonated residue PDB to {protonated_pdb_path}")
         
         return output_sdf, protonated_pdb_path
 
@@ -348,13 +357,13 @@ class ResidueParameterizer:
         if not HAS_OPENFF:
             raise ImportError("OpenFF Toolkit not installed.")
             
-        print(f"DEBUG: Parameterizing {res_name}...")
+        log.debug(f"Parameterizing {res_name}...")
         molecule = Molecule.from_file(str(sdf_path))
-        print(f"DEBUG: OpenFF Mol has {molecule.n_atoms} atoms and {len(molecule.bonds)} bonds.")
-        
+        log.debug(f"OpenFF Mol has {molecule.n_atoms} atoms and {len(molecule.bonds)} bonds.")
+
         charge_kwargs = {}
         if charge_method:
-             print(f"DEBUG: Assigning charges using {charge_method}")
+             log.debug(f"Assigning charges using {charge_method}")
              molecule.assign_partial_charges(partial_charge_method=charge_method)
              charge_kwargs = {'charge_from_molecules': [molecule]}
         
@@ -432,7 +441,7 @@ class ResidueParameterizer:
                  core_indices.append(i)
             
         core_set = set(core_indices)
-        print(f"DEBUG: Core Set size: {len(core_set)}")
+        log.debug(f"Core Set size: {len(core_set)}")
 
         root = ET.Element("ForceField")
         atom_types = ET.SubElement(root, "AtomTypes")
@@ -486,7 +495,7 @@ class ResidueParameterizer:
 
         # Bonds
         count_bonds = 0
-        print(f"DEBUG: Checking {len(openff_mol.bonds)} OpenFF bonds against Core Set")
+        log.debug(f"Checking {len(openff_mol.bonds)} OpenFF bonds against Core Set")
         for bond in openff_mol.bonds:
             i = bond.atom1_index
             j = bond.atom2_index
@@ -502,7 +511,7 @@ class ResidueParameterizer:
                 name = atom_index_to_name[core_idx]
                 ET.SubElement(res_elem, "ExternalBond", atomName=name)
         
-        print(f"DEBUG: Added {count_bonds} internal bonds to XML")
+        log.debug(f"Added {count_bonds} internal bonds to XML")
 
         # Forces
         hb_force = sys_forces.get('HarmonicBondForce')

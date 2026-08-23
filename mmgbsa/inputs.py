@@ -1,7 +1,16 @@
+"""
+Input file type detection and config normalization.
+
+`EngineMode` enumerates the simulation-engine origin inferred from a
+topology file's extension; `InputManager` detects that mode and
+standardizes/validates a raw config dict's `input`/`input_files` section
+before the rest of the pipeline consumes it.
+"""
 from pathlib import Path
 from enum import Enum, auto
 
 class EngineMode(Enum):
+    """Simulation-engine origin inferred from a topology file's extension."""
     AMBER = auto()      # .prmtop
     GROMACS = auto()    # .tpr
     CHARMM = auto()     # .psf
