@@ -40,4 +40,5 @@ pathlib2>=2.3.0
 # Documentation
 sphinx>=4.0.0
 furo
-myst-parser 
+myst-parser
+sphinx-design 

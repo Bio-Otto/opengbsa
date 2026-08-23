@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath('../..'))
 project = 'OpenGBSA'
 copyright = '2025, Ozbek Lab'
 author = 'H. Ibrahim Ozdemir'
-release = '0.0.5'
+release = '0.0.6'
 
 # -- Mock Imports ------------------------------------------------------------
 autodoc_mock_imports = [
@@ -33,6 +33,7 @@ extensions = [
     'myst_parser',
     'sphinx.ext.autodoc',
     'sphinx.ext.napoleon',
+    'sphinx_design',
 ]
 
 myst_enable_extensions = [
@@ -63,8 +64,6 @@ html_short_title = "OpenGBSA"
 html_theme_options = {
     "light_css_variables": {},
     "dark_css_variables": {},
-    "default_light_mode": True,
-    "default_color_mode": "light",
 }
 templates_path = ["_templates"]
 html_sidebars = {

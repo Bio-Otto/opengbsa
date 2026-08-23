@@ -12,7 +12,7 @@ Core Analysis
 
    The main engine for MM/GBSA calculations.
 
-   .. method:: __init__(temperature=300.0, verbose=1, gb_model='OBC2', salt_concentration=0.15, charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='interaction', decomposition_method='full', protein_forcefield='amber', use_cache=True, visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE')
+   .. method:: __init__(temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full', protein_forcefield='amber', use_cache=True, visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE')
 
       Initialize the calculator with specific physics and analysis parameters.
 
@@ -43,7 +43,7 @@ Execution Management
 
 .. module:: mmgbsa.runner
 
-.. class:: MMGBSARunner(config, output_dir)
+.. class:: MMGBSARunner(config_file, output_dir=None)
 
    Handles the execution flow based on a configuration dictionary.
 
@@ -56,12 +56,12 @@ Configuration
 
 .. module:: mmgbsa.config
 
-.. class:: ConfigManager(config_file)
+.. class:: ConfigManager(config_path=None)
 
    Manages validation and loading of YAML configuration files.
 
    .. method:: validate_config()
-   
+
       Checks if the configuration output meets all schema requirements.
 
 Reporting
@@ -69,10 +69,10 @@ Reporting
 
 .. module:: mmgbsa.reporting
 
-.. class:: HTMLReportGenerator(output_dir)
+.. class:: HTMLReportGenerator(output_dir, config=None)
 
    Generates interactive HTML reports with Plotly charts.
 
-   .. method:: generate_report(results, plots, output_filename='report.html')
-   
+   .. method:: generate_report(analysis_results, frame_data, global_results=None, complex_pdb_path=None, ligand_resname=None)
+
       Compiles all analysis data into a single, shareable HTML file.

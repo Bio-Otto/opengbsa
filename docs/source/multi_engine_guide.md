@@ -40,7 +40,7 @@ input:
   ligand_resname: LIG
 ```
 
-> **Note:** See [GROMACS User Guide](GROMACS_GUIDE.md) for details on handling `.itp` dependencies.
+> **Note:** See [GROMACS User Guide](gromacs_guide.md) for details on handling `.itp` dependencies.
 
 ---
 
@@ -113,4 +113,11 @@ input:
   ligand_resname: LIG
 params:
   ligand_forcefield: openff  # Re-assign parameters
+```
+
+```{toctree}
+:hidden:
+
+amber_guide
+gromacs_guide
 ```
