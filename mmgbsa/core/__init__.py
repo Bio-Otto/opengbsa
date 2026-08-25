@@ -19,7 +19,9 @@ This package restructures the monolithic core.py into focused functional modules
   - ResultsManager: Results orchestration
 - calculator: Main GBSACalculator coordinator (facade)
 
-During migration, GBSACalculator is imported from parent mmgbsa.core module.
+Note: `StructureManager` and the low-level `GBSAForceManager`/system-building
+code are not part of this package -- they live in `mmgbsa.mmgbsa_core`
+(imported directly from there, not re-exported here).
 """
 
 from .platform import PlatformManager

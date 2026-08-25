@@ -58,7 +58,9 @@ CSV Formats
 -----------
 
 **mmgbsa_results.csv**
+
 Columns correspond to energy terms per frame:
+
    - ``delta_total``: Final binding free energy (~ :math:`\Delta H - T\Delta S`).
    - ``delta_vdw``: Van der Waals contribution.
    - ``delta_elec``: Electrostatic contribution.
@@ -66,7 +68,9 @@ Columns correspond to energy terms per frame:
    - ``delta_sa``: Non-polar solvation (Surface Area).
 
 **per_residue_*.csv**
+
 Matrix format where:
+
    - **Rows**: Trajectory Frames.
    - **Columns**: Residue IDs (e.g., ``ALA:12``).
    - **Values**: Total interaction energy of that residue with the binding partner.

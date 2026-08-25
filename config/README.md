@@ -1,6 +1,6 @@
 # Configuration Files
 
-This directory contains all configuration files for the MM/GBSA Analysis Package.
+This directory contains all configuration files for OpenGBSA.
 
 ## 📁 Files
 

@@ -54,16 +54,10 @@ python -c "import mdtraj; print('MDTraj:', mdtraj.__version__)"
 
 ## 5. Running the Project
 
-Navigate to the directory where you downloaded the project files:
+Perform a test run using the installed `opengbsa` command:
 
 ```bash
-cd /path/to/mmgbsa_project/
-```
-
-Perform a test run:
-
-```bash
-python run_mmpbsa.py --help
+opengbsa --help
 ```
 
 If you see the help message, the installation is complete.

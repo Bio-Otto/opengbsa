@@ -3,6 +3,13 @@ Validation module for topology parameters and system consistency checks.
 
 This module provides validation utilities to detect non-standard parameters
 and potential issues in topology files, helping users avoid common pitfalls.
+
+WIRING STATUS: only `TopologyValidator.validate_system_sanity` is currently
+called from the main pipeline (`mmgbsa.runner.MMGBSARunner`, after the final
+binding energy is computed). `validate_scnb_scee`, `validate_atom_counts`,
+and `validate_force_field` are implemented but not invoked anywhere outside
+this module -- they must be called explicitly by user code to have any
+effect; they do not run automatically as part of a standard analysis.
 """
 
 import logging

@@ -1,5 +1,5 @@
 """
-Utility Functions for MM/GBSA Analysis Package
+Utility Functions for OpenGBSA
 
 This module contains utility functions used throughout the package.
 """
@@ -437,6 +437,7 @@ def convert_mol2_to_sdf(mol2_path: str, sdf_path: str) -> bool:
     
     try:
         def parse_mol2_atom_line(line):
+            """Parse a Mol2 @<TRIPOS>ATOM line, returning (atom_id, element_symbol, (x, y, z))."""
             parts = line.split()
             # atom_id, name, x, y, z, Type, ...
             # Mol2 format usually: atom_id atom_name x y z atom_type [subst_id [subst_name [charge [status_bit]]]]
@@ -454,6 +455,7 @@ def convert_mol2_to_sdf(mol2_path: str, sdf_path: str) -> bool:
             return atom_id, symbol, (x, y, z)
 
         def parse_mol2_bond_line(line):
+            """Parse a Mol2 @<TRIPOS>BOND line, returning (atom1_id, atom2_id, rdkit_bond_type)."""
             parts = line.split()
             # bond_id, atom1, atom2, type
             atom1 = int(parts[1])

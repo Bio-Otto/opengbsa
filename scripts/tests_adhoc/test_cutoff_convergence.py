@@ -25,7 +25,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
  as np
 sys.path.insert(0, '/home/bio-otto/Desktop/opengbsa')
-from mmgbsa.core import StructureManager
+from mmgbsa.mmgbsa_core import StructureManager
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

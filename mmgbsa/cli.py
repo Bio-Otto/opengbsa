@@ -1,7 +1,7 @@
 """
-Command Line Interface for MM/GBSA Analysis Package
+Command Line Interface for OpenGBSA
 
-This module provides the command line interface for the MM/GBSA package.
+This module provides the command line interface for the OpenGBSA package.
 """
 
 import argparse
@@ -24,7 +24,7 @@ except ImportError:
 def create_parser() -> argparse.ArgumentParser:
     """Create command line argument parser."""
     parser = argparse.ArgumentParser(
-        description="MM/GBSA Analysis Package - Molecular Mechanics/Generalized Born Surface Area Analysis",
+        description="OpenGBSA - Molecular Mechanics/Generalized Born Surface Area Analysis",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -202,7 +202,7 @@ def run_analysis_command(config_file: str, complete: bool = False, output_dir: O
 
 def show_version():
     """Show version information."""
-    print(f"MM/GBSA Analysis Package v{__version__}")
+    print(f"OpenGBSA v{__version__}")
     print(f"Author: {__author__}")
     print(f"Email: {__email__}")
     print(f"License: {__license__}")

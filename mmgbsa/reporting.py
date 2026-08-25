@@ -1,3 +1,10 @@
+"""
+Interactive HTML report generation for MM/GBSA analysis results.
+
+Provides `HTMLReportGenerator`, which assembles summary statistics and
+the interactive plots from `mmgbsa/plotting.py` into a single standalone
+HTML file for a completed run.
+"""
 import os
 import json
 import logging
@@ -17,6 +24,16 @@ class HTMLReportGenerator:
     """
     
     def __init__(self, output_dir, config=None):
+        """
+        Parameters
+        ----------
+        output_dir : str or Path
+            Directory the generated HTML report (and any embedded assets)
+            will be written into.
+        config : dict, optional
+            The analysis's own configuration dict, echoed into the report
+            for provenance (e.g. GB model, salt concentration).
+        """
         self.output_dir = output_dir
         self.config = config or {}
         self.html_template = """
@@ -310,6 +327,8 @@ class HTMLReportGenerator:
             plotly_js_included = False
 
             def _to_html(fig):
+                """Apply consistent publication styling to a Plotly figure and
+                embed it as an HTML div (including Plotly.js only once per report)."""
                 nonlocal plotly_js_included
                 fig.update_layout(
                     template="plotly_white",

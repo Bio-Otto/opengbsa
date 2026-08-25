@@ -181,7 +181,19 @@ class MMGBSARunner:
     def _create_output_directory(self):
         """Create output directory with timestamp"""
         if self.output_dir is None:
-            output_dir = self.config['output_settings'].get('output_directory', 'mmgbsa_results')
+            # The documented/canonical config schema (config_master.yaml, the
+            # README quick-start, and every real user config) puts this under
+            # 'params.output_directory'. 'output_settings.output_directory' is
+            # an older/alternate key kept only as a fallback for configs that
+            # use it; ConfigManager.get_config() does not normalize between
+            # the two, so both must be checked here rather than assuming
+            # 'output_settings' exists (indexing it directly crashes with a
+            # KeyError for any config following the documented schema).
+            output_dir = (
+                self.config.get('params', {}).get('output_directory')
+                or self.config.get('output_settings', {}).get('output_directory')
+                or 'mmgbsa_results'
+            )
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_path = Path(output_dir) / f"analysis_{timestamp}"
         else:
@@ -338,7 +350,9 @@ class MMGBSARunner:
                 
                 if coord_file:
                     log.info(f"Found GROMACS coordinate file: {coord_file}")
-                    conversion_results = GromacsPreprocessor.convert_to_amber(top_path, coord_file)
+                    conversion_results = GromacsPreprocessor.convert_to_amber(
+                        top_path, coord_file, gb_model=analysis_settings.get('gb_model', 'OBC2')
+                    )
                     
                     # UPDATE INPUT FILES WITH CONVERTED TOPOLOGIES
                     log.success("GROMACS conversion successful. Updating input configuration.")
@@ -505,7 +519,28 @@ class MMGBSARunner:
              std_dev = np.std(mmgbsa_results['binding_energies'])
              
         log.result("Mean Binding Energy", f"{mean_val:.2f} ± {std_dev:.2f}", "kcal/mol (SD)")
-        
+
+        # Sanity-check the final result against known physically-reasonable
+        # ranges (implausibly large |dG|, unstable/high-variance runs) so
+        # problems surface immediately rather than silently making it into a
+        # results table. `components`-based checks (vdw/gb sign sanity) are
+        # not wired here: `mmgbsa_results` does not expose mean component
+        # values under a stable key, only per-frame arrays on the calculator
+        # instance (`self.energies['complex_gb']` etc.), so passing a guessed
+        # mapping would silently never fire rather than actually validate.
+        try:
+            from .validation import TopologyValidator
+            sanity_warnings = TopologyValidator.validate_system_sanity(
+                binding_energy=mean_val, std_dev=std_dev, components=None
+            )
+            for w in sanity_warnings:
+                if w.severity == 'ERROR':
+                    log.error(str(w))
+                else:
+                    log.warning(str(w))
+        except Exception as e:
+            log.warning(f"Result sanity-check skipped due to an internal error: {e}")
+
         return self.results
     
     def _run_entropy_analysis(self, calculator, input_files):

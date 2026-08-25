@@ -14,7 +14,7 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
  as pmd
-from mmgbsa.core import StructureManager
+from mmgbsa.mmgbsa_core import StructureManager
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

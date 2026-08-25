@@ -558,10 +558,20 @@ class ResultsAggregator:
 
 class AnalysisEngine:
     """
-    High-level analysis coordinator.
-    
-    Composes frame selection, energy calculation, decomposition, and result aggregation
-    while delegating core calculations to legacy GBSACalculator for stability.
+    High-level analysis coordinator -- currently a thin pass-through.
+
+    `run`/`run_comprehensive` both delegate directly to the underlying
+    `calculator` (in practice `mmgbsa.mmgbsa_core.GBSACalculator`, the actual
+    engine that performs frame selection, energy calculation, decomposition,
+    and result aggregation internally).
+
+    NOTE: this class also constructs `self.frame_selector`, `self.energy_calc`,
+    `self.decomposition`, and `self.aggregator` (the modular-refactor
+    components below), but none of them are actually called by `run` or
+    `run_comprehensive` -- they are inert scaffolding from an in-progress
+    refactor, not yet wired into the execution path. Do not assume using
+    `AnalysisEngine` gets you the modular pipeline; all real computation
+    currently happens inside `calculator`.
     """
 
     def __init__(self, calculator=None, verbose: bool = False):
@@ -571,14 +581,15 @@ class AnalysisEngine:
             self.calculator = mmgbsa_core.GBSACalculator(verbose=verbose)
         else:
             self.calculator = calculator
-        
+
         self.frame_selector = FrameSelector(100, verbose=verbose)  # Will be updated with actual length
         self.energy_calc = EnergyCalculator(self.calculator, verbose=verbose)
         self.decomposition = DecompositionEngine(verbose=verbose)
         self.aggregator = ResultsAggregator(verbose=verbose)
 
     def run(self, *args, **kwargs):
-        """Run analysis using the underlying calculator."""
+        """Run analysis by delegating directly to `self.calculator.run`
+        (the sibling components constructed above are not used here)."""
         return self.calculator.run(*args, **kwargs)
 
     def run_comprehensive(self, *args, **kwargs):

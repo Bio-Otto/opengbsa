@@ -137,22 +137,43 @@ class StructureManager:
     Helper class to handle ParmEd structure manipulations for Unified Topology Splitting.
     Ensures that Receptor and Ligand systems are mathematically exact subsets of the Complex.
     """
+    # Standard Amber GB-model-to-radii-set pairing (see e.g. Amber Reference
+    # Manual / MMPBSA.py docs): HCT pairs with 'mbondi', OBC1/OBC2 with
+    # 'mbondi2', GBn with 'mbondi', GBn2 with 'mbondi3'.
+    _GB_MODEL_RADII_SET = {
+        'HCT': 'mbondi',
+        'OBC1': 'mbondi2',
+        'OBC2': 'mbondi2',
+        'GBn': 'mbondi',
+        'GBn2': 'mbondi3',
+    }
+
     @staticmethod
-    def load_complex(pdb_path, prmtop_path=None, xtc_path=None):
+    def load_complex(pdb_path, prmtop_path=None, xtc_path=None, gb_model='OBC2'):
         """
         Load a complex structure consistent with ParmEd.
-        
+
         Args:
             pdb_path (str): Path to PDB file (coordinates)
             prmtop_path (str, optional): Path to Amber topology file
             xtc_path (str, optional): Path to trajectory for dynamic dummy atom checking
-            
+            gb_model (str): Configured GB model, used only to pick the correct
+                GB radii set (see `_GB_MODEL_RADII_SET`) when the loaded
+                structure has no per-atom radii of its own (GROMACS-origin
+                inputs -- .top via ParmEd, .tpr via `load_tpr_as_parmed` --
+                carry no GB radii/screen information at all, since intrinsic
+                GB radii are an Amber-ecosystem convention, not part of the
+                GROMACS force field itself). Amber `.prmtop`/`.parm7` inputs
+                already carry correct radii from their own `tleap`
+                parameterization and are never overridden here.
+
         Returns:
             parmed.Structure: The loaded structure
         """
         import parmed as pmd
-        
+
         struct = None
+        is_gromacs_origin = False
         if prmtop_path and Path(prmtop_path).exists():
             # Native Mode: Load Topology + Coordinates
             try:
@@ -160,6 +181,7 @@ class StructureManager:
                 if ext == '.tpr':
                     from mmgbsa.tpr_loader import load_tpr_as_parmed
                     struct = load_tpr_as_parmed(str(prmtop_path), xtc_path=xtc_path)
+                    is_gromacs_origin = True
                     # Optionally we can overwrite coords with pdb_path if needed, but TPR typically has them.
                     # Usually, pdb_path is an explicitly supplied standard coordinates file.
                     if pdb_path and Path(pdb_path).exists() and str(pdb_path) != str(prmtop_path):
@@ -168,6 +190,7 @@ class StructureManager:
                             struct.coordinates = ref_struct.coordinates
                 else:
                     struct = pmd.load_file(prmtop_path, xyz=pdb_path)
+                    is_gromacs_origin = (ext == '.top')
             except Exception as e:
                 # Retry without XYZ if it fails (e.g. atom mismatch)
                 # But we really need coordinates for GBSA
@@ -176,14 +199,36 @@ class StructureManager:
             # Coordinate Mode: Load PDB directly
             # Note: This might lack parameter info (charges) unless we parameterize it first.
             # But GBSACalculator usually handles parameterization.
-            # If we are here, we might need to parameterize using OpenMM first, 
+            # If we are here, we might need to parameterize using OpenMM first,
             # then converting to ParmEd is complex.
             # Actually, standardizing on loading the PDB is fine if we are in non-native mode.
             struct = pmd.load_file(pdb_path)
 
+        # GROMACS-origin structures (.top, .tpr) carry no intrinsic GB radii
+        # at all (all-zero solvent_radius/screen); assign the radii set that
+        # actually matches the configured GB model, via ParmEd's own
+        # (Amber-validated) mbondi*/bondi rule sets, rather than silently
+        # falling back to a crude, atom-type-blind element-only radius table
+        # (e.g. treating every H the same regardless of what it's bonded to,
+        # unlike mbondi2's real per-atom-type H radii). Previously this
+        # fallback caused a large, systematic (~20 kcal/mol observed on real
+        # OXA-MD benchmark systems) discrepancy against Amber MMPBSA.py
+        # reference results for GROMACS-sourced inputs.
+        if is_gromacs_origin:
+            try:
+                from parmed.tools import changeRadii
+                radii_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
+                changeRadii(struct, radii_set).execute()
+                log.info(f"Applied '{radii_set}' GB radii set to GROMACS-origin structure "
+                         f"(matching gb_model='{gb_model}').")
+            except Exception as e:
+                log.warning(f"Failed to apply GB radii set to GROMACS-origin structure: {e}. "
+                            f"GB energies will use the crude element-only radii fallback and "
+                            f"will NOT be comparable to Amber MMPBSA.py results.")
+
         # Implicit solvent and GBSA evaluation does not support explicit waters inside the structural force tree.
         # Stripping is now handled deliberately in the main pipeline AFTER exporting the solvated PDB for MDTraj
-             
+
         return struct
 
     @staticmethod
@@ -249,105 +294,136 @@ class StructureManager:
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
         
         system = structure.createSystem(**kwargs)
-    
-        # FIX: Ensure 1-4 interactions are scaled correctly (Amber: 1/1.2 ELE, 1/2.0 VDW)
-        # Sometimes createSystem with NoCutoff/ImplicitSolvent might zero them or leave them unscaled?
-        # Diagnostic showed they were 0.
+
+        # Sanity-check that 1-4 exceptions are actually populated. Check ALL
+        # exceptions (cheap -- a single O(N) pass) and require every single
+        # one to be zero before concluding anything is wrong: exceptions are
+        # not randomly ordered (ParmEd/OpenMM tend to emit 1-2/1-3
+        # exclusions and 1-4 pairs in separate blocks, not interleaved), so
+        # even a several-hundred-item sample can land entirely on genuine
+        # zero-value exclusions and wrongly conclude the whole list is
+        # broken -- confirmed on a real CHARMM36 system, where even the
+        # first 200 (of 21,470) exceptions were all legitimate zero-value
+        # exclusions, while 10,330 of them were correctly non-zero 1-4 pairs
+        # carrying real CHARMM parameters (from `structure.adjusts`) later
+        # in the list -- the old blanket "fix" below was overwriting those
+        # CORRECT values with fabricated Amber-style ones.
         forces = [f for f in system.getForces() if isinstance(f, openmm.NonbondedForce)]
         if forces:
             nb = forces[0]
-            # Check first few exceptions
             fix_needed = False
             if nb.getNumExceptions() > 0:
-                # Check a sample
-                for i in range(min(5, nb.getNumExceptions())):
+                any_nonzero = False
+                for i in range(nb.getNumExceptions()):
                     _, _, cp, _, eps = nb.getExceptionParameters(i)
-                    # If everything is 0, we likely need to fix. 
-                    # Note: valid exceptions might be 0 if atoms have 0 charge/epsilon, 
-                    # but unlikely for all 5.
-                    if abs(cp._value) < 1e-6 and abs(eps._value) < 1e-6:
-                        fix_needed = True
+                    if abs(cp._value) > 1e-6 or abs(eps._value) > 1e-6:
+                        any_nonzero = True
                         break
+                # Only treat this as broken if NONE of the exceptions carry a
+                # real value -- for any normally-parameterized system (Amber
+                # or CHARMM), at least some 1-4 pairs will have a nonzero
+                # charge-product or epsilon.
+                fix_needed = not any_nonzero
             
             if fix_needed:
-                print("  ⚠️  1-4 Interactions appear to be zeroed. Applying AMBER scaling (0.8333 ELE, 0.5 VDW).")
-                # Apply Amber scaling
-                # We can use createExceptionsFromBonds if we had bonds, but we only have the system.
-                # Better to iterate and update. But we don't know which are 1-4 vs 1-2/1-3 (exclusions).
-                # ParmEd structure has this info.
-                
-                # Re-creating exceptions from ParmEd structure is safest.
-                # But structure.createSystem should have done it.
-                
-                # Alternative: Use standard scaling on existing exceptions? 
-                # Problem: Exclusions (1-2, 1-3) should be 0. 1-4 should be scaled.
-                # If all are 0, we can't distinguish.
-                
-                # Let's trust ParmEd's topology to identify 1-4s if we traverse?
-                # Or assume createSystem *did* generate exception list but set parameters to 0?
-    
+                # IMPORTANT: 1-4 scaling conventions are force-field-specific.
+                # Amber uses uniform SCEE=1.2/SCNB=2.0 (i.e. charge scaled by
+                # 1/1.2=0.8333, LJ epsilon by 1/2.0=0.5, combining-rule sigma/
+                # epsilon). CHARMM instead typically uses full-strength (1.0)
+                # 1-4 electrostatics and its own explicit, atom-pair-specific
+                # 1-4 LJ parameters (distinct from the regular nonbonded LJ
+                # parameters) -- NOT the same combining rule scaled by 0.5.
+                # Applying Amber's scale factors to a CHARMM system is
+                # physically wrong and was confirmed (on a real CHARMM36
+                # system) to produce a ~18 kcal/mol systematic vdW error
+                # relative to Amber MMPBSA.py reference results.
+                #
+                # `structure.adjusts` (ParmEd's own, force-field-agnostic 1-4
+                # exception list, populated correctly by ParmEd's CHARMM/
+                # Amber/GROMACS parsers alike) is the authoritative source
+                # for these values and is used here instead of any
+                # hardcoded, Amber-specific scale factor.
+                adjust_map = {}
                 try:
-                    # Collect bonds from ParmEd structure
-                    bond_list = []
-                    for b in structure.bonds:
-                        bond_list.append((b.atom1.idx, b.atom2.idx))
-                    
-                    # Manual 1-4 Scaling Fix (since clearExceptions is not available)
-                    import math
+                    for adj in structure.adjusts:
+                        key = (adj.atom1.idx, adj.atom2.idx)
+                        adjust_map[key] = adj.type
+                        adjust_map[(key[1], key[0])] = adj.type
+                except AttributeError:
+                    pass  # structure has no .adjusts (e.g. some non-CHARMM formats); handled below
+
+                if adjust_map:
+                    print(f"  ⚠️  1-4 Interactions appear to be zeroed. Rebuilding from "
+                          f"structure.adjusts ({len(structure.adjusts)} force-field-native 1-4 pairs).")
                     count_fixed = 0
-                    
-                    # Pre-calculate bond partners for fast lookup
-                    # structure.atoms is a list, assuming 1-to-1 mapping with OpenMM indices
-                    atoms = structure.atoms
-                    
+                    count_missing = 0
                     for i in range(nb.getNumExceptions()):
                         p1, p2, _, _, _ = nb.getExceptionParameters(i)
-                        
-                        a1 = atoms[p1]
-                        a2 = atoms[p2]
-                        
-                        # Check connectivity depth
-                        is_12 = a2 in a1.bond_partners
-                        is_13 = False
-                        if not is_12:
-                            for n in a1.bond_partners:
-                                if a2 in n.bond_partners:
-                                    is_13 = True
-                                    break
-                                    
-                        # Apply params
-                        if is_12 or is_13:
-                            # Exclusion (0.0)
-                            # (Usually already 0, but enforce it)
-                            nb.setExceptionParameters(i, p1, p2, 0.0, 0.5, 0.0) 
-                        else:
-                            # Must be 1-4 (or greater, but exceptions usually stop at 1-4)
-                            # Apply AMBER Scaling
-                            q1, s1, e1 = nb.getParticleParameters(p1)
-                            q2, s2, e2 = nb.getParticleParameters(p2)
-                            
-                            c_scale = 0.83333333
-                            v_scale = 0.5
-                            
-                            chg = (q1._value * q2._value) * c_scale
-                            eps = math.sqrt(e1._value * e2._value) * v_scale
-                            sig = (s1._value + s2._value) * 0.5
-                            
-                            # Convert back to quantities? setExceptionParameters takes value or quantity
-                            # getParticleParameters returns quantities. _value extracts float.
-                            # We can pass raw floats if we are careful or re-unitize.
-                            # OpenMM expects consistent types. Let's use OpenMM units if possible.
-                            
-                            nb.setExceptionParameters(i, p1, p2, 
-                                chg * unit.elementary_charge**2, 
-                                sig * unit.nanometer, 
-                                eps * unit.kilojoule_per_mole)
-                            count_fixed += 1
-                            
-                    print(f"  ✓ Manually updated {count_fixed} 1-4 exceptions with AMBER scaling.")
-                except Exception as e:
-                    print(f"  ❌ Failed to regenerate 1-4 interactions: {e}")
-                    print("     Proceeding with zeroed 1-4 interactions (results may be inaccurate).")
+                        adj_type = adjust_map.get((p1, p2))
+                        if adj_type is None:
+                            continue  # genuine 1-2/1-3 exclusion; leave at 0
+                        q1, _, _ = nb.getParticleParameters(p1)
+                        q2, _, _ = nb.getParticleParameters(p2)
+                        chgscale = getattr(adj_type, 'chgscale', 1.0)
+                        chg = q1.value_in_unit(unit.elementary_charge) * q2.value_in_unit(unit.elementary_charge) * chgscale
+                        sig = adj_type.usigma.value_in_unit(unit.nanometer)
+                        eps = adj_type.uepsilon.value_in_unit(unit.kilojoule_per_mole)
+                        nb.setExceptionParameters(
+                            i, p1, p2,
+                            chg * unit.elementary_charge**2,
+                            sig * unit.nanometer,
+                            eps * unit.kilojoule_per_mole,
+                        )
+                        count_fixed += 1
+                    print(f"  ✓ Rebuilt {count_fixed} 1-4 exceptions from structure.adjusts "
+                          f"(force-field-native parameters, not Amber-specific scaling).")
+                else:
+                    # No .adjusts data available at all (rare; e.g. a bare
+                    # Structure with no dihedral/adjust records). Fall back
+                    # to Amber's own convention ONLY here, since a structure
+                    # with no explicit 1-4 data is far more likely to be an
+                    # Amber-style topology (which relies on the uniform
+                    # SCEE/SCNB convention) than a CHARMM one (which always
+                    # carries explicit per-pair 1-4 parameters via adjusts).
+                    print("  ⚠️  1-4 Interactions appear to be zeroed and no structure.adjusts "
+                          "data is available. Applying Amber SCEE=1.2/SCNB=2.0 convention as a "
+                          "last resort -- this is WRONG for CHARMM/OPLS/GROMOS systems.")
+                    try:
+                        import math
+                        count_fixed = 0
+                        atoms = structure.atoms
+                        for i in range(nb.getNumExceptions()):
+                            p1, p2, _, _, _ = nb.getExceptionParameters(i)
+                            a1 = atoms[p1]
+                            a2 = atoms[p2]
+                            is_12 = a2 in a1.bond_partners
+                            is_13 = False
+                            if not is_12:
+                                for n in a1.bond_partners:
+                                    if a2 in n.bond_partners:
+                                        is_13 = True
+                                        break
+                            if is_12 or is_13:
+                                nb.setExceptionParameters(i, p1, p2, 0.0, 0.5, 0.0)
+                            else:
+                                q1, s1, e1 = nb.getParticleParameters(p1)
+                                q2, s2, e2 = nb.getParticleParameters(p2)
+                                c_scale = 0.83333333
+                                v_scale = 0.5
+                                chg = (q1._value * q2._value) * c_scale
+                                eps = math.sqrt(e1._value * e2._value) * v_scale
+                                sig = (s1._value + s2._value) * 0.5
+                                nb.setExceptionParameters(
+                                    i, p1, p2,
+                                    chg * unit.elementary_charge**2,
+                                    sig * unit.nanometer,
+                                    eps * unit.kilojoule_per_mole,
+                                )
+                                count_fixed += 1
+                        print(f"  ✓ Manually updated {count_fixed} 1-4 exceptions with AMBER scaling.")
+                    except Exception as e:
+                        print(f"  ❌ Failed to regenerate 1-4 interactions: {e}")
+                        print("     Proceeding with zeroed 1-4 interactions (results may be inaccurate).")
                 
         return system
 
@@ -602,25 +678,92 @@ class GBSAForceManager:
         return system
 
     def _create_fallback_obc_force(self, system, topology):
-        """Fallback OBC2 creation if factory failed"""
+        """
+        Build the polar GB force for OBC1/OBC2 (used both as the fallback
+        when no GB force exists yet, and -- via `refine_gbsa_forces` -- to
+        UNCONDITIONALLY REPLACE any GB force ParmEd/OpenMM's own
+        `createSystem` already built, so that this codebase's own GB radii
+        (`_get_gb_radius`/`_get_gb_scale`) are enforced).
+
+        Uses OpenMM's built-in `openmm.GBSAOBCForce` when `salt_concentration`
+        is zero (that class has no salt/kappa support at all -- confirmed via
+        its API surface, which exposes no kappa parameter). When salt
+        concentration is nonzero, uses the `CustomGBForce`-based
+        `GBSAOBC2Force` instead, with kappa derived the same way ParmEd's own
+        `Structure.omm_gbsa_force` derives it from salt concentration, so
+        that Debye-Huckel screening is actually applied to the GB energy --
+        previously, this method always returned a plain `GBSAOBCForce`
+        regardless of `salt_concentration`, silently discarding any
+        configured salt screening for every OBC1/OBC2 run (since
+        `refine_gbsa_forces` always calls this to replace whatever GB force
+        was there before, including a salt-aware one ParmEd may have built).
+        """
         charges = self._extract_charges_from_system(system)
+
+        try:
+            atoms_iterable = topology.atoms()
+        except TypeError:
+            atoms_iterable = topology.atoms
+        atoms_list = list(atoms_iterable)
+
+        conc = self.salt_concentration
+        if unit.is_quantity(conc):
+            conc = conc.value_in_unit(unit.molar)
+        use_salt = bool(conc) and conc > 0
+
+        if use_salt:
+            from openmm.app.internal.customgbforces import GBSAOBC2Force
+            temp_k = getattr(self, 'temperature', 300.0)
+            if unit.is_quantity(temp_k):
+                temp_k = temp_k.value_in_unit(unit.kelvin)
+            kappa = 50.33355 * (conc / (self.solvent_dielectric * temp_k)) ** 0.5 * 7.3  # nm^-1
+            cutoff_nm = (self.nonbonded_cutoff * unit.angstroms).value_in_unit(unit.nanometer) \
+                if self.nonbonded_cutoff is not None else None
+            gb_force = GBSAOBC2Force(
+                solventDielectric=self.solvent_dielectric,
+                soluteDielectric=self.solute_dielectric,
+                SA=None, cutoff=cutoff_nm, kappa=kappa,
+            )
+            # NOTE: GBSAOBC2Force's addParticle (inherited from
+            # CustomAmberGBForceBase) already subtracts the 0.009 nm OBC
+            # offset from the radius AND multiplies scale by that
+            # offset-subtracted radius internally -- confirmed against
+            # OpenMM's own getStandardParameters()/ParmEd's own
+            # createSystem(implicitSolvent=OBC2), both of which pass raw
+            # (un-offset, un-multiplied) radius/scale straight through.
+            # This code previously pre-applied both transformations itself,
+            # so they were applied TWICE (once here, once inside
+            # addParticle), corrupting every Born radius and roughly
+            # doubling the magnitude of the resulting GB energy -- verified
+            # numerically against a direct sander (Amber igb=5) single-frame
+            # energy: the double-applied version gave -4992 kcal/mol vs
+            # sander's -2482 kcal/mol for the same structure, while raw
+            # (correctly single-applied) parameters give -2473 kcal/mol,
+            # a 0.4% match.
+            for i, atom in enumerate(atoms_list):
+                charge = charges[i]
+                raw_radius_nm = self._get_gb_radius(atom) * 0.1
+                raw_scale = self._get_gb_scale(atom)
+                gb_force.addParticle([charge, raw_radius_nm, raw_scale])
+            try:
+                gb_force.finalize()
+            except AttributeError:
+                pass
+            log.info(f"Built salt-screened GB force (CustomGBForce/GBSAOBC2Force, "
+                     f"kappa={kappa:.4f} nm^-1) for salt_concentration={conc} M.")
+            return gb_force
+
         gb_force = openmm.GBSAOBCForce()
         if self.nonbonded_cutoff is not None:
             gb_force.setNonbondedMethod(openmm.GBSAOBCForce.CutoffNonPeriodic)
             gb_force.setCutoffDistance(self.nonbonded_cutoff * unit.angstroms)
         else:
             gb_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
-            
+
         gb_force.setSolventDielectric(self.solvent_dielectric)
         gb_force.setSoluteDielectric(self.solute_dielectric)
         gb_force.setSurfaceAreaEnergy(0.0)
-        # FIX: Handle both OpenMM Topology (atoms()) and ParmEd Structure (atoms list)
-        try:
-           atoms_iterable = topology.atoms()
-        except TypeError:
-           atoms_iterable = topology.atoms
-           
-        for i, atom in enumerate(atoms_iterable):
+        for i, atom in enumerate(atoms_list):
             charge = charges[i]
             radius = self._get_gb_radius(atom) * 0.1
             scale = self._get_gb_scale(atom)
@@ -2323,16 +2466,23 @@ class GBSACalculator(GBSAForceManager):
             'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
         }
         
+        # Resolve Forcefields dynamically
+        _ff_base = Path(__file__).parent / 'forcefields'
+        if self.protein_forcefield.lower() == 'charmm':
+            sys_ffs = [str(_ff_base / 'kcx_charmm36.xml'), 'charmm36.xml', 'charmm36/water.xml']
+        elif self.protein_forcefield.lower() == 'charmm_gromacs':
+            sys_ffs = [str(_ff_base / 'kcx_charmm36_gromacs.xml'), str(_ff_base / 'charmm36_gromacs_final.xml'), 'charmm36/water.xml']
+        elif self.protein_forcefield.lower() == 'amber14':
+            sys_ffs = ['amber14-all.xml', 'amber14/tip3pfb.xml']
+        else:
+            sys_ffs = ['amber/ff14SB.xml', 'amber/tip3p_standard.xml']
+
         if SystemGenerator is None:
             log.warning("openmmforcefields SystemGenerator is unavailable; falling back to OpenMM ForceField.")
             if ligand_mol is not None:
                 raise RuntimeError("SystemGenerator is required for ligand_mol-based parameterization but is not available.")
             ff = None
-            ff_candidates = [
-                ('amber/ff14SB.xml', 'amber/tip3p_standard.xml'),
-                ('amber14-all.xml', 'amber14/tip3p.xml'),
-                ('amber99sb.xml', 'tip3p.xml'),
-            ]
+            ff_candidates = [sys_ffs]
             for ff_files in ff_candidates:
                 try:
                     ff = app.ForceField(*ff_files)
@@ -2359,13 +2509,13 @@ class GBSACalculator(GBSAForceManager):
         elif ligand_mol is None:
             # Protein-only/PPI mode: avoid initializing small-molecule toolkits.
             system_generator = SystemGenerator(
-                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                forcefields=sys_ffs,
                 forcefield_kwargs=general_kwargs,
                 nonperiodic_forcefield_kwargs=nonperiodic_kwargs
             )
         else:
             system_generator = SystemGenerator(
-                forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                forcefields=sys_ffs,
                 small_molecule_forcefield='openff-2.0.0',
                 molecules=molecules_list,
                 forcefield_kwargs=general_kwargs,
@@ -2381,12 +2531,17 @@ class GBSACalculator(GBSAForceManager):
             log.info("Checking for missing atoms and adding hydrogens...")
             modeller.addHydrogens(forcefield=system_generator.forcefield)
         except Exception as e:
+            if "KCX" in str(e) and "amber" in str(self.protein_forcefield).lower():
+                log.error("KCX RESIDUE DETECTED! OpenMM's Amber forcefields do not support Carboxylated Lysine (KCX).")
+                log.error("Please change `protein_forcefield: charmm_gromacs` in your configuration file to use the included custom KCX parameters.")
             log.warning(f"Modeller.addHydrogens failed: {e}. Proceeding with existing topology.")
             
         # Create System (This now generates the correct GB force automatically)
         try:
             system = system_generator.create_system(modeller.topology)
         except ValueError as e:
+            if "KCX" in str(e) and "amber" in str(self.protein_forcefield).lower():
+                raise ValueError("KCX RESIDUE DETECTED! OpenMM's Amber forcefields do not support Carboxylated Lysine (KCX). Please change `protein_forcefield: charmm_gromacs` in your config file.") from e
             if 'implicitSolvent' in str(e):
                 log.warning(f"SystemGenerator rejected implicitSolvent: {e}")
                 log.warning("Attempting to build system without implicitSolvent keyword...")
@@ -2396,13 +2551,13 @@ class GBSACalculator(GBSAForceManager):
                 fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
                 if ligand_mol is None:
                     fallback_generator = SystemGenerator(
-                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        forcefields=sys_ffs,
                         forcefield_kwargs=general_kwargs,
                         nonperiodic_forcefield_kwargs=fallback_kwargs
                     )
                 else:
                     fallback_generator = SystemGenerator(
-                        forcefields=['amber/ff14SB.xml', 'amber/tip3p_standard.xml'],
+                        forcefields=sys_ffs,
                         small_molecule_forcefield='openff-2.0.0',
                         molecules=molecules_list,
                         forcefield_kwargs=general_kwargs,
@@ -2920,40 +3075,99 @@ class GBSACalculator(GBSAForceManager):
             receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10,
             original_complex_pdb=None):
         """
-        Run fixed enhanced MM/GBSA analysis with proper GBSA forces
-        
-        Parameters:
-        -----------
+        Run the core MM/GBSA binding free energy calculation over a trajectory.
+
+        Dispatches to one of two modes based on `original_complex_pdb`'s
+        extension: Native Mode (`.prmtop`/`.parm7`/`.top`/`.tpr` -- topology
+        and parameters loaded directly via ParmEd/TprParser, see
+        `StructureManager.load_complex`) or Coordinate Mode (a plain PDB,
+        parameterized on the fly via OpenFF/GAFF for the ligand and an
+        OpenMM force field for the protein). In both modes, complex/receptor/
+        ligand OpenMM Systems are built with the configured GB model and
+        surface-area model (see `GBSAForceManager`), evaluated frame-by-frame
+        over the selected trajectory frames, and combined into
+        Delta G_bind = E_complex - E_receptor - E_ligand per frame.
+
+        Parameters
+        ----------
         ligand_mol : str
-            Path to ligand molecule file (optional)
+            Path to an isolated ligand molecule file (e.g. .sdf/.mol2) used
+            for OpenFF/GAFF parameterization in Coordinate Mode. Not required
+            in Native Mode (topology already carries ligand parameters).
         complex_pdb : str
-            Path to protein-ligand complex PDB file
+            Path to the complex structure file actually used for this call;
+            may be a temporary/distilled PDB derived from `original_complex_pdb`
+            rather than the original path itself.
         xtc_file : str
-            Path to molecular dynamics trajectory file
+            Path to the MD trajectory to analyze (e.g. .xtc/.dcd).
         ligand_pdb : str
-            Path to isolated ligand PDB file (optional)
+            Path to an isolated ligand PDB file (optional; used for
+            cross-checking atom counts/residues against the complex).
         max_frames : int, optional
-            Maximum number of trajectory frames to analyze
+            Upper bound on the number of frames selected for analysis
+            (default 50). See `frame_selection` for how frames within the
+            [frame_start, frame_end) range (strided by frame_stride) are
+            reduced to at most this many.
         energy_decomposition : bool, optional
-            Enable detailed energy decomposition analysis
+            If True, additionally run per-residue energy decomposition
+            (see `mmgbsa.decomposition.PerResidueDecomposition`) after the
+            standard binding free energy calculation.
         frame_start : int, optional
-            Start frame for analysis (0-indexed)
+            Start frame for analysis, 0-indexed inclusive (default: 0).
         frame_end : int, optional
-            End frame for analysis (0-indexed)
+            End frame for analysis, 0-indexed exclusive (default: trajectory length).
         frame_stride : int, optional
-            Frame stride (every Nth frame)
+            Frame stride (every Nth frame) applied within [frame_start, frame_end).
         frame_selection : str, optional
-            Frame selection method ('sequential', 'equidistant', 'random')
+            Frame selection method: 'sequential' (strided range), 'equidistant'
+            (evenly spaced subsample down to max_frames), or 'random' (random
+            subsample using `random_seed`).
         random_seed : int, optional
-            Random seed for frame selection
+            Random seed used only when frame_selection='random'.
+        qha_analyze_complex : bool, optional
+            If True, additionally accumulate complex-frame coordinates for a
+            subsequent quasi-harmonic entropy analysis (see
+            `mmgbsa.quasi_harmonic`) rather than discarding them after each
+            frame's energy is computed.
+        output_dir : str or Path, optional
+            Directory to write intermediate/temporary files (e.g. the
+            TPR-derived solvated PDB used for MDTraj) and final results into.
         ligand_selection : str, optional
-            Custom selection string for ligand (e.g. 'chainid 1')
+            Custom MDTraj/ParmEd selection string identifying ligand atoms
+            (e.g. 'resname UNK'), overriding residue-name-based detection.
         receptor_selection : str, optional
-            Custom selection string for receptor (e.g. 'chainid 0')
-            
-        Returns:
-        --------
-        dict : Analysis results with binding energies and statistics
+            Custom MDTraj/ParmEd selection string identifying receptor atoms
+            (e.g. 'chainid 0'), overriding the default "everything but ligand"
+            behavior.
+        receptor_topology : str, optional
+            Explicit path to a pre-built receptor topology (e.g. .prmtop),
+            used instead of deriving the receptor by stripping the ligand
+            from the complex topology.
+        ligand_topology : str, optional
+            Explicit path to a pre-built ligand topology (e.g. .prmtop),
+            used instead of deriving the ligand by stripping everything but
+            the ligand from the complex topology.
+        solvated_topology : str, optional
+            Path to a solvated reference topology/coordinate file (e.g. .gro)
+            used for MDTraj trajectory loading when the native topology
+            itself (prmtop/tpr) does not preserve original residue numbering.
+        print_interval : int, optional
+            Print progress (energies, timing) every N frames (default 10).
+        original_complex_pdb : str, optional
+            The true original input path (before any distillation/temporary
+            file substitution of `complex_pdb`). Used to determine Native vs
+            Coordinate mode correctly even when `complex_pdb` has since been
+            replaced by a derived file. Defaults to `complex_pdb` itself if
+            not given.
+
+        Returns
+        -------
+        dict
+            Analysis results: per-frame and mean binding energies, standard
+            deviation/error, energy component breakdowns (vdW/electrostatic/
+            GB/SA) when available, and `physics_assumptions` (a list of
+            silent-default notices accumulated during system setup, e.g. GB
+            radius fallbacks for unrecognized elements).
         """
         # Save original complex_pdb path before potential overwrite by distillation extraction
         # `original_complex_pdb` may be passed explicitly by callers (e.g. run_comprehensive)
@@ -3083,7 +3297,7 @@ class GBSACalculator(GBSAForceManager):
              # NATIVE MODE: Use Unified Splitting (Robust for prmtop and tpr)
              log.info("Mode: Native Topology (PRMTOP or TPR)")
              try:
-                 complex_struct = StructureManager.load_complex(complex_pdb, original_complex_pdb, xtc_path=xtc_file)
+                 complex_struct = StructureManager.load_complex(complex_pdb, original_complex_pdb, xtc_path=xtc_file, gb_model=self.gb_model)
                  log.success(f"Loaded Native Complex: {len(complex_struct.atoms)} atoms")
                  
                  import os
@@ -3329,43 +3543,69 @@ class GBSACalculator(GBSAForceManager):
                 print("✓ Protein system particle count matches!")
 
         # HELPER: Assign Force Groups for Internal Energy Cancellation
+        #
+        # IMPORTANT: this runs AFTER `refine_gbsa_forces` has already built and
+        # correctly force-grouped the 1-4 VDW correction force (a
+        # CustomBondForce with energy function "4*epsilon*((sigma/r)^12 -
+        # (sigma/r)^6)", explicitly set to group 3 -- see the "Moving 1-4s to
+        # CustomBondForce Group 3" step). A previous version of this function
+        # blindly reassigned EVERY CustomBondForce to group 10 (the
+        # bonded/internal-energy group), silently moving ~10,000 1-4 VDW
+        # interactions per system OUT of the reported "VDW" energy group and
+        # into "internal energy" instead -- confirmed on real OXA-MD
+        # benchmark data to be the actual root cause of a systematic ~18
+        # kcal/mol vdW discrepancy against Amber MMPBSA.py reference results
+        # (the 1-4 VDW correction fix itself, and the mbondi2/1-4-exception
+        # fixes made earlier while chasing this bug, were both real,
+        # independently-valid fixes but neither was the actual cause of this
+        # specific discrepancy). CustomBondForce is therefore identified by
+        # its energy function string rather than being reassigned wholesale.
         def assign_force_groups(sys_obj):
-            print(f"DEBUG: Inspecting forces for system with {sys_obj.getNumParticles()} particles")
+            log.debug(f"Inspecting forces for system with {sys_obj.getNumParticles()} particles")
             for f in sys_obj.getForces():
-                print(f"  - Found Force: {type(f).__name__}")
+                log.debug(f"  - Found Force: {type(f).__name__}")
                 if isinstance(f, openmm.HarmonicBondForce): f.setForceGroup(10)
                 elif isinstance(f, openmm.HarmonicAngleForce): f.setForceGroup(11)
                 elif isinstance(f, openmm.PeriodicTorsionForce): f.setForceGroup(12)
                 elif isinstance(f, openmm.RBTorsionForce): f.setForceGroup(13)
                 elif isinstance(f, openmm.CMAPTorsionForce): f.setForceGroup(14)
+                elif isinstance(f, openmm.CustomTorsionForce):
+                    # Improper torsions: ParmEd's own Structure.createSystem
+                    # hardcodes these to IMPROPER_FORCE_GROUP=4 (see ParmEd's
+                    # structure.py), which collides with this codebase's
+                    # unrelated group-4 convention for the LCPO/SA nonpolar
+                    # solvation force -- confirmed on real data to silently
+                    # fold improper-torsion energy into the reported "surface
+                    # area" energy. Move to an unused internal-energy group.
+                    f.setForceGroup(15)
                 # Ensure Nonbonded is Group 0 (Default, but explicit is good)
                 elif isinstance(f, openmm.NonbondedForce): f.setForceGroup(0)
                 # GBSA forces are usually handled by add_gbsa_to_system, but if present as standard:
-                elif isinstance(f, openmm.GBSAOBCForce): 
-                    # GBSA and SA forces are definitively assigned groups 1 and 4 via `refine_gbsa_forces`. 
+                elif isinstance(f, openmm.GBSAOBCForce):
+                    # GBSA and SA forces are definitively assigned groups 1 and 4 via `refine_gbsa_forces`.
                     # Overriding groups conditionally based on only particle(0)'s charge creates extreme vulnerability
                     # if the parameterized ligand structure happens to list a low-charge/dummy atom at index 0.
                     pass
                 # Custom Forces (GBn, SA, Screening)
                 elif isinstance(f, openmm.CustomGBForce): f.setForceGroup(2)
                 elif isinstance(f, openmm.CustomNonbondedForce): f.setForceGroup(3)
-                elif isinstance(f, openmm.CustomBondForce): f.setForceGroup(10) # Was 4, but let's map it safely. If used for SA, move to 4. 
-                # Actually, our new SA is GBSAOBC, so CustomBondForce is likely stray or Internal.
-                # Let's keep CustomBondForce as "Other" (Group 5?) or check if it's Internal?
-                # The prompt earlier mentioned Group 10 for CustomBondForce in log.
-                # Let's set CustomBondForce to 10 for safety if it's internal.
-                # But previously I set it to 4.
-                # Since I am removing CustomGBForce based SA, I don't use CustomBondForce for SA anymore.
-                # So setting it to 10 (Internal) is safer if GBSA uses it internally?
-                # No, standard GBSA doesn't use CustomBondForce.
-                pass
+                elif isinstance(f, openmm.CustomBondForce):
+                    # The only CustomBondForce this codebase creates is the
+                    # 1-4 VDW correction from `refine_gbsa_forces` (LCPO uses
+                    # the dedicated openmm.LCPOForce class, not
+                    # CustomBondForce, so there is no real ambiguity here).
+                    # Identify it by its energy function and put it in group
+                    # 3 (VDW) where it belongs; leave anything unrecognized
+                    # in whatever group it already has rather than guessing.
+                    if 'sigma' in f.getEnergyFunction() and 'epsilon' in f.getEnergyFunction():
+                        f.setForceGroup(3)
         
         print("Assigning force groups to component systems for correct energy decomposition...")
         if ligand_system:
             assign_force_groups(ligand_system)
         assign_force_groups(protein_system)
         assign_force_groups(complex_system)
-        
+
         # Create integrators (Strip units for safety)
         temp_k = self.temperature
         if unit.is_quantity(temp_k):
@@ -3373,8 +3613,6 @@ class GBSACalculator(GBSAForceManager):
         
         fric = 1.0 # 1/ps
         step = 0.001 # 1fs
-        
-        print(f"DEBUG INTEGRATOR ARGS: temp_k={temp_k} ({type(temp_k)}), fric={fric} ({type(fric)}), step={step} ({type(step)})")
 
         ligand_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
         protein_integrator = openmm.LangevinMiddleIntegrator(float(temp_k), float(fric), float(step))
@@ -3509,14 +3747,12 @@ class GBSACalculator(GBSAForceManager):
                 })
 
             try:
-                # DEBUG SIZES
                 if i == 0:
-                    print(f"DEBUG SIZE CHECK Frame {i}:")
-                    print(f"  Ligand System: {ligand_system.getNumParticles()}, Pos: {len(ligand_pos)}")
-                    print(f"  Protein System: {protein_system.getNumParticles()}, Pos: {len(protein_pos)}")
-                    # Combined
+                    log.debug(f"Frame {i} particle/position count check:")
+                    log.debug(f"  Ligand System: {ligand_system.getNumParticles()}, Pos: {len(ligand_pos)}")
+                    log.debug(f"  Protein System: {protein_system.getNumParticles()}, Pos: {len(protein_pos)}")
                     comb_len = len(protein_pos) + len(ligand_pos)
-                    print(f"  Complex System: {complex_system.getNumParticles()}, Pos Combined: {comb_len}")
+                    log.debug(f"  Complex System: {complex_system.getNumParticles()}, Pos Combined: {comb_len}")
 
                 # Calculate fixed enhanced GBSA energies
                 ligand_context.setPositions(ligand_pos)
@@ -3619,7 +3855,7 @@ class GBSACalculator(GBSAForceManager):
                 c_elec = get_grp_E(complex_context, [0])
                 c_vdw = get_grp_E(complex_context, [3])
                 c_nb = c_elec + c_vdw
-                
+
                 # Protein
                 p_elec = get_grp_E(protein_context, [0])
                 p_vdw = get_grp_E(protein_context, [3])
@@ -3629,7 +3865,7 @@ class GBSACalculator(GBSAForceManager):
                 l_elec = get_grp_E(ligand_context, [0])
                 l_vdw = get_grp_E(ligand_context, [3])
                 l_nb = l_elec + l_vdw
-                
+
                 # Store Delta Components
                 delta_nb_values.append(c_nb - p_nb - l_nb)
                 delta_vdw_values.append(c_vdw - p_vdw - l_vdw)
@@ -4014,45 +4250,82 @@ class GBSACalculator(GBSAForceManager):
             'std_dev': std_dev
         }
 
+    # Above this per-frame std. dev. of the (binding energy - mean) fluctuation
+    # (kcal/mol), the exponential average in the IE formula is dominated by a
+    # small number of high-energy tail frames and is considered statistically
+    # unreliable (see Duan et al., JACS 2016 and subsequent IE literature,
+    # which commonly flag sigma(dE) above ~3-3.6 kcal/mol at 300 K as a sign
+    # the reported -TdS should not be trusted without more sampling).
+    IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL = 3.6
+
     def calculate_interaction_entropy(self, binding_energies, temperature=300.0):
         """
         Calculate Interaction Entropy (IE) from binding energy fluctuations.
+
         Formula: -TdS = kT * ln < e^(beta * (E - <E>)) >
-        Reference: Duan et al., JACS (2016)
+        Reference: Duan et al., JACS 2016, 138, 5722-5728.
+
+        The exponential average is computed via log-sum-exp for numerical
+        stability (the naive `np.exp(beta*dE)` can overflow for frames with a
+        large positive energy fluctuation). The standard deviation of the
+        binding-energy fluctuation, sigma(dE), is also computed and printed:
+        a large sigma(dE) means the average is dominated by rare high-energy
+        frames and the resulting -TdS is not statistically reliable, per the
+        original IE literature's own diagnostic. This function raises rather
+        than silently returning 0.0 on failure, since a silent zero is
+        indistinguishable from a legitimately negligible entropy correction
+        in downstream output.
+
+        Returns
+        -------
+        float
+            -TdS in kcal/mol (the entropic penalty; add to the mean binding
+            enthalpy to get delta G).
+
+        Raises
+        ------
+        ValueError
+            If fewer than 2 binding energies are given, or the computed
+            average exponential is non-positive (would require an invalid
+            log).
         """
         import numpy as np
-        
+        from scipy.special import logsumexp
+
         # Constants
         gas_constant = 0.0019872041  # kcal/(mol*K)
         T = float(temperature) # Ensure scalar
         beta = 1.0 / (gas_constant * T)
-        
-        E = np.array(binding_energies).flatten() # Ensure 1D array
+
+        E = np.array(binding_energies, dtype=float).flatten() # Ensure 1D array
+        if E.size < 2:
+            raise ValueError(
+                f"Interaction entropy requires at least 2 binding energy samples, got {E.size}."
+            )
         mean_E = np.mean(E)
         dE = E - mean_E
-        
-        # Calculate exponential term
-        try:
-            exp_term = np.exp(beta * dE)
-            
-            # Ensure we have a scalar mean
-            avg_exp = np.mean(exp_term)
-            
-            # Force conversion to python float
-            if hasattr(avg_exp, 'item'):
-                avg_val = avg_exp.item()
-            else:
-                avg_val = float(avg_exp)
+        sigma_dE = float(np.std(dE))
 
-            if avg_val <= 1e-12: # Check for near zero/negative
-                print(f"Warning: Average exponential is non-positive or too small ({avg_val}), returning 0 entropy.")
-                return 0.0
-            
-            penalty_tds = (1.0/beta) * np.log(avg_val)
-            return float(penalty_tds)
-        except Exception as e:
-            print(f"Detailed Entropy Error: {type(e).__name__}: {e}")
-            return 0.0
+        if sigma_dE > self.IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL:
+            print(f"WARNING: Interaction Entropy sigma(dE) = {sigma_dE:.2f} kcal/mol exceeds the "
+                  f"commonly-cited reliability threshold ({self.IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL} "
+                  f"kcal/mol). The exponential average is likely dominated by a small number of "
+                  f"high-energy frames; treat the reported -TdS as unreliable and consider more "
+                  f"sampling or a normal-mode/quasi-harmonic entropy estimate instead.")
+
+        # log<e^(beta*dE)> via log-sum-exp: log(mean(exp(beta*dE)))
+        #                                 = logsumexp(beta*dE) - log(N)
+        log_avg_exp = logsumexp(beta * dE) - np.log(dE.size)
+
+        if not np.isfinite(log_avg_exp):
+            raise ValueError(
+                f"Interaction entropy average exponential is non-finite (log_avg_exp={log_avg_exp}); "
+                f"cannot compute -TdS from this binding energy sample (sigma(dE)={sigma_dE:.2f} kcal/mol)."
+            )
+
+        penalty_tds = (1.0 / beta) * log_avg_exp
+        self._last_ie_sigma_dE = sigma_dE  # exposed for callers/reporting that want the diagnostic
+        return float(penalty_tds)
 
     def save_results(self, output_dir=None):
         """Save fixed enhanced MM/GBSA results to file"""
@@ -4231,6 +4504,43 @@ class GBSACalculator(GBSAForceManager):
         print(f"Total cache size: {total_size:.1f} MB")
 
     def create_combined_system(self, protein_system, ligand_system):
+        """
+        Concatenate a separately-built protein System and ligand System into
+        a single OpenMM System (protein particles first, ligand particles
+        appended after, at index offset `n_protein`), re-merging each force
+        type found on both inputs into one combined force covering all
+        particles.
+
+        This exists so that per-force-group energies (bond=10, angle=11,
+        torsion=12, RBTorsion=13, CMAP=14, nonbonded=0, GB=1, screening=3,
+        SA=4 -- see the `assign_force_groups` local function used elsewhere
+        in this class) can be read from a single Context for the *combined*
+        complex-equivalent system, letting energy-component decomposition
+        work the same way whether the "complex" came from one native
+        topology or from stitching a protein system and ligand system
+        together (e.g. for dimer/multi-subunit binding modes).
+
+        Only forces present on BOTH `protein_system` and `ligand_system` are
+        merged and added to the output; a force present on only one input is
+        silently dropped (e.g. CMAPTorsionForce, which a ligand system
+        typically lacks). GBSAOBCForce pairing (GB vs. SA) is disambiguated
+        via each force's own `SurfaceAreaEnergy` setting (0.0 for the polar
+        GB force, nonzero for the ACE nonpolar-SA force in this codebase's
+        force-construction convention), not by inspecting particle charges.
+
+        Parameters
+        ----------
+        protein_system : openmm.System
+            System built for the protein/receptor alone.
+        ligand_system : openmm.System
+            System built for the ligand alone.
+
+        Returns
+        -------
+        openmm.System
+            Combined system with `n_protein + n_ligand` particles and merged
+            forces, force-grouped as described above.
+        """
         print("Creating combined protein+ligand system for MM/GBSA...")
         combined_system = openmm.System()
         n_protein = protein_system.getNumParticles()
@@ -4384,15 +4694,29 @@ class GBSACalculator(GBSAForceManager):
         for i in range(min(len(p_obc_forces), len(l_obc_forces))):
             pf = p_obc_forces[i]
             lf = l_obc_forces[i]
-            
-            # Determine type based on charge of particle 0 (heuristic)
-            # Or assume order: 0=GB, 1=SA
-            # Let's check particle 0 charge
-            q_p, _, _ = pf.getParticleParameters(0)
-            is_sa = False
-            if abs(q_p.value_in_unit(unit.elementary_charge)) < 1e-6:
-                is_sa = True
-                
+
+            # Determine GB vs. SA identity from each force's own
+            # SurfaceAreaEnergy setting, which this codebase sets
+            # unconditionally and oppositely at construction time:
+            # the real GB force always has SurfaceAreaEnergy == 0.0
+            # (see _create_fallback_obc_force / the factory GB path,
+            # both of which call setSurfaceAreaEnergy(0.0)), while the
+            # ACE nonpolar-SA force always has a nonzero coefficient
+            # (see _create_ace_sa_force, setSurfaceAreaEnergy(2.25936)).
+            # This is a direct, always-true signal, unlike inferring
+            # intent from whether a given particle's charge happens to
+            # be near zero -- a ligand atom can legitimately have a
+            # near-zero partial charge, which would misclassify a real
+            # GB force as the SA force under the old heuristic.
+            sa_unit = unit.kilojoule_per_mole / unit.nanometer**2
+            pf_sa_energy = pf.getSurfaceAreaEnergy().value_in_unit(sa_unit)
+            lf_sa_energy = lf.getSurfaceAreaEnergy().value_in_unit(sa_unit)
+            if pf_sa_energy != lf_sa_energy:
+                print(f"Warning: paired OBC forces at index {i} have mismatched "
+                      f"SurfaceAreaEnergy ({pf_sa_energy} vs {lf_sa_energy}); "
+                      f"protein/ligand systems may not have been built consistently.")
+            is_sa = (pf_sa_energy != 0.0) or (lf_sa_energy != 0.0)
+
             f = self._merge_obc_forces(pf, lf, protein_offset, ligand_offset)
             
             if is_sa:
@@ -4409,6 +4733,14 @@ class GBSACalculator(GBSAForceManager):
 
 
     def _merge_obc_forces(self, pf, lf, po, lo):
+        """
+        Merge a protein GBSAOBCForce `pf` and ligand GBSAOBCForce `lf` into
+        one force covering both particle sets (protein particles first,
+        ligand particles at offset `po`/`lo` -- both always 0/n_protein in
+        practice, passed through from `create_combined_system`). Dielectrics,
+        SurfaceAreaEnergy, nonbonded method, and cutoff are copied from `pf`
+        (both inputs are expected to share identical settings).
+        """
         c = openmm.GBSAOBCForce()
         c.setSolventDielectric(pf.getSolventDielectric())
         c.setSoluteDielectric(pf.getSoluteDielectric())
@@ -4433,6 +4765,14 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_nonbonded_forces(self, pf, lf, po, lo):
+        """
+        Merge protein and ligand NonbondedForces into one, offsetting ligand
+        particle/exception indices by `lo`. Only intra-protein and
+        intra-ligand exceptions (1-4 scaling, exclusions) are preserved;
+        no protein-ligand exceptions are created, so all inter-molecular
+        nonbonded pairs are evaluated at full strength (the physically
+        correct behavior for previously-non-bonded protein and ligand atoms).
+        """
         c = openmm.NonbondedForce()
         c.setNonbondedMethod(pf.getNonbondedMethod())
         c.setCutoffDistance(pf.getCutoffDistance())
@@ -4456,11 +4796,24 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_custom_gb_forces(self, pf, lf, po, lo):
+        """
+        Merge protein and ligand CustomGBForce instances (used for GB models
+        that expose dielectrics as queryable global parameters, e.g. GBn/
+        GBn2/HCT -- NOT OBC2 with a nonzero kappa, whose dielectrics are
+        embedded as literal constants in its energy-term expression strings
+        and are unaffected by this function).
+
+        KNOWN LIMITATION: solventDielectric/soluteDielectric are hardcoded
+        to 78.5/1.0 below rather than copied from `pf`'s actual global
+        parameter values. If a user configures non-default dielectrics for
+        one of these GB models, that setting is silently dropped by this
+        merge path.
+        """
         c = openmm.CustomGBForce()
         # Copy per-particle parameters dynamically
         for i in range(pf.getNumPerParticleParameters()):
             c.addPerParticleParameter(pf.getPerParticleParameterName(i))
-            
+
         c.addGlobalParameter("solventDielectric", 78.5)
         c.addGlobalParameter("soluteDielectric", 1.0)
         
@@ -4477,6 +4830,8 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_custom_nonbonded_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand CustomNonbondedForce pair (e.g. the Debye-Huckel
+        salt-screening term), offsetting ligand particle/exclusion indices by `lo`."""
         c = openmm.CustomNonbondedForce(pf.getEnergyFunction())
         for i in range(pf.getNumPerParticleParameters()):
             c.addPerParticleParameter(pf.getPerParticleParameterName(i))
@@ -4497,6 +4852,8 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_custom_bond_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand CustomBondForce pair (e.g. the LCPO nonpolar
+        surface-area term), offsetting ligand bond-atom indices by `lo`."""
         c = openmm.CustomBondForce(pf.getEnergyFunction())
         for i in range(pf.getNumPerBondParameters()):
             c.addPerBondParameter(pf.getPerBondParameterName(i))
@@ -4511,6 +4868,7 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_bond_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand HarmonicBondForce pair, offsetting ligand atom indices by `lo`."""
         c = openmm.HarmonicBondForce()
         for i in range(pf.getNumBonds()):
             p1, p2, length, k = pf.getBondParameters(i)
@@ -4521,6 +4879,7 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_angle_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand HarmonicAngleForce pair, offsetting ligand atom indices by `lo`."""
         c = openmm.HarmonicAngleForce()
         for i in range(pf.getNumAngles()):
             p1, p2, p3, angle, k = pf.getAngleParameters(i)
@@ -4531,6 +4890,8 @@ class GBSACalculator(GBSAForceManager):
         return c
 
     def _merge_torsion_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand PeriodicTorsionForce (proper dihedrals) pair,
+        offsetting ligand atom indices by `lo`."""
         c = openmm.PeriodicTorsionForce()
         for i in range(pf.getNumTorsions()):
             p1, p2, p3, p4, per, phase, k = pf.getTorsionParameters(i)
@@ -4541,6 +4902,8 @@ class GBSACalculator(GBSAForceManager):
         return c
     
     def _merge_rb_torsion_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand RBTorsionForce (Ryckaert-Bellemans dihedrals,
+        e.g. from GROMOS/OPLS-derived topologies) pair, offsetting ligand atom indices by `lo`."""
         c = openmm.RBTorsionForce()
         for i in range(pf.getNumTorsions()):
             p1, p2, p3, p4, c0, c1, c2, c3, c4, c5 = pf.getTorsionParameters(i)
@@ -4551,6 +4914,10 @@ class GBSACalculator(GBSAForceManager):
         return c
         
     def _merge_cmap_torsion_forces(self, pf, lf, po, lo):
+        """Merge a protein/ligand CMAPTorsionForce (CHARMM backbone grid correction)
+        pair. Only called from `create_combined_system` when BOTH inputs have a
+        CMAPTorsionForce; a ligand system typically lacks one, so in practice this
+        merge (and any CMAP contribution to the combined system) is skipped."""
         c = openmm.CMAPTorsionForce()
         # Copy maps first (required before adding torsions)
         for i in range(pf.getNumMaps()):

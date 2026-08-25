@@ -1,3 +1,11 @@
+"""
+Normal-mode (vibrational) entropy analysis via finite-difference Hessians.
+
+Implements `NormalModeAnalysis`, which builds a mass-weighted Hessian for
+an OpenMM System by finite differences, diagonalizes it to get vibrational
+frequencies, and derives the classical/quantum vibrational entropy terms
+used for the `entropy_method='normal_mode'` free-energy correction.
+"""
 from openmm.unit import *
 from openmm import *
 from openmm.app import *
@@ -5,7 +13,7 @@ import numpy as np
 from scipy.interpolate import CubicSpline
 from scipy.constants import pi, Boltzmann, hbar, Avogadro
 from math import pi
-from copy import deepcopy 
+from copy import deepcopy
 from warnings import warn
 import matplotlib
 import matplotlib.pyplot as plt
@@ -130,11 +138,48 @@ class NormalModeAnalysis(object):
 
     def CalculateNormalModes(self, TweakEnergyRatio=1e-12, cutoff_frequency=10.0):
         """
-            The core function to do Quasi-Harmonic Analysis.
-            ...
-            Args:
-            TweakEnergyRatio (double=1e-12): ...
-            cutoff_frequency (float=10.0): Cutoff frequency in cm^-1. Frequencies below this (and negative eigenvalues) will be clamped to this value.
+        Compute normal modes via a numerical (finite-difference) mass-weighted
+        Hessian at the current (assumed energy-minimized) structure.
+
+        For each of the 3N Cartesian degrees of freedom, displaces the
+        structure by +/-`self.TweakDisplacement` (a per-DOF step size derived
+        from `TweakEnergyRatio` -- the fraction of the mean per-atom potential
+        energy that the displacement should correspond to, converted to a
+        distance via the minimized structure's mean force magnitude) and
+        re-evaluates forces at each displaced geometry. A cubic spline
+        through the 3 points (-step, 0, +step) of (position, -force) per
+        perturbed DOF gives that column of the Cartesian spring-constant
+        (Hessian) matrix as the spline's derivative at 0. The Hessian is
+        mass-weighted (dividing by sqrt(mass_i * mass_j) for each i,j pair),
+        symmetrized (averaged with its own transpose, since the finite-
+        difference estimate is not exactly symmetric), and diagonalized.
+
+        The 6 lowest eigenvalues (translational + rotational modes, expected
+        to be ~0 for a converged minimum) are left unclamped; among the
+        remaining internal-mode eigenvalues, any below the eigenvalue
+        corresponding to `cutoff_frequency` (including any spuriously
+        negative ones from imperfect minimization/finite-difference noise)
+        are clamped up to that threshold -- this is the "Robust NMA"
+        stabilization referenced in the printed note, preventing near-zero
+        or negative eigenvalues from producing divergent or complex
+        vibrational frequencies/entropies downstream.
+
+        Args
+        ----
+        TweakEnergyRatio : float, default 1e-12
+            Target fractional potential-energy perturbation per atom used to
+            size the finite-difference displacement step (smaller = smaller
+            displacement = less anharmonic contamination, but more sensitive
+            to force-evaluation numerical noise).
+        cutoff_frequency : float, default 10.0
+            Cutoff frequency in cm^-1. Internal-mode eigenvalues corresponding
+            to a lower (or negative) frequency than this are clamped to the
+            eigenvalue at this cutoff before computing the vibrational
+            spectrum/entropy.
+
+        Populates `self.VibrationalSpectrum` (via `__getVibrationalSpectrum__`)
+        and the eigenvalue/eigenvector arrays used by
+        `getVibrationalEntropyCM`/`getVibrationalEntropyQM`.
         """
         MinimizedState = self.CUDASimulation.context.getState(getPositions=True, getEnergy=True, getForces=True)
         MinimizedPositions = MinimizedState.getPositions(asNumpy=True).in_units_of(angstrom)
@@ -270,17 +315,42 @@ class NormalModeAnalysis(object):
         plt.show()
 
     def getVibrationalEntropyCM(self, Temperature=300*unit.kelvin):
+        """
+        Classical (high-temperature limit) harmonic-oscillator vibrational entropy,
+        summed over all internal (non-translational/rotational) normal modes.
+
+        Per-mode entropy: S_i = k_B * [1 + ln(k_B*T / (hbar*omega_i))]
+        Total:            S = N_int*k_B*(1 + ln(k_B*T)) - k_B * sum_i(ln(hbar*omega_i))
+
+        This is the T -> large / hbar*omega << k_B*T limit of the quantum
+        harmonic-oscillator entropy computed by `getVibrationalEntropyQM`; the
+        two should converge for low-frequency modes at biologically relevant
+        temperatures and diverge for high-frequency (e.g. X-H stretch) modes,
+        where the classical approximation overestimates entropy.
+        """
         SquareAngularFreqAKMA = self.SquareAngularFreq.value_in_unit(kilocalorie/(gram*angstrom**2))[6:]
-        SquareAngularFreqSI = (4.184*10**26)*SquareAngularFreqAKMA
+        AngularFreqSI = np.sqrt((4.184*10**26)*SquareAngularFreqAKMA)
         NumAtoms = self.CUDASimulation.system.getNumParticles()
         internalDim = 3*NumAtoms - 6
         Temperature = Temperature.value_in_unit(kelvin)
         kBT = Boltzmann*Temperature
-        VibrationalEntropyCM = (internalDim*kBT/2) * (1 + np.log(2*pi*kBT)) - (kBT/2) * (np.sum(np.log(SquareAngularFreqSI)))
+        VibrationalEntropyCM = internalDim*kBT*(1 + np.log(kBT)) - kBT*np.sum(np.log(hbar*AngularFreqSI))
         VibrationalEntropyCM = VibrationalEntropyCM*Avogadro * (joule/mole)
         self.VibrationalEntropyCM = VibrationalEntropyCM.in_units_of(kilocalorie/mole)
     
     def getVibrationalEntropyQM(self, Temperature=300*unit.kelvin):
+        """
+        Quantum harmonic-oscillator vibrational entropy, summed over all
+        internal (non-translational/rotational) normal modes.
+
+        Per-mode entropy: S_i = (hbar*omega_i)/(e^(hbar*omega_i/k_B*T) - 1)
+                                 - k_B*T*ln(1 - e^(-hbar*omega_i/k_B*T))
+
+        Unlike `getVibrationalEntropyCM` (the classical high-temperature
+        limit), this does not assume hbar*omega_i << k_B*T, so it remains
+        accurate for high-frequency modes (e.g. X-H stretches) where the
+        classical approximation overestimates entropy.
+        """
         SquareAngularFreqAKMA = self.SquareAngularFreq.value_in_unit(kilocalorie/(gram*angstrom**2))[6:]
         AngularFreqSI = np.sqrt((4.184*10**26)*SquareAngularFreqAKMA)
         NumAtoms = self.CUDASimulation.system.getNumParticles()

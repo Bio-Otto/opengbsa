@@ -54,10 +54,6 @@ Table of Contents
    :includehidden:
 
    user_guide/index
-   user_guide/configuration
-   user_guide/running_analysis
-   user_guide/outputs
-   user_guide/visualization
 
 .. toctree::
    :maxdepth: 2
@@ -65,9 +61,6 @@ Table of Contents
    :includehidden:
 
    theory/index
-   theory/mmgbsa_theory
-   theory/gb_models
-   theory/entropy_methods
 
 .. toctree::
    :maxdepth: 2

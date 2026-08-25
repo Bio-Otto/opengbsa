@@ -1,11 +1,31 @@
+"""
+Binding free energy -> Kd/IC50/pIC50 conversion helpers.
 
+See `calculate_ic50`'s docstring for an important caveat: despite the
+name, it reports a thermodynamic Kd (via Kd = exp(dG/RT)), not a true
+Cheng-Prusoff-corrected IC50, and is not currently wired into the main
+`mmgbsa.runner`/`mmgbsa.cli` pipeline.
+"""
 import numpy as np
 from openmm import unit
 
 def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
     """
-    Calculate theoretical IC50/Kd from Binding Free Energy with confidence intervals.
-    
+    Calculate a theoretical Kd (reported as 'ic50') from Binding Free Energy,
+    with a confidence interval from `delta_g_std`.
+
+    NOTE: despite the name, this computes Kd = exp(delta_g / RT), the
+    thermodynamic dissociation constant -- NOT a true IC50. For a competitive
+    inhibitor, IC50 relates to Kd via the Cheng-Prusoff equation,
+    IC50 = Kd * (1 + [S]/Km), which depends on substrate concentration and Km
+    and is NOT applied here. Treat this function's output as a Kd estimate,
+    not a literal IC50 prediction, unless [S]/Km happens to be negligible.
+
+    Also note: as of this writing, neither this function nor the module that
+    calls it (`mmgbsa.plotting`) is imported/reachable from the main
+    pipeline (`mmgbsa.runner`/`mmgbsa.cli`) -- this is effectively unused
+    code. Verify it is wired in before relying on its output.
+
     Parameters
     ----------
     delta_g : float or unit.Quantity
@@ -14,12 +34,12 @@ def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
         Standard deviation or Standard Error of the Mean (kcal/mol)
     temperature : unit.Quantity
         Temperature (default: 300K)
-        
+
     Returns
     -------
     dict
         Dictionary containing:
-        - 'ic50': Theoretical IC50 (micromolar)
+        - 'ic50': Theoretical Kd, labeled IC50 (micromolar)
         - 'ic50_low': Lower bound of 95% CI
         - 'ic50_high': Upper bound of 95% CI
         - 'unit': 'micromolar'
@@ -55,6 +75,7 @@ def calculate_ic50(delta_g, delta_g_std, temperature=300.0*unit.kelvin):
     # The relation is Kd = exp(dG/RT). For inhibitors, IC50 ~ Kd (Cheng-Prusoff for competitive)
     
     def to_ic50_uM(dg_val):
+        """Convert a binding free energy (kcal/mol) to a Kd estimate in uM."""
         # Kd in Molar
         kd_molar = np.exp(dg_val / RT)
         # Convert to micromolar

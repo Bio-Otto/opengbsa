@@ -1,4 +1,11 @@
+"""
+Fast, vectorized per-residue vdW + electrostatic decomposition.
 
+Implements `EnergyDecomposer`, the `decomposition_method='fast'` path used
+as a lighter alternative to the full GB-derived decomposition in
+`mmgbsa/decomposition.py` (see that module for the physical difference
+between the two: this one has no polar-solvation/GB term).
+"""
 import openmm
 import openmm.app as app
 import openmm.unit as unit
@@ -13,9 +20,37 @@ class EnergyDecomposer:
     """
     Efficiently calculates per-residue interaction energies (VdW + Electrostatics)
     between a Ligand and Protein using Numpy vectorization.
+
+    IMPORTANT: this decomposer (used when `decomposition_method='fast'`) reports
+    ONLY the vdW + electrostatic (gas-phase, non-solvated) interaction per
+    residue -- it has no GB/polar-solvation term. This is a different
+    physical quantity than `decomposition_method='full'`
+    (`PerResidueDecomposition`), whose per-residue table also includes a
+    'solvation' column derived from the actual GB force (see
+    `PerResidueDecomposition._gb_solvation_decomposition`). Do not compare
+    'total' columns between the two modes as if they meant the same thing.
     """
-    
+
     def __init__(self, system, topology, protein_indices, ligand_indices, parmed_structure=None):
+        """
+        Parameters
+        ----------
+        system : openmm.System
+            The complex System to extract nonbonded parameters from (charges
+            via NonbondedForce, LJ sigma/epsilon preferentially from
+            `parmed_structure` when given, since Amber-derived systems store
+            per-exception LJ terms that a plain NonbondedForce read doesn't
+            reproduce).
+        topology : openmm.app.Topology or similar
+            Complex topology, used to enumerate protein residues.
+        protein_indices : list[int]
+            Atom indices (into `system`) belonging to the protein/receptor.
+        ligand_indices : list[int]
+            Atom indices (into `system`) belonging to the ligand.
+        parmed_structure : parmed.Structure, optional
+            If given, used as the authoritative source of per-atom sigma/
+            epsilon (see `_extract_parameters`).
+        """
         self.system = system
         self.topology = topology
         self.protein_indices = protein_indices

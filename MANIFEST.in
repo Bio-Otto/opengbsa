@@ -1,0 +1,5 @@
+recursive-include mmgbsa/forcefields *
+include mmgbsa/*.yaml
+include mmgbsa/*.yml
+include mmgbsa/*.txt
+include mmgbsa/*.md

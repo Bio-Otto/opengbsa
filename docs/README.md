@@ -30,8 +30,9 @@ This folder contains specialized guides for different modules and usage scenario
 ## 🏗️ Project Structure
 
 *   `mmgbsa/`: Source codes.
-    *   `core.py`: Main calculation engine.
-    *   `visualization.py`: Charting and reporting module.
+    *   `mmgbsa_core.py`: Main calculation engine.
+    *   `core/`: Public API package re-exporting the calculation/analysis/results classes.
+    *   `visualization.py`, `reporting.py`, `pymol_viz.py`: Charting and reporting modules.
     *   `conversion.py`: Format converter (Gromacs -> Amber).
-*   `run_mmpbsa.py`: Main executable script.
+    *   `cli.py`: Command-line entry point (installed as the `opengbsa` command).
 *   `config_master.yaml`: Master template file containing all parameters.

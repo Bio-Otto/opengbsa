@@ -269,8 +269,17 @@ class ReportBuilder:
 
 
 class ResultsValidator:
-    """Validates analysis results for quality and consistency."""
-    
+    """
+    Validates analysis results for quality and consistency.
+
+    NOTE: not currently called anywhere in the pipeline (including by
+    `ResultsManager`, which does not instantiate or use this class). The
+    main pipeline's result sanity-checking is instead done by
+    `mmgbsa.validation.TopologyValidator.validate_system_sanity`, called
+    from `mmgbsa.runner.MMGBSARunner`. Call these methods explicitly if you
+    need this class's specific (differently-thresholded) checks.
+    """
+
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
     

@@ -1,5 +1,5 @@
 """
-Configuration Management Module for MM/GBSA Analysis Package
+Configuration Management Module for OpenGBSA
 
 This module handles configuration file loading, validation, and management.
 """
