@@ -300,7 +300,8 @@ class ConfigManager:
                 'use_cache': True,
                 'parallel_processing': True,
                 'use_gpu': False,
-                'gpu_platform': None
+                'gpu_platform': None,
+                'reimage_trajectory': True
             }
         }
         
@@ -418,6 +419,18 @@ analysis_settings:
   
   # Random seed for reproducible random frame selection. Used only if frame_selection is 'random'.
   random_seed: 42
+
+  # Re-image molecules across periodic boundaries (PBC re-wrapping) before
+  # computing any energy. A raw MD trajectory has no guarantee a molecule
+  # stays whole/centered from frame to frame -- if the protein or ligand
+  # drifts and wraps to the opposite side of the periodic box mid-trajectory,
+  # downstream vdW/electrostatic energies are silently corrupted even though
+  # the true physics hasn't changed. True/False. Default true. Only disable
+  # if the input trajectory is already known to be correctly imaged (e.g.
+  # already processed with cpptraj `autoimage` or an equivalent tool) --
+  # re-imaging an already-imaged trajectory is a harmless no-op but still
+  # costs time, so this lets you skip it in that specific case.
+  reimage_trajectory: true
 
   # === Advanced Analysis Options ===
   

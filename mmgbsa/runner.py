@@ -239,6 +239,7 @@ class MMGBSARunner:
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
             sa_model=analysis_settings.get('sa_model', 'ACE'),
             nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
+            reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
             cache_dir=cache_dir
         )
 

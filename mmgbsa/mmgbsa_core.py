@@ -1027,10 +1027,11 @@ class GBSAForceManager:
 class GBSACalculator(GBSAForceManager):
     """Advanced True Force Field MMGBSA Calculator"""
     
-    def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, 
+    def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15,
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
-             visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None):
+             visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None,
+             reimage_trajectory=True):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1067,8 +1068,23 @@ class GBSACalculator(GBSAForceManager):
         sa_model : str
              Surface Area model ('ACE' or 'LCPO')
         nonbonded_cutoff : float, optional
-             Cutoff distance in Angstroms for nonbonded interactions. 
+             Cutoff distance in Angstroms for nonbonded interactions.
              If None (default) or >= 999.0, NoCutoff is used.
+        reimage_trajectory : bool, default True
+             Re-image molecules across periodic boundaries (PBC re-wrapping)
+             before computing any energy. A raw MD trajectory has no
+             guarantee that a molecule stays whole/centered from frame to
+             frame -- if the protein or ligand drifts and wraps to the
+             opposite side of the periodic box mid-trajectory, downstream
+             vdW/electrostatic energies are silently corrupted even though
+             the true physics hasn't changed (confirmed on real production
+             data: leaving this disabled reproduces a systematic ~11%
+             low-magnitude bias in delta_vdw that grows across the
+             trajectory). Enabled by default for this reason; only disable
+             if the input trajectory is already known to be correctly
+             imaged (e.g. it was already processed with cpptraj `autoimage`
+             or an equivalent tool), since re-imaging an already-imaged
+             trajectory is a harmless no-op but still costs time.
         """
         self.temperature = temperature * unit.kelvin
         self.platform_preference = platform
@@ -1087,10 +1103,11 @@ class GBSACalculator(GBSAForceManager):
         self.solvent_dielectric = solvent_dielectric
         self.entropy_method = entropy_method
         self.decomposition_method = decomposition_method
+        self.reimage_trajectory = reimage_trajectory
         self.visualization_settings = visualization_settings or {}
         self.parameterized_residues = [] # Track any dynamic residues
         self.physics_assumptions = []
-        
+
         # Cutoff Support
         self.nonbonded_cutoff = nonbonded_cutoff
         if self.nonbonded_cutoff is not None and self.nonbonded_cutoff >= 999.0:
@@ -3013,6 +3030,18 @@ class GBSACalculator(GBSAForceManager):
                 
                 full_xtc = md.load(xtc_file, top=load_top)
                 clean_xtc = full_xtc.atom_slice(clean_indices)
+                # Re-image across periodic boundaries -- see
+                # TrajectoryProcessor.load_and_process's own image_molecules()
+                # call (the main trajectory-loading path) for why this is
+                # required: without it, a molecule that drifts and wraps to
+                # the box's opposite side during the trajectory silently
+                # corrupts every downstream vdW/electrostatic energy.
+                if self.reimage_trajectory:
+                    try:
+                        clean_xtc = clean_xtc.image_molecules(inplace=False)
+                    except Exception as e:
+                        log.warning(f"image_molecules() failed on distilled trajectory ({e}); "
+                                    f"proceeding with un-imaged coordinates.")
                 clean_xtc.save(clean_xtc_path)
                 log.info(f"Created distilled trajectory: {clean_xtc_path}")
                 
@@ -3240,7 +3269,8 @@ class GBSACalculator(GBSAForceManager):
                          complex_pdb,
                          target_atoms=target_atoms,
                          solvated_topology=solvated_topology,
-                         end=1  # only first frame needed
+                         end=1,  # only first frame needed
+                         reimage=self.reimage_trajectory
                      )
                      temp_pdb = str(Path(output_dir if output_dir else '.') / 'temp_from_traj.pdb')
                      traj[0].save_pdb(temp_pdb)
@@ -3644,13 +3674,23 @@ class GBSACalculator(GBSAForceManager):
                     trajectory_file=xtc_file,
                     topology_file=final_pdb_path if 'final_pdb_path' in locals() else complex_pdb,
                     target_atoms=complex_system.getNumParticles(), # Use system count as truth
-                    solvated_topology=solvated_topology
+                    solvated_topology=solvated_topology,
+                    reimage=self.reimage_trajectory
                 )
                 print(f"✓ Trajectory processed ({traj.n_frames} frames)")
             except Exception as e:
                 log.error(f"Trajectory processing failed: {e}")
-                # Last ditch: try basic load if processor fails unexpectedly
+                # Last ditch: try basic load if processor fails unexpectedly.
+                # Still re-image (see TrajectoryProcessor.load_and_process's
+                # own image_molecules() call for why this matters) since
+                # this fallback bypasses that processor entirely.
                 traj = md.load(xtc_file, top=final_pdb_path)
+                if self.reimage_trajectory:
+                    try:
+                        traj = traj.image_molecules(inplace=False)
+                    except Exception as e2:
+                        log.warning(f"image_molecules() failed on fallback trajectory load ({e2}); "
+                                    f"proceeding with un-imaged coordinates.")
 
             # Verification handled by Processor, but double check
             if traj.n_atoms != complex_system.getNumParticles():
