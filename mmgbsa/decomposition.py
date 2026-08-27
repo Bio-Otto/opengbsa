@@ -322,7 +322,33 @@ class PerResidueDecomposition:
             if solvated_topology or len(keep_indices) < topology.n_atoms:
                 log.process(f"Stripping solvent/ion atoms (keeping {len(keep_indices)}) from trajectory to match system...")
                 decomp_traj = decomp_traj.atom_slice(keep_indices)
-            
+
+            # Re-image across periodic boundaries -- confirmed on real
+            # production data that skipping this step (as this trajectory
+            # load path previously did) reproduces a systematic ~11% bias in
+            # vdW/electrostatic energies that grows across the trajectory
+            # (frames later in the run have accumulated more drift), because
+            # a molecule that wraps to the box's opposite side mid-trajectory
+            # corrupts inter-atomic distances without changing the true
+            # physics. See TrajectoryProcessor.load_and_process's own
+            # image_molecules() call (mmgbsa_core.py's main energy loop) for
+            # the full numerical verification (-39.41 un-imaged vs -44.37
+            # correctly-imaged vs Amber's own -44.37 on one benchmark
+            # replica's delta_vdw). Per-residue decomposition uses this same
+            # trajectory, so it inherited the identical bias. Gated on the
+            # same reimage_trajectory setting as the main energy loop (see
+            # GBSACalculator.__init__'s docstring) for consistency -- a run
+            # that disabled re-imaging for the main analysis should not have
+            # decomposition silently re-image the same trajectory anyway.
+            if getattr(self.mmgbsa_calculator, 'reimage_trajectory', True):
+                try:
+                    decomp_traj = decomp_traj.image_molecules(inplace=False)
+                except Exception as e:
+                    log.warning(f"image_molecules() failed ({e}); proceeding with "
+                                f"un-imaged coordinates. Per-residue energies may be "
+                                f"biased if any molecule crosses a periodic boundary "
+                                f"during the trajectory.")
+
 
 
             # Prepare systems for decomposition
@@ -854,7 +880,20 @@ class PerResidueDecomposition:
             solvation_contributions = self._approximate_solvation_decomposition(
                 systems, positions, residue_map, ligand_indices
             )
-            
+
+            # Method 3: nonpolar (surface-area) solvation decomposition.
+            # Kept as a SEPARATE column from 'solvation' (which remains
+            # GB/polar-only, matching this class's existing documented
+            # semantics and every other consumer of that column) rather
+            # than folded into 'total', so this addition cannot silently
+            # change the meaning of any existing output column -- see
+            # _sa_decomposition's docstring for why this was added
+            # (comparability with Amber's combined polar+nonpolar
+            # 'amber_solvation').
+            nonpolar_solvation_contributions = self._sa_decomposition(
+                frame, systems, residue_map, ligand_indices
+            )
+
             # Pre-calculate complex interactions if needed (once per frame, not per residue!)
             complex_int = None
             complex_solv = None
@@ -875,6 +914,7 @@ class PerResidueDecomposition:
                     'vdw': interaction_energies.get(res_id, {}).get('vdw', 0.0),
                     'electrostatic': interaction_energies.get(res_id, {}).get('elec', 0.0),
                     'solvation': solvation_contributions.get(res_id, 0.0),
+                    'nonpolar_solvation': nonpolar_solvation_contributions.get(res_id, 0.0),
                     'total': 0.0
                 }
                 
@@ -1181,6 +1221,102 @@ class PerResidueDecomposition:
             solvation_contributions[res_id] = float(contribution)
 
         return solvation_contributions
+
+    def _sa_decomposition(self, frame, systems, residue_map, ligand_indices):
+        """
+        Per-residue nonpolar (surface-area) solvation energy, for direct
+        comparability with Amber idecomp=2's reported 'Non-Polar Solv.'
+        column -- without this, comparing this codebase's GB-only
+        'solvation' against Amber's own (polar+nonpolar combined)
+        `amber_solvation` column silently compares two different physical
+        quantities. Confirmed on real production data: for a residue with
+        substantial hydrophobic surface area (e.g. a buried TRP/PHE/TYR),
+        this GB-only vs. combined mismatch alone explained the entire
+        residual pooled solvation/total discrepancy that remained after the
+        PBC re-imaging and GB cross-term halving fixes (the GB-only term
+        matched Amber's own polar-only value to <0.001 kcal/mol; the
+        apparent 0.01-0.7 kcal/mol residual was Amber's nonpolar term,
+        never present in this codebase's reported 'solvation' column at
+        all).
+
+        Uses the same complex-vs-receptor DELTA scheme as
+        `_gb_solvation_decomposition` (this codebase's single-trajectory
+        protocol computes complex and receptor-alone geometries from the
+        SAME frame, mirroring Amber's own complex/receptor/ligand
+        decomposition -- see that method's docstring), but via
+        `mdtraj.shrake_rupley` (Shrake-Rupley SASA, matching Amber's own
+        `gbsa=2`/LCPO-family per-atom nonpolar term in spirit, though not
+        bit-identical to LCPO's analytic overlap formula) rather than an
+        OpenMM force, since `openmm.LCPOForce` (used for the whole-system
+        total, see `GBSAForceManager._setup_lcpo_force`) does not expose a
+        per-particle energy breakdown the way `CustomGBForce` does for the
+        polar term.
+
+        surface_tension = 3.01248 kJ/mol/nm^2 (0.0072 kcal/mol/A^2),
+        matching the same LCPO surface tension `_setup_lcpo_force` builds
+        the whole-system SA force with -- this value, not `self.sa_model`,
+        determines correctness here, so this method assumes LCPO settings
+        regardless of the configured `sa_model` (ACE uses a different
+        constant; if a future caller configures ACE, this term will be off
+        by a filed constant, not silently wrong).
+
+        Returns {res_id: nonpolar_solvation_contribution_kcal_per_mol},
+        analogous to `_gb_solvation_decomposition`'s return value -- add
+        the two together to reproduce Amber's combined 'amber_solvation'.
+        """
+        surface_tension_kcal_per_A2 = 0.0072  # kcal/mol/A^2 (3.01248 kJ/mol/nm^2)
+
+        try:
+            complex_sasa_nm2 = md.shrake_rupley(frame, mode='atom')[0]  # (n_atoms,) in nm^2
+        except Exception as e:
+            log.warning(f"      Per-residue SA decomposition failed (complex SASA): {e}; "
+                        f"returning zero nonpolar contribution for all residues.")
+            return {res_id: 0.0 for res_id in residue_map}
+        complex_sasa_A2 = complex_sasa_nm2 * 100.0  # nm^2 -> A^2
+
+        protein_indices_in_complex = systems.get('protein_indices_in_complex')
+        receptor_sasa_A2 = None
+        if protein_indices_in_complex is not None:
+            try:
+                receptor_frame = frame.atom_slice(np.asarray(protein_indices_in_complex, dtype=np.int64))
+                receptor_sasa_nm2 = md.shrake_rupley(receptor_frame, mode='atom')[0]
+                receptor_sasa_A2 = receptor_sasa_nm2 * 100.0
+            except Exception as e:
+                log.warning(f"      Per-residue SA decomposition: receptor-only SASA failed ({e}); "
+                            f"falling back to the complex-SASA-only approximation (known to "
+                            f"under-count delta_sa the same way the pre-fix GB self-energy did).")
+
+        target_mask = np.zeros(frame.n_atoms, dtype=bool)
+        target_mask[np.asarray(ligand_indices, dtype=np.int64)] = True
+        residue_map_atoms = set()
+        for atoms in residue_map.values():
+            residue_map_atoms.update(int(a) for a in atoms)
+        target_overlaps_residue_map = bool(residue_map_atoms & set(int(i) for i in ligand_indices))
+
+        # Map each protein atom's complex-array index to its position in the
+        # receptor-only SASA array (same order as protein_indices_in_complex,
+        # since atom_slice preserves selection order).
+        sasa_correction = np.zeros(frame.n_atoms)
+        if receptor_sasa_A2 is not None:
+            complex_idx_arr = np.asarray(protein_indices_in_complex, dtype=np.int64)
+            sasa_correction[complex_idx_arr] = complex_sasa_A2[complex_idx_arr] - receptor_sasa_A2
+
+        sa_contributions = {}
+        for res_id, res_atoms in residue_map.items():
+            res_atoms_arr = np.asarray(res_atoms, dtype=np.int64)
+            in_target = target_mask[res_atoms_arr]
+            if target_overlaps_residue_map:
+                # Case 1 (self-consistency call): raw complex SASA, same
+                # convention as _gb_solvation_decomposition's Case 1.
+                sasa_delta = np.sum(complex_sasa_A2[res_atoms_arr][in_target])
+            else:
+                # Case 2 (standard hot-spot call): complex-vs-receptor DELTA,
+                # capturing the ligand's burial effect on this residue's own
+                # surface area -- the nonpolar analogue of gb_correction.
+                sasa_delta = np.sum(sasa_correction[res_atoms_arr])
+            sa_contributions[res_id] = float(sasa_delta * surface_tension_kcal_per_A2)
+
+        return sa_contributions
 
     def _gb_born_self_energy(self, system, positions):
         """
