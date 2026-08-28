@@ -218,7 +218,9 @@ class CompleteMMGBSARunner:
             'parallel_processing': analysis_settings.get('parallel_processing', False),
             'max_workers': analysis_settings.get('max_workers', None),
             'protein_forcefield': forcefield_settings.get('protein_forcefield', 'amber'),
-            'reimage_trajectory': analysis_settings.get('reimage_trajectory', True)
+            'reimage_trajectory': analysis_settings.get('reimage_trajectory', True),
+            'charmm_params': forcefield_settings.get('charmm_params', None),
+            'charmm_coordinates': forcefield_settings.get('charmm_coordinates', None)
         }
         
         if OPENMM_AVAILABLE:

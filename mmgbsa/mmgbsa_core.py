@@ -149,7 +149,8 @@ class StructureManager:
     }
 
     @staticmethod
-    def load_complex(pdb_path, prmtop_path=None, xtc_path=None, gb_model='OBC2'):
+    def load_complex(pdb_path, prmtop_path=None, xtc_path=None, gb_model='OBC2',
+                      charmm_params=None):
         """
         Load a complex structure consistent with ParmEd.
 
@@ -160,12 +161,18 @@ class StructureManager:
             gb_model (str): Configured GB model, used only to pick the correct
                 GB radii set (see `_GB_MODEL_RADII_SET`) when the loaded
                 structure has no per-atom radii of its own (GROMACS-origin
-                inputs -- .top via ParmEd, .tpr via `load_tpr_as_parmed` --
+                and CHARMM/NAMD-origin inputs -- .top via ParmEd, .tpr via
+                `load_tpr_as_parmed`, .psf via ParmEd+CharmmParameterSet --
                 carry no GB radii/screen information at all, since intrinsic
                 GB radii are an Amber-ecosystem convention, not part of the
-                GROMACS force field itself). Amber `.prmtop`/`.parm7` inputs
-                already carry correct radii from their own `tleap`
-                parameterization and are never overridden here.
+                GROMACS or CHARMM force fields themselves). Amber
+                `.prmtop`/`.parm7` inputs already carry correct radii from
+                their own `tleap` parameterization and are never overridden
+                here.
+            charmm_params (str or list of str, optional): CHARMM parameter
+                file(s) (.prm/.str/.rtf), required only when `prmtop_path`
+                is a `.psf` file (see `TopologyLoader._load_charmm`, which
+                uses the identical ParmEd loading approach).
 
         Returns:
             parmed.Structure: The loaded structure
@@ -174,6 +181,7 @@ class StructureManager:
 
         struct = None
         is_gromacs_origin = False
+        is_charmm_origin = False
         if prmtop_path and Path(prmtop_path).exists():
             # Native Mode: Load Topology + Coordinates
             try:
@@ -184,6 +192,26 @@ class StructureManager:
                     is_gromacs_origin = True
                     # Optionally we can overwrite coords with pdb_path if needed, but TPR typically has them.
                     # Usually, pdb_path is an explicitly supplied standard coordinates file.
+                    if pdb_path and Path(pdb_path).exists() and str(pdb_path) != str(prmtop_path):
+                        ref_struct = pmd.load_file(pdb_path)
+                        if len(ref_struct.atoms) == len(struct.atoms):
+                            struct.coordinates = ref_struct.coordinates
+                elif ext == '.psf':
+                    # A PSF carries no force-field parameters or coordinates
+                    # of its own (see TopologyLoader._load_charmm's
+                    # docstring) -- both must be supplied separately.
+                    if not charmm_params:
+                        raise ValueError(
+                            "Loading a .psf complex requires CHARMM parameter files "
+                            "(charmm_params, e.g. .prm/.str) -- see GBSACalculator's "
+                            "'charmm_params' setting."
+                        )
+                    params = pmd.charmm.CharmmParameterSet(
+                        *([charmm_params] if isinstance(charmm_params, str) else charmm_params)
+                    )
+                    struct = pmd.load_file(str(prmtop_path))
+                    struct.load_parameters(params)
+                    is_charmm_origin = True
                     if pdb_path and Path(pdb_path).exists() and str(pdb_path) != str(prmtop_path):
                         ref_struct = pmd.load_file(pdb_path)
                         if len(ref_struct.atoms) == len(struct.atoms):
@@ -204,25 +232,28 @@ class StructureManager:
             # Actually, standardizing on loading the PDB is fine if we are in non-native mode.
             struct = pmd.load_file(pdb_path)
 
-        # GROMACS-origin structures (.top, .tpr) carry no intrinsic GB radii
-        # at all (all-zero solvent_radius/screen); assign the radii set that
-        # actually matches the configured GB model, via ParmEd's own
-        # (Amber-validated) mbondi*/bondi rule sets, rather than silently
-        # falling back to a crude, atom-type-blind element-only radius table
-        # (e.g. treating every H the same regardless of what it's bonded to,
-        # unlike mbondi2's real per-atom-type H radii). Previously this
-        # fallback caused a large, systematic (~20 kcal/mol observed on real
-        # OXA-MD benchmark systems) discrepancy against Amber MMPBSA.py
-        # reference results for GROMACS-sourced inputs.
-        if is_gromacs_origin:
+        # GROMACS-origin and CHARMM-origin structures (.top, .tpr, .psf)
+        # carry no intrinsic GB radii at all (all-zero solvent_radius/
+        # screen); assign the radii set that actually matches the
+        # configured GB model, via ParmEd's own (Amber-validated)
+        # mbondi*/bondi rule sets, rather than silently falling back to a
+        # crude, atom-type-blind element-only radius table (e.g. treating
+        # every H the same regardless of what it's bonded to, unlike
+        # mbondi2's real per-atom-type H radii). Previously this fallback
+        # caused a large, systematic (~20 kcal/mol observed on real OXA-MD
+        # benchmark systems) discrepancy against Amber MMPBSA.py reference
+        # results for GROMACS-sourced inputs; CHARMM-origin inputs need the
+        # identical treatment for the identical reason.
+        if is_gromacs_origin or is_charmm_origin:
+            origin_label = 'GROMACS-origin' if is_gromacs_origin else 'CHARMM/NAMD-origin'
             try:
                 from parmed.tools import changeRadii
                 radii_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
                 changeRadii(struct, radii_set).execute()
-                log.info(f"Applied '{radii_set}' GB radii set to GROMACS-origin structure "
+                log.info(f"Applied '{radii_set}' GB radii set to {origin_label} structure "
                          f"(matching gb_model='{gb_model}').")
             except Exception as e:
-                log.warning(f"Failed to apply GB radii set to GROMACS-origin structure: {e}. "
+                log.warning(f"Failed to apply GB radii set to {origin_label} structure: {e}. "
                             f"GB energies will use the crude element-only radii fallback and "
                             f"will NOT be comparable to Amber MMPBSA.py results.")
 
@@ -232,14 +263,23 @@ class StructureManager:
         return struct
 
     @staticmethod
-    def split_components(complex_structure, ligand_resname='LIG'):
+    def split_components(complex_structure, ligand_resname='LIG', ligand_indices=None):
         """
         Split complex into Receptor and Ligand structures using atom stripping.
-        
+
         Args:
             complex_structure (parmed.Structure): The full complex
-            ligand_resname (str): Residue name of the ligand
-            
+            ligand_resname (str): Residue name of the ligand. Ignored when
+                `ligand_indices` is given.
+            ligand_indices (iterable of int, optional): Explicit 0-based atom
+                indices identifying the ligand, overriding `ligand_resname`
+                entirely. Required for protein-protein/peptide systems (e.g.
+                a NAMD/CHARMM `.psf` split by `chainid`) where the "ligand"
+                is not a single small-molecule residue name that an Amber
+                mask (`:LIG`) can select -- see `get_ligand_indices`'s own
+                `selection` override, which produces exactly this kind of
+                index list from an mdtraj-style `chainid N` string.
+
         Returns:
             tuple: (receptor_structure, ligand_structure)
         """
@@ -248,18 +288,41 @@ class StructureManager:
         # Use generic Structure class to avoid AmberParm pointer update issues during stripping
         receptor = complex_structure.copy(cls=pmd.Structure)
         ligand = complex_structure.copy(cls=pmd.Structure)
-        
-        # Strip Ligand from Receptor (Keep everything NOT ligand)
-        receptor.strip(f":{ligand_resname}")
-        
-        # Strip Receptor from Ligand (Keep ONLY ligand)
-        ligand.strip(f"!:{ligand_resname}")
-        
+
+        if ligand_indices is not None:
+            ligand_index_set = set(int(i) for i in ligand_indices)
+            n_atoms = len(complex_structure.atoms)
+            # ParmEd's `strip` also accepts a boolean/index iterable the same
+            # length as `atoms`, sidestepping AmberMask syntax entirely --
+            # confirmed via `parmed.Structure.strip`'s own docstring.
+            is_ligand = [i in ligand_index_set for i in range(n_atoms)]
+            is_receptor = [not v for v in is_ligand]
+            receptor.strip(is_ligand)
+            ligand.strip(is_receptor)
+        else:
+            # Strip Ligand from Receptor (Keep everything NOT ligand)
+            receptor.strip(f":{ligand_resname}")
+
+            # Strip Receptor from Ligand (Keep ONLY ligand)
+            ligand.strip(f"!:{ligand_resname}")
+
         # Apply secondary global solvent strip for receptor and ligand topologies to avoid LCPO crashes
-        solvent_mask = ":WAT,HOH,H2O,SOL,NA,CL,K,MG,Na+,Cl-,K+,Mg2+,Ca2+"
+        # CHARMM/NAMD-origin structures use different solvent/ion residue
+        # names than Amber/GROMACS (e.g. 'TIP3' not 'SOL', 'SOD'/'CLA' not
+        # 'NA'/'CL') -- confirmed on a real NAMD PSF that the original,
+        # Amber/GROMACS-only mask silently stripped ZERO atoms (16024 atoms
+        # in, 16024 out) despite the structure containing 4655 TIP3 waters
+        # and 29 SOD/CLA ions, which would have gone on to crash or corrupt
+        # the LCPO surface-area force downstream. Includes both naming
+        # conventions so this mask works for every currently-supported
+        # topology origin.
+        solvent_mask = (":WAT,HOH,H2O,SOL,TIP3,TIP,SPC,"
+                         "NA,CL,K,MG,ZN,CA,"
+                         "Na+,Cl-,K+,Mg2+,Ca2+,Zn2+,"
+                         "SOD,CLA,POT,CAL,ZN2")
         receptor.strip(solvent_mask)
         ligand.strip(solvent_mask)
-        
+
         return receptor, ligand
 
     @staticmethod
@@ -1031,7 +1094,7 @@ class GBSACalculator(GBSAForceManager):
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
              visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None,
-             reimage_trajectory=True):
+             reimage_trajectory=True, charmm_params=None, charmm_coordinates=None):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1085,6 +1148,20 @@ class GBSACalculator(GBSAForceManager):
              imaged (e.g. it was already processed with cpptraj `autoimage`
              or an equivalent tool), since re-imaging an already-imaged
              trajectory is a harmless no-op but still costs time.
+        charmm_params : str or list of str, optional
+             Path(s) to CHARMM parameter file(s) (.prm/.str/.rtf), required
+             only when the topology passed to `parameterize_protein_amber`
+             is a NAMD/CHARMM `.psf` file (a PSF has no embedded force-field
+             parameters, unlike Amber's prmtop). Ignored for Amber/GROMACS/
+             generic-PDB topologies. See `TopologyLoader._load_charmm`.
+        charmm_coordinates : str, optional
+             Path to a companion coordinate file (.pdb/.coor/.crd) for a
+             `.psf` topology -- a PSF itself carries no atomic positions
+             (confirmed: `parmed.load_file` on a real PSF gives
+             `struct.positions is None`), unlike Amber's prmtop+inpcrd
+             pairing. Required to get a physically real system; without it,
+             CHARMM-mode positions fall back to a same-shape all-zeros
+             placeholder, which builds but is meaningless for energetics.
         """
         self.temperature = temperature * unit.kelvin
         self.platform_preference = platform
@@ -1104,6 +1181,8 @@ class GBSACalculator(GBSAForceManager):
         self.entropy_method = entropy_method
         self.decomposition_method = decomposition_method
         self.reimage_trajectory = reimage_trajectory
+        self.charmm_params = charmm_params
+        self.charmm_coordinates = charmm_coordinates
         self.visualization_settings = visualization_settings or {}
         self.parameterized_residues = [] # Track any dynamic residues
         self.physics_assumptions = []
@@ -1219,6 +1298,16 @@ class GBSACalculator(GBSAForceManager):
                  complex_pdb_obj = None
             elif str(complex_pdb).endswith('.gro'):
                  complex_pdb_obj = app.GromacsGroFile(complex_pdb)
+            elif str(complex_pdb).endswith('.psf'):
+                 # NAMD/CHARMM Topology - no embedded coordinates/parameters
+                 # (see TopologyLoader._load_charmm), so it cannot be parsed
+                 # as a PDB (confirmed: app.PDBFile on a real .psf raises an
+                 # opaque "list index out of range" rather than a clear
+                 # format error). Skip detailed structure validation here,
+                 # same as the .top/.tpr native-topology cases above --
+                 # actual loading/validation happens in
+                 # StructureManager.load_complex/TopologyLoader._load_charmm.
+                 complex_pdb_obj = None
             else:
                  complex_pdb_obj = app.PDBFile(complex_pdb)
             if ligand_pdb:
@@ -1275,7 +1364,14 @@ class GBSACalculator(GBSAForceManager):
                 if str(top_to_use).endswith('.top') or str(top_to_use).endswith('.tpr'):
                      pass
                 else:
-                    traj_test = md.load(xtc_file, top=top_to_use, frame=0)
+                    # Callers normally already route xtc_file through
+                    # TrajectoryProcessor.resolve_mdtraj_loadable_path (see
+                    # run_comprehensive) before reaching here, but resolve
+                    # again defensively in case this is ever called directly
+                    # with a raw '.trj' path.
+                    from .trajectory import TrajectoryProcessor
+                    loadable_xtc = TrajectoryProcessor.resolve_mdtraj_loadable_path(xtc_file)
+                    traj_test = md.load(loadable_xtc, top=top_to_use, frame=0)
                     if len(traj_test) == 0:
                         validation_errors.append("Trajectory file contains no frames")
             except Exception as e:
@@ -1974,7 +2070,11 @@ class GBSACalculator(GBSAForceManager):
                       'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar,
                       'nonbondedMethod': app.NoCutoff
                   }
-                  
+                  if mode == EngineMode.CHARMM and self.charmm_params:
+                      loader_kwargs['charmm_params'] = self.charmm_params
+                      if self.charmm_coordinates:
+                          loader_kwargs['charmm_coordinates'] = self.charmm_coordinates
+
                   if self.nonbonded_cutoff is not None:
                       loader_kwargs['nonbondedMethod'] = app.CutoffNonPeriodic
                       loader_kwargs['nonbondedCutoff'] = self.nonbonded_cutoff * unit.angstroms
@@ -2876,7 +2976,18 @@ class GBSACalculator(GBSAForceManager):
         
         # Preserve original path before any potential fallback replacement
         original_input_complex_pdb = complex_pdb
-        
+
+        # mdtraj has no registered loader for a bare '.trj' extension --
+        # normalize once, up front, so every downstream md.load(xtc_file, ...)
+        # call in this method and in run() gets a path mdtraj recognizes,
+        # rather than needing this same fix repeated at each call site (see
+        # TrajectoryProcessor.resolve_mdtraj_loadable_path's own docstring
+        # for why this is needed -- confirmed on a real published dataset,
+        # Zenodo 17926575, whose Amber trajectories use this extension).
+        if xtc_file:
+            from .trajectory import TrajectoryProcessor
+            xtc_file = TrajectoryProcessor.resolve_mdtraj_loadable_path(xtc_file)
+
         # Pre-run validation
         print("Validating input files...")
         validation_errors = self.validate_input_files(ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology)
@@ -2958,6 +3069,23 @@ class GBSACalculator(GBSAForceManager):
                     ref_traj = md.load_frame(xtc_file, 0, top=ref_top)
                 else:
                     ref_traj = md.load(ref_top)
+            elif str(mdtraj_topology).lower().endswith('.psf'):
+                # mdtraj cannot load a bare .psf (topology-only, no
+                # coordinates) -- it needs a companion coordinate file, same
+                # requirement as TopologyLoader._load_charmm's
+                # charmm_coordinates option.
+                ref_top = solvated_topology if solvated_topology else self.charmm_coordinates
+                if not ref_top:
+                    raise ValueError(
+                        "A .psf topology needs a companion coordinate file to build an "
+                        "mdtraj reference structure for custom ligand/receptor selections -- "
+                        "set 'solvated_topology' or forcefield_settings.charmm_coordinates "
+                        "(.pdb/.coor/.crd)."
+                    )
+                if xtc_file:
+                    ref_traj = md.load_frame(xtc_file, 0, top=ref_top)
+                else:
+                    ref_traj = md.load(ref_top)
             else:
                 ref_traj = md.load(mdtraj_topology)
             
@@ -2991,7 +3119,7 @@ class GBSACalculator(GBSAForceManager):
             
             if not skip_distillation:
                 native_topology_input = str(original_input_complex_pdb).lower().endswith(
-                    ('.prmtop', '.parm7', '.tpr', '.top')
+                    ('.prmtop', '.parm7', '.tpr', '.top', '.psf')
                 )
                 if native_topology_input:
                     log.info("Native topology input detected; skipping distillation and using selection masks directly.")
@@ -3319,39 +3447,134 @@ class GBSACalculator(GBSAForceManager):
         log.process("Executing Unified Topology Splitting...")
         prep_start_time = time.time()
         ligand_resname = None
-        
+        is_native_mode = str(original_complex_pdb).endswith(('.prmtop', '.parm7', '.top', '.tpr', '.psf'))
+        # Set below, in the Coordinate Mode branch, when a PPI-style
+        # ligand_selection (chainid-based, no small-molecule ligand_mol) is
+        # used instead of ligand_resname -- see its own comment for why this
+        # needs the same "use the frame's true atom order" fix as
+        # is_native_mode. Declared here so it's always defined by the time
+        # the complex-context coordinate-assignment code below checks it.
+        is_ppi_coordinate_mode = False
+        # Set in either the Native Mode or Coordinate Mode branch below when
+        # the ligand is identified by explicit atom indices rather than a
+        # chainid selection or a residue name (e.g. via receptor_topology's
+        # atom count for a protein-RNA/DNA complex). Declared here so the
+        # "IDENTIFY COMPONENTS" fallback further down (ligand_indices/
+        # protein_indices) can check it regardless of which branch ran.
+        ligand_atom_indices = None
+
         # 1. OBTAIN MASTER COMPLEX STRUCTURE
         complex_struct = None
-        
-        if str(original_complex_pdb).endswith(('.prmtop', '.parm7', '.top', '.tpr')):
-             # NATIVE MODE: Use Unified Splitting (Robust for prmtop and tpr)
-             log.info("Mode: Native Topology (PRMTOP or TPR)")
+
+        if is_native_mode:
+             # NATIVE MODE: Use Unified Splitting (Robust for prmtop, tpr, and psf)
+             is_charmm_native = str(original_complex_pdb).endswith('.psf')
+             log.info(f"Mode: Native Topology ({'PSF/CHARMM' if is_charmm_native else 'PRMTOP or TPR'})")
              try:
-                 complex_struct = StructureManager.load_complex(complex_pdb, original_complex_pdb, xtc_path=xtc_file, gb_model=self.gb_model)
+                 # A .psf carries no coordinates of its own (see
+                 # TopologyLoader._load_charmm's docstring) -- unlike prmtop/
+                 # tpr, where `complex_pdb` (typically equal to
+                 # `original_complex_pdb` at this point) can double as its
+                 # own coordinate source via ParmEd's `xyz=` kwarg. Passing
+                 # the same .psf path as both topology AND coordinate source
+                 # here left `struct.coordinates` silently None (ParmEd's
+                 # .psf branch only loads coordinates when pdb_path differs
+                 # from prmtop_path) -- confirmed this produced a real
+                 # System with a real particle count but ALL-ZERO or garbage
+                 # positions, which blew up as a ~11 million kcal/mol VdW
+                 # "energy" once real trajectory coordinates were set on it
+                 # (the System's exclusions/parameters were fine; only the
+                 # reference coordinates used to validate/derive
+                 # receptor+ligand split were wrong). Use the companion
+                 # coordinate file explicitly.
+                 charmm_coord_source = solvated_topology or self.charmm_coordinates
+                 complex_struct = StructureManager.load_complex(
+                     charmm_coord_source if is_charmm_native else complex_pdb,
+                     original_complex_pdb, xtc_path=xtc_file, gb_model=self.gb_model,
+                     charmm_params=self.charmm_params if is_charmm_native else None,
+                 )
                  log.success(f"Loaded Native Complex: {len(complex_struct.atoms)} atoms")
-                 
+
                  import os
                  if str(original_complex_pdb).endswith('.tpr'):
                       temp_pdb_path = os.path.join(output_dir if 'output_dir' in locals() and output_dir else '.', "complex_solvated_from_tpr_for_mdtraj.pdb")
                       complex_struct.save(temp_pdb_path, overwrite=True)
                       complex_pdb = temp_pdb_path
-                 
+
                  # STRIP SOLVENT AFTER WRITING MDTRAJ PDB BUT BEFORE OPENMM SYSTEM
                  log.info("Stripping complex system solvent to prepare for implicit GBSA evaluation...")
-                 solvent_mask = ":WAT,HOH,H2O,SOL,NA,CL,K,MG,Na+,Cl-,K+,Mg2+,Ca2+"
+                 # CHARMM/NAMD-origin structures use different solvent/ion residue
+                 # names than Amber/GROMACS (e.g. 'TIP3' not 'SOL', 'SOD'/'CLA' not
+                 # 'NA'/'CL') -- confirmed on a real NAMD PSF that the original,
+                 # Amber/GROMACS-only mask silently stripped ZERO atoms (16024 atoms
+                 # in, 16024 out) despite the structure containing 4655 TIP3 waters
+                 # and 29 SOD/CLA ions, which would have gone on to crash or corrupt
+                 # the LCPO surface-area force downstream. Includes both naming
+                 # conventions so this mask works for every currently-supported
+                 # topology origin.
+                 solvent_mask = (":WAT,HOH,H2O,SOL,TIP3,TIP,SPC,"
+                                  "NA,CL,K,MG,ZN,CA,"
+                                  "Na+,Cl-,K+,Mg2+,Ca2+,Zn2+,"
+                                  "SOD,CLA,POT,CAL,ZN2")
                  complex_struct.strip(solvent_mask)
                  log.success(f"Stripped Complex: {len(complex_struct.atoms)} atoms")
-                 
+
                  # 2. IDENTIFY COMPONENTS
-                 if not ligand_resname:
+                 # A protein-protein/peptide system (e.g. NAMD/CHARMM chainid
+                 # split) has no single small-molecule ligand_resname an
+                 # Amber mask can select -- when ligand_selection/
+                 # receptor_selection were already resolved (see
+                 # `_resolve_binding_mode_selections`'s `ppi` binding_mode),
+                 # use those (mdtraj-style `chainid N`) to get explicit atom
+                 # indices instead of falling back to find_ligand_resname's
+                 # single-residue-name assumption, which cannot represent a
+                 # multi-residue peptide "ligand" at all.
+                 ligand_atom_indices = None
+                 if ligand_selection:
+                     # complex_struct.topology here is a ParmEd Structure's
+                     # own .topology (an OpenMM Topology) post-solvent-strip;
+                     # get_selection_indices already accepts an OpenMM
+                     # Topology directly (see get_ligand_indices/
+                     # get_protein_indices's own dual OpenMM/MDTraj handling).
+                     ligand_atom_indices = self.get_selection_indices(complex_struct.topology, ligand_selection)
+                     log.info(f"Resolved ligand_selection '{ligand_selection}' to {len(ligand_atom_indices)} atoms (post-solvent-strip complex)")
+                 elif receptor_topology and str(receptor_topology).endswith(('.prmtop', '.new', '.7')):
+                     # An explicit receptor_topology (with a known atom
+                     # count) tells us exactly how to split the complex
+                     # WITHOUT guessing a ligand_resname -- required for any
+                     # complex where find_ligand_resname's "single small
+                     # residue = ligand" heuristic is wrong, e.g. a
+                     # protein-RNA/DNA complex (confirmed on a real dataset,
+                     # Zenodo 6973437: find_ligand_resname picked "HIP", a
+                     # histidine tautomer residue, as the "ligand" instead of
+                     # the actual 25-nucleotide RNA chain, since RNA/DNA
+                     # residue names were never in its exclusion/detection
+                     # logic at all). The receptor's own atom count is
+                     # reliable regardless of residue-naming conventions,
+                     # since the receptor+ligand topologies were built from
+                     # the exact same complex by construction.
+                     receptor_atom_count = len(pmd.load_file(receptor_topology).atoms)
+                     total_atoms = len(complex_struct.atoms)
+                     if receptor_atom_count < total_atoms:
+                         ligand_atom_indices = list(range(receptor_atom_count, total_atoms))
+                         log.info(f"Derived ligand indices from receptor_topology's atom count "
+                                  f"({receptor_atom_count} receptor + {total_atoms - receptor_atom_count} "
+                                  f"ligand = {total_atoms} total) -- bypassing ligand_resname guessing.")
+                     else:
+                         log.warning(f"receptor_topology has {receptor_atom_count} atoms >= complex's "
+                                     f"{total_atoms}; cannot derive ligand indices this way, "
+                                     f"falling back to ligand_resname detection.")
+                 if ligand_atom_indices is None and not ligand_resname:
                      ligand_resname = self.find_ligand_resname(complex_struct.topology)
-                 if ligand_resname:
+                 if ligand_resname and ligand_atom_indices is None:
                      log.info(f"Using Ligand Residue Name: {ligand_resname}")
-                     
+
                  # 3. COMPONENT PREPARATION
                  # ALWAYS split from complex to get COORDINATES (and fallback topology)
                  log.info("Splitting Complex to obtain coordinates...")
-                 receptor_derived, ligand_derived = StructureManager.split_components(complex_struct, ligand_resname)
+                 receptor_derived, ligand_derived = StructureManager.split_components(
+                     complex_struct, ligand_resname, ligand_indices=ligand_atom_indices
+                 )
 
                  # Handle Receptor
                  if receptor_topology and str(receptor_topology).endswith(('.prmtop', '.new', '.7')):
@@ -3424,13 +3647,30 @@ class GBSACalculator(GBSAForceManager):
              # COORDINATE MODE: Use Consistent Independent Generation
              # (Bypasses ParmEd serialization issues with OpenFF/SystemGenerator)
              log.info("Mode: Raw Coordinates -- Generating Consistent Systems via OpenMM")
-             
+
              try:
                  # 1. Load Complex PDB & Identify Ligand
                  import parmed as pmd
                  c_struct = pmd.load_file(original_complex_pdb)
-                 
-                 if not ligand_resname and ligand_mol:
+
+                 # A protein-protein/peptide system (e.g. binding_mode=ppi,
+                 # split by chainid) has no single small-molecule
+                 # ligand_resname an Amber mask can select -- mirrors the
+                 # identical fix already applied to Native Mode above. When
+                 # ligand_selection was already resolved (chainid-style),
+                 # use it to get explicit atom indices instead of the
+                 # ligand_mol/find_ligand_resname path below, which assumes
+                 # a single-residue small-molecule ligand and previously
+                 # left ligand_resname=None here for a PPI system (no
+                 # ligand_mol was ever provided), silently mis-splitting the
+                 # complex and then crashing several steps later trying to
+                 # OpenFF-parameterize a protein chain as if it were a
+                 # small molecule.
+                 ligand_atom_indices = None
+                 if ligand_selection:
+                     ligand_atom_indices = self.get_selection_indices(c_struct.topology, ligand_selection)
+                     log.info(f"Resolved ligand_selection '{ligand_selection}' to {len(ligand_atom_indices)} atoms (Coordinate Mode)")
+                 elif not ligand_resname and ligand_mol:
                      # Detect Ligand
                      unique_resnames = set(r.name for r in c_struct.residues)
                      if 'LIG' in unique_resnames:
@@ -3440,40 +3680,70 @@ class GBSACalculator(GBSAForceManager):
                      log.info(f"Detected Ligand Residue: {ligand_resname}")
 
                  # 2. Split Coordinates into PDBs
-                 r_struct, l_struct = StructureManager.split_components(c_struct, ligand_resname)
-                 
+                 r_struct, l_struct = StructureManager.split_components(
+                     c_struct, ligand_resname, ligand_indices=ligand_atom_indices
+                 )
+
                  import os
                  rec_pdb_path = os.path.join(output_dir, "temp_receptor.pdb")
                  lig_pdb_path = os.path.join(output_dir, "temp_ligand.pdb")
                  r_struct.save(rec_pdb_path, overwrite=True)
                  l_struct.save(lig_pdb_path, overwrite=True)
-                 
+
                  # 3. Generate Systems Independently (Consistent FF)
                  log.process("Generating Complex System...")
-                 # For complex, we need to extract ligand PDB first if we want build_complex_system to use it with mol
-                 # Or just pass the extracted lig_pdb_path
-                 complex_system, cx_top, _ = self.build_complex_system(original_complex_pdb, ligand_mol, ligand_pdb=lig_pdb_path, add_gbsa=True)
-                 complex_top = cx_top
-                 
-                 # The parameterized ligand (OpenFF) might have a different residue name (e.g. UNK)
-                 # We must update ligand_resname to match the new topology for accurate indexing
-                 new_res = self.find_ligand_resname(complex_top)
-                 if new_res and new_res != ligand_resname:
-                      log.info(f"Ligand Residue Name updated from {ligand_resname} to {new_res} (OpenFF default)")
-                      ligand_resname = new_res
-                 
-                 log.process("Generating Receptor System...")
-                 protein_system, px_top, _ = self.build_complex_system(rec_pdb_path, ligand_mol=None, add_gbsa=True)
-                 protein_top = px_top
-                 
-                 log.process("Generating Ligand System...")
-                 # Treat lig.pdb as "protein_pdb" input but with ligand_mol so it gets parameterized as ligand
-                 # build_complex_system will delete LIG from lig.pdb (emptying it) then add ligand_pdb (refilling it)
-                 ligand_system, lx_top, _ = self.build_complex_system(lig_pdb_path, ligand_mol, ligand_pdb=lig_pdb_path, add_gbsa=True)
-                 ligand_top = lx_top
-                 
+                 is_ppi_coordinate_mode = ligand_atom_indices is not None
+                 if is_ppi_coordinate_mode:
+                     # No small-molecule ligand at all -- build all three
+                     # systems the same way build_complex_system already
+                     # handles "Protein-Only/Protein-Protein Mode"
+                     # (ligand_mol=None), using the distilled/original
+                     # complex PDB and the two chain-split PDBs directly.
+                     # This never touches the OpenFF/ligand_mol path, so
+                     # it cannot hit the "'NoneType' object has no
+                     # attribute '_finalize'" failure that came from
+                     # calling build_complex_system(lig_pdb_path,
+                     # ligand_mol=None, ligand_pdb=lig_pdb_path) below --
+                     # that call told build_complex_system to both skip
+                     # ligand parameterization (ligand_mol=None) AND
+                     # attempted to add an OpenFF ligand from ligand_pdb,
+                     # an invalid combination this code path never
+                     # produces for is_ppi_coordinate_mode.
+                     complex_system, cx_top, _ = self.build_complex_system(original_complex_pdb, ligand_mol=None, add_gbsa=True)
+                     complex_top = cx_top
+
+                     log.process("Generating Receptor System...")
+                     protein_system, px_top, _ = self.build_complex_system(rec_pdb_path, ligand_mol=None, add_gbsa=True)
+                     protein_top = px_top
+
+                     log.process("Generating Ligand System...")
+                     ligand_system, lx_top, _ = self.build_complex_system(lig_pdb_path, ligand_mol=None, add_gbsa=True)
+                     ligand_top = lx_top
+                 else:
+                     # For complex, we need to extract ligand PDB first if we want build_complex_system to use it with mol
+                     # Or just pass the extracted lig_pdb_path
+                     complex_system, cx_top, _ = self.build_complex_system(original_complex_pdb, ligand_mol, ligand_pdb=lig_pdb_path, add_gbsa=True)
+                     complex_top = cx_top
+
+                     # The parameterized ligand (OpenFF) might have a different residue name (e.g. UNK)
+                     # We must update ligand_resname to match the new topology for accurate indexing
+                     new_res = self.find_ligand_resname(complex_top)
+                     if new_res and new_res != ligand_resname:
+                          log.info(f"Ligand Residue Name updated from {ligand_resname} to {new_res} (OpenFF default)")
+                          ligand_resname = new_res
+
+                     log.process("Generating Receptor System...")
+                     protein_system, px_top, _ = self.build_complex_system(rec_pdb_path, ligand_mol=None, add_gbsa=True)
+                     protein_top = px_top
+
+                     log.process("Generating Ligand System...")
+                     # Treat lig.pdb as "protein_pdb" input but with ligand_mol so it gets parameterized as ligand
+                     # build_complex_system will delete LIG from lig.pdb (emptying it) then add ligand_pdb (refilling it)
+                     ligand_system, lx_top, _ = self.build_complex_system(lig_pdb_path, ligand_mol, ligand_pdb=lig_pdb_path, add_gbsa=True)
+                     ligand_top = lx_top
+
                  log.success("Systems generated consistently.")
-                 
+
              except Exception as e:
                  log.error(f"Coordinate Mode Failed: {e}")
                  raise e
@@ -3507,9 +3777,30 @@ class GBSACalculator(GBSAForceManager):
         self.ligand_selection = final_lig_selection
         self.receptor_selection = final_rec_selection
         self.ligand_resname = ligand_resname
-                
-        ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
-        protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
+
+        if ligand_atom_indices is not None and not final_lig_selection and not ligand_resname:
+            # Neither a chainid-style selection nor a residue name identifies
+            # the ligand here (e.g. Native Mode split by an explicit
+            # receptor_topology atom count -- see the "IDENTIFY COMPONENTS"
+            # block above, added for protein-RNA/DNA complexes where
+            # find_ligand_resname's single-residue heuristic picks the wrong
+            # atom entirely). Without this, get_ligand_indices/
+            # get_protein_indices below fall through to their
+            # ligand_resname=None default, which matches ZERO atoms --
+            # confirmed this produced "Ligand system has N particles but
+            # complex has 0 ligand atoms" on a real protein-RNA dataset
+            # (Zenodo 6973437) despite the complex/receptor/ligand Systems
+            # themselves having been built correctly moments earlier.
+            ligand_indices = list(ligand_atom_indices)
+            protein_indices = [i for i in range(len(list(complex_top.atoms())
+                                                        if callable(getattr(complex_top, 'atoms', None))
+                                                        else complex_top.atoms))
+                               if i not in set(ligand_indices)]
+            log.info(f"Using explicit ligand/receptor atom indices ({len(ligand_indices)} ligand, "
+                     f"{len(protein_indices)} receptor) from receptor_topology's atom count.")
+        else:
+            ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
+            protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
 
         # ===== Diagnostic warnings for custom selections =====
         # If the user supplied a custom selection but it ended up selecting the
@@ -3801,11 +4092,34 @@ class GBSACalculator(GBSAForceManager):
                 protein_context.setPositions(protein_pos)
                 protein_e = protein_context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 
-                # For MM/GBSA: combined system has protein first, then ligand
-                combined_pos = unit.Quantity(list(protein_pos.value_in_unit(unit.nanometer)) + 
-                                            list(ligand_pos.value_in_unit(unit.nanometer)), 
-                                            unit.nanometer)
-                complex_context.setPositions(combined_pos)
+                # For MM/GBSA: Coordinate Mode's complex_system is built by
+                # appending the ligand's atoms after the protein's (see
+                # build_complex_system), so combined_pos = protein+ligand
+                # reproduces its real atom order -- but ONLY for the
+                # small-molecule-ligand path, where build_complex_system
+                # explicitly deletes the ligand residue from the protein PDB
+                # and re-adds an OpenFF-parameterized ligand at the end. Both
+                # Native Mode (complex_struct's atom order is whatever the
+                # source topology file's own order is) and PPI Coordinate
+                # Mode (is_ppi_coordinate_mode: complex_system is built
+                # straight from original_complex_pdb via
+                # build_complex_system(..., ligand_mol=None), so its atom
+                # order is that PDB's own chain order, not necessarily
+                # receptor-then-ligand) need the frame's own true atom order
+                # instead. Confirmed on two real datasets: a NAMD PSF where
+                # the peptide "ligand" chain is listed BEFORE the receptor
+                # chain (native mode), and a GROMACS .gro PPI complex (1GCQ,
+                # Zenodo 6638504) where the ligand chain is likewise listed
+                # first (coordinate mode) -- both silently swapped receptor/
+                # ligand coordinates and produced multi-million-kcal/mol
+                # bogus VdW "energy" before this fix.
+                if is_native_mode or is_ppi_coordinate_mode:
+                    complex_context.setPositions(complex_pos)
+                else:
+                    combined_pos = unit.Quantity(list(protein_pos.value_in_unit(unit.nanometer)) +
+                                                list(ligand_pos.value_in_unit(unit.nanometer)),
+                                                unit.nanometer)
+                    complex_context.setPositions(combined_pos)
                 complex_e = complex_context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
                 
                 # Component Energies

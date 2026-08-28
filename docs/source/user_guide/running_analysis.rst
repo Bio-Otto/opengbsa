@@ -10,7 +10,7 @@ To run an analysis, simply pass your configuration file to the CLI:
 
 .. code-block:: bash
 
-    opengbsa run config.yaml
+    opengbsa config.yaml
 
 Or using python module syntax:
 
@@ -32,7 +32,7 @@ OpenGBSA automatically detects available CPU cores.
    .. code-block:: bash
    
        export OPENMM_CPU_THREADS=4
-       opengbsa run config.yaml
+       opengbsa config.yaml
 
 GPU Acceleration
 ----------------

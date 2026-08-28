@@ -125,13 +125,66 @@ class TopologyLoader:
 
     @staticmethod
     def _load_charmm(path, options):
-        """Loads Charmm PSF."""
-        psf = app.CharmmPsfFile(path)
-        # Charmm needs parameter files loaded into a ForceField logic usually,
-        # or PsfFile can create system if params are provided? 
-        # app.CharmmPsfFile.createSystem needs params.
-        # This is more complex. Sticking to basic stub.
-        raise NotImplementedError("Charmm loading requires parameter files.")
+        """
+        Loads a NAMD/CHARMM PSF topology.
+
+        A PSF has no embedded force-field parameters (unlike Amber prmtop),
+        so CHARMM parameter files (.prm/.str/.rtf/.par, typically CHARMM36
+        or CHARMM36m) must be supplied separately via
+        options['charmm_params'] (a str path or list of paths).
+
+        Uses ParmEd (`parmed.load_file` + `Structure.load_parameters`)
+        rather than OpenMM's own `app.CharmmPsfFile.loadParameters`: the
+        latter's stricter improper-dihedral matching rejects some
+        real-world PSFs (confirmed on a cyclic-peptide PSF from a published
+        NAMD dataset, which has a head-to-tail backbone improper standard
+        CHARMM36m parameters don't cover) with `MissingParameter`, while
+        ParmEd's own parameter assignment handles the same PSF/parameter
+        combination without error and produces an equivalent System.
+
+        A PSF file itself carries no coordinates (unlike Amber's prmtop+
+        inpcrd pairing, where positions are a separate file the caller is
+        already expected to supply) -- confirmed directly (`parmed.load_file`
+        on a real PSF gives `struct.positions is None`). A companion
+        coordinate file (typically the initial .pdb NAMD was given, though
+        a `.coor`/`.crd` restart file would also work) is REQUIRED via
+        options['charmm_coordinates'] to get real, non-placeholder atomic
+        positions -- returning an all-zeros placeholder here (as this
+        codebase's caller does for a still-None `positions`, see
+        `parameterize_protein_amber`) would silently produce a physically
+        meaningless system, which is worse than failing loudly.
+        """
+        charmm_params = options.pop('charmm_params', None)
+        if not charmm_params:
+            raise ValueError(
+                "Charmm/.psf topology loading requires CHARMM parameter files "
+                "(.prm/.str/.rtf) -- pass them as options['charmm_params'] "
+                "(a single path or a list of paths), e.g. the CHARMM36m "
+                "'par_all36m_prot.prm' and 'toppar_water_ions_prot.str' files "
+                "distributed with a NAMD input set."
+            )
+        if isinstance(charmm_params, str):
+            charmm_params = [charmm_params]
+        charmm_coordinates = options.pop('charmm_coordinates', None)
+
+        import parmed as pmd
+        from parmed.charmm import CharmmParameterSet
+
+        params = CharmmParameterSet(*charmm_params)
+        struct = pmd.load_file(path)
+        struct.load_parameters(params)
+
+        if charmm_coordinates:
+            coord_struct = pmd.load_file(charmm_coordinates)
+            struct.coordinates = coord_struct.coordinates
+
+        createsystem_options = {k: v for k, v in options.items()
+                                 if k in ('nonbondedMethod', 'nonbondedCutoff', 'constraints',
+                                          'rigidWater', 'removeCMMotion', 'hydrogenMass',
+                                          'implicitSolvent', 'implicitSolventSaltConc',
+                                          'switchDistance', 'ewaldErrorTolerance')}
+        system = struct.createSystem(**createsystem_options)
+        return system, struct.topology, struct.positions
 
     @staticmethod
     def _load_generic(path, options):

@@ -240,6 +240,8 @@ class MMGBSARunner:
             sa_model=analysis_settings.get('sa_model', 'ACE'),
             nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
+            charmm_params=forcefield_settings.get('charmm_params', None),
+            charmm_coordinates=forcefield_settings.get('charmm_coordinates', None),
             cache_dir=cache_dir
         )
 

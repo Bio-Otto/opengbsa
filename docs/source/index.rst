@@ -24,6 +24,13 @@ Designed for both ease of use and scientific rigor, OpenGBSA automates the compl
 
         Detailed instructions on configuration, input structures, and output interpretation.
 
+    .. grid-item-card::  📚  Tutorial
+        :link: tutorial/index
+        :link-type: doc
+
+        Five worked examples, one per receptor/ligand combination and
+        input format, each runnable end-to-end from the repository.
+
     .. grid-item-card::  🧠  Theory Guide
         :link: theory/index
         :link-type: doc
@@ -54,6 +61,13 @@ Table of Contents
    :includehidden:
 
    user_guide/index
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Tutorials
+   :includehidden:
+
+   tutorial/index
 
 .. toctree::
    :maxdepth: 2

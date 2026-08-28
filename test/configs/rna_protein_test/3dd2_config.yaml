@@ -1,0 +1,41 @@
+# Independent RNA-protein validation dataset: 3dd2, from Zenodo
+# 10.5281/zenodo.6973437 (Padova University, "Investigating RNA-Protein
+# Recognition Mechanisms through Supervised Molecular Dynamics (SuMD)
+# Simulations"), CC-BY-4.0. Real Amber .prmtop (already GB-radii-parameterized,
+# native tleap output) + SuMD .dcd trajectory. Complex = protein (288 residues,
+# atoms 0-4627) + RNA (25 nucleotides, atoms 4628-5433). Last 300 frames of a
+# 660-frame SuMD run used (the approach/binding phase of the trajectory,
+# confirmed via CA-P minimum distance: ~32 A at frame 0 down to ~5-7 A by
+# frame 300+ -- the bound/close-contact region).
+input_files:
+  complex_pdb: raw/3dd2.prmtop
+  trajectory: raw/3dd2_suMD1.dcd
+  receptor_topology: prepared/protein.prmtop
+  ligand_topology: prepared/ligand.prmtop
+
+output_settings:
+  output_directory: results
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2                  # matches Amber igb=5
+  salt_concentration: 0.15        # matches Amber saltcon=0.150
+  sa_model: LCPO
+  frame_start: 360                 # 0-indexed; last 300 of 660 frames (Amber startframe=1..300 over the sliced last-300 .nc == overall frames 361-660)
+  frame_end: 660
+  frame_stride: 1
+  max_frames: 300
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: none
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+  parallel_processing: false
+  reimage_trajectory: false        # dry trajectory, no periodic box in complex.prmtop
+
+forcefield_settings:
+  protein_forcefield: amber
+
+platform_settings:
+  preferred_platform: CPU

@@ -244,3 +244,9 @@ temp_*.png
 test/data/
 test/results/
 test/manual/
+
+# Per-case validation test data: fetched/prepared by each case's own
+# fetch_data.sh + prepare_system.py, not committed (see test/configs/*/README.md)
+test/configs/*/raw/
+test/configs/*/prepared/
+test/configs/*/results/

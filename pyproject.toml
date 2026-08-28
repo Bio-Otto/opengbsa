@@ -60,7 +60,8 @@ dependencies = [
     "seaborn>=0.11.0",
     "plotly>=5.0.0",
     "pyyaml>=6.0",
-    "pathlib2>=2.3.0"
+    "pathlib2>=2.3.0",
+    "pooch>=1.7.0"
 ]
 
 [project.optional-dependencies]

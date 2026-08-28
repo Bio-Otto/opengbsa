@@ -476,12 +476,27 @@ analysis_settings:
 forcefield_settings:
   # Protein forcefield to use for parameterization
   protein_forcefield: 'amber14-all.xml'
-  
+
   # Specific variant of the protein forcefield (optional)
   protein_variant: null
-  
+
   # Ligand parameterization forcefield
   ligand_forcefield: 'openff-2.1.0.offxml'
+
+  # CHARMM parameter file(s) (.prm/.str/.rtf), required ONLY when
+  # input.topology is a NAMD/CHARMM .psf file -- a PSF has no embedded
+  # force-field parameters (unlike Amber's prmtop), so they must be
+  # supplied separately. Accepts a single path or a list of paths, e.g.
+  # ['par_all36m_prot.prm', 'toppar_water_ions_prot.str']. Ignored for
+  # Amber/GROMACS/generic-PDB topologies.
+  charmm_params: null
+
+  # Companion coordinate file (.pdb/.coor/.crd) for a NAMD/CHARMM .psf
+  # topology -- a PSF carries no atomic positions of its own (unlike
+  # Amber's prmtop+inpcrd pairing), so this is required to get a
+  # physically real starting structure rather than an all-zeros
+  # placeholder. Ignored for Amber/GROMACS/generic-PDB topologies.
+  charmm_coordinates: null
   
   # Water model to use
   water_model: null

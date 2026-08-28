@@ -1,0 +1,36 @@
+# Independent PPI validation dataset: 2OOB (Vav/GRB2 SH3 domain complex),
+# from Zenodo 10.5281/zenodo.6638504 ("A dynamical view of protein-protein
+# complexes: studies by molecular dynamics simulations"). GROMACS .gro/.xtc,
+# no topology file provided in the dataset -- parameterized here via
+# OpenMM's amber14-all.xml (Coordinate/GENERIC mode), same force field used
+# for the independent Amber tleap reference (see FINAL_full.dat).
+input_files:
+  complex_pdb: prepared/2oob/complex_chains.pdb
+  trajectory: prepared/2oob/complex_chains_last300.dcd
+
+output_settings:
+  output_directory: results/2oob
+
+analysis_settings:
+  binding_mode: ppi
+  receptor_selection: 'chainid 1'
+  ligand_selection: 'chainid 0'
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  sa_model: LCPO
+  max_frames: 300
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: none
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+  parallel_processing: false
+  reimage_trajectory: false
+
+forcefield_settings:
+  protein_forcefield: amber14-all.xml
+
+platform_settings:
+  preferred_platform: CPU

@@ -18,6 +18,37 @@ class TrajectoryProcessor:
     """
 
     @staticmethod
+    def resolve_mdtraj_loadable_path(trajectory_file):
+        """
+        Returns a path mdtraj can load, aliasing a bare '.trj' extension to
+        '.mdcrd' via a symlink if needed.
+
+        mdtraj has no registered loader for '.trj' (its own FormatRegistry
+        only recognizes '.mdcrd'/'.crd' for ASCII Amber trajectories) --
+        confirmed on a real published dataset (Zenodo 17926575) whose Amber
+        MD output is named 'dry_MD_<compound>.trj' but is byte-for-byte a
+        standard ASCII mdcrd file (same "Cpptraj Generated trajectory"
+        header, same fixed-width coordinate block format). This is purely a
+        filename-extension issue, not a real format difference, so aliasing
+        via a symlink (rather than copying) reinterprets no data. Any
+        caller that hands a trajectory path to `md.load`/`md.load_frame`
+        (not just `TrajectoryProcessor.load_and_process` itself) should
+        route it through this first, or it will hit mdtraj's own opaque
+        "no loader for filename=... (extension=.trj)" OSError.
+        """
+        if not str(trajectory_file).lower().endswith('.trj'):
+            return str(trajectory_file)
+        alias_path = Path(str(trajectory_file)[:-4] + '.mdcrd')
+        if not alias_path.exists():
+            try:
+                alias_path.symlink_to(Path(trajectory_file).resolve())
+            except OSError as e:
+                log.warning(f"Could not create .mdcrd alias for .trj trajectory ({e}); "
+                            f"proceeding with the original path, which mdtraj may reject.")
+                return str(trajectory_file)
+        return str(alias_path)
+
+    @staticmethod
     def _auto_discover_solvated(trajectory_file, expected_atoms):
         """
         Attempts to find a PDB file in the same directory that matches the trajectory's atom count.
@@ -60,12 +91,14 @@ class TrajectoryProcessor:
         load_top = topology_file
         if solvated_topology and Path(solvated_topology).exists():
             load_top = solvated_topology
-            
+
         print(f"Loading trajectory {trajectory_file} with topology {load_top}...")
-            
+
+        effective_trajectory_file = TrajectoryProcessor.resolve_mdtraj_loadable_path(trajectory_file)
+
         try:
             # MDTraj load
-            traj = md.load(trajectory_file, top=load_top, stride=stride)
+            traj = md.load(effective_trajectory_file, top=load_top, stride=stride)
         except ValueError as e:
             # Check for atom mismatch message
             e_str = str(e)
@@ -78,24 +111,24 @@ class TrajectoryProcessor:
                 print(f"🔎 Scanning directory for matching solvated topology...")
                 traj_path = Path(trajectory_file)
                 candidates = list(traj_path.parent.glob("*.pdb")) + list(traj_path.parent.glob("*.prmtop"))
-                
+
                 found_match = None
                 for cand in candidates:
                     if cand.resolve() == Path(topology_file).resolve(): continue
                     try:
                         # Try loading just 1 frame
-                        t_test = md.load(trajectory_file, top=str(cand), frame=0)
+                        t_test = md.load(effective_trajectory_file, top=str(cand), frame=0)
                         # If we get here, it matched!
                         print(f"💡 Found potential match: {cand.name} ({t_test.n_atoms} atoms)")
                         found_match = str(cand)
                         break
                     except:
                         continue
-                
+
                 if found_match:
                     print(f"🔄 Retrying load with auto-detected topology: {Path(found_match).name}")
                     try:
-                         traj = md.load(trajectory_file, top=found_match, stride=stride)
+                         traj = md.load(effective_trajectory_file, top=found_match, stride=stride)
                          # IMPORTANT: If we successfully loaded with a solvated topology,
                          # we MUST strip it down to target_atoms (dry topology count).
                          # We rely on step 2 (below) to handle this check.
@@ -132,7 +165,19 @@ class TrajectoryProcessor:
                 # Try standard water/ion strip
                 # Selection logic matching core.py implementation
                 try:
-                    strip_mask = traj.topology.select('not (water or resname NA or resname CL or resname SOD or resname K)')
+                    # Includes both Amber/GROMACS-style ion residue names
+                    # (NA, CL, K) and CHARMM/NAMD-style ones (SOD, CLA, POT) --
+                    # confirmed on a real NAMD PSF/PDB that 'resname CL' does
+                    # NOT match CHARMM's 'CLA' (mdtraj resname selection is an
+                    # exact string match, not a prefix match), which silently
+                    # left 12 chloride-ion atoms in the "stripped" trajectory
+                    # and caused the subsequent blind-slicing fallback to grab
+                    # the wrong 2030 atoms entirely (chloride ions instead of
+                    # part of the protein), corrupting every downstream energy.
+                    strip_mask = traj.topology.select(
+                        'not (water or resname NA or resname CL or resname SOD or resname K '
+                        'or resname CLA or resname POT or resname CAL or resname ZN2)'
+                    )
                 except Exception:
                      # Fallback if selection fails (e.g. non-standard names)
                      strip_mask = []

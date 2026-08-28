@@ -76,6 +76,31 @@ Examples:
         action='store_true',
         help='Check if all dependencies are available'
     )
+
+    parser.add_argument(
+        '--fetch-test-data',
+        action='store_true',
+        help='Download and verify test/validation datasets from Zenodo (see mmgbsa/test_data_manifest.py)'
+    )
+
+    parser.add_argument(
+        '--only',
+        type=str,
+        default=None,
+        help='Comma-separated dataset names to fetch with --fetch-test-data (default: all)'
+    )
+
+    parser.add_argument(
+        '--force-refetch',
+        action='store_true',
+        help='Re-download test data even if a valid cached copy exists (use with --fetch-test-data)'
+    )
+
+    parser.add_argument(
+        '--list-test-data',
+        action='store_true',
+        help='List available test/validation datasets without downloading them'
+    )
     
     parser.add_argument(
         '--version',
@@ -123,6 +148,36 @@ def check_dependencies_command():
         print("\n✗ Some dependencies are missing.")
         print("Install missing dependencies with: pip install -r requirements.txt")
         return 1
+
+def list_test_data_command():
+    """List available test/validation datasets command."""
+    from .fetch_test_data import list_datasets
+
+    print("Available test/validation datasets:\n")
+    for name, description, n_files, ready in list_datasets():
+        status = "ready" if ready else "NOT YET PUBLISHED (no checksums recorded)"
+        print(f"  {name} [{status}]")
+        print(f"    {description}")
+        print(f"    {n_files} file(s)")
+        print()
+    print("Fetch with: opengbsa --fetch-test-data [--only name1,name2]")
+    return 0
+
+def fetch_test_data_command(only: Optional[str] = None, force: bool = False):
+    """Download and verify test/validation datasets command."""
+    from .fetch_test_data import fetch_all
+
+    only_list = [n.strip() for n in only.split(',')] if only else None
+    print(f"Fetching test data{f' ({only_list})' if only_list else ' (all datasets)'}...")
+    try:
+        results = fetch_all(only=only_list, force=force)
+    except Exception as e:
+        print(f"✗ Error fetching test data: {e}")
+        return 1
+
+    total_files = sum(len(files) for files in results.values())
+    print(f"\n✓ Fetched {len(results)} dataset(s), {total_files} file(s) total.")
+    return 0
 
 def create_config_command(complete: bool = False):
     """Create configuration command."""
@@ -224,7 +279,13 @@ def main():
     
     if args.check_deps:
         return check_dependencies_command()
-    
+
+    if args.list_test_data:
+        return list_test_data_command()
+
+    if args.fetch_test_data:
+        return fetch_test_data_command(only=args.only, force=args.force_refetch)
+
     if args.create_config:
         return create_config_command(complete=False)
     

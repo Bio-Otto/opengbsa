@@ -1,0 +1,36 @@
+# Same as ctla4_peptide_config.yaml but limited to 3 frames, for a fast
+# smoke test of the pipeline instead of the full 300-frame comparison.
+input_files:
+  complex_pdb: raw/Zenodo_CTLA4_Peptide/ctla4_P16_wat.psf
+  solvated_topology: raw/Zenodo_CTLA4_Peptide/ctla4_P16_wat.pdb
+  trajectory: raw/Zenodo_CTLA4_Peptide/output/stride50_pro_ctla4_P16.D.dcd
+
+analysis_settings:
+  binding_mode: ppi
+  receptor_selection: 'chainid 1'
+  ligand_selection: 'chainid 0'
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  max_frames: 3
+  frame_start: 131
+  frame_end: 431
+  frame_selection: sequential
+  verbose: 2
+  use_cache: false
+  parallel_processing: false
+  energy_decomposition: false
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+
+forcefield_settings:
+  charmm_params:
+    - raw/Zenodo_CTLA4_Peptide/par_all36m_prot.prm
+    - raw/Zenodo_CTLA4_Peptide/toppar_water_ions_prot.str
+  charmm_coordinates: raw/Zenodo_CTLA4_Peptide/ctla4_P16_wat.pdb
+
+output_settings:
+  output_directory: results_smoketest
+
+platform_settings:
+  preferred_platform: CPU

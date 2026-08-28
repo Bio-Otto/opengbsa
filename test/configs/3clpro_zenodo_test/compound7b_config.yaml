@@ -1,0 +1,49 @@
+# Independent validation dataset: SARS-CoV-2 3CLpro + compound7b (Zenodo 17926575,
+# "Design, Synthesis and Computational Insights of 7-Hydroxystilbene-Coumarin
+# Hybrid Scaffolds as SARS-CoV-2 3CLpro Inhibitors", CC-BY-4.0). Amber24 MD
+# input, 300 ns dry trajectory (30000 frames total, 10 ps/frame).
+#
+# Amber reference: last 300 frames (29701-30000, 0-indexed 29700-29999) matches
+# opengbsa's frame_start/frame_end below. No -sp/solvated-topology flag needed
+# for Amber's MMPBSA.py here -- the dry_MD_compound7b.trj trajectory is already
+# solvent-free (matches complex.prmtop's 4712 atoms, not complex_solv.prmtop's
+# 62451); the dataset's own command_MMGBA.txt passes complex_solv.prmtop as -sp,
+# which is wrong for this trajectory and silently produces NaN bond/1-4 energies.
+input_files:
+  complex_pdb: raw/1_MD/compound7b/complex.prmtop
+  trajectory: raw/1_MD/compound7b/dry_MD_compound7b.trj
+  receptor_topology: raw/1_MD/compound7b/protein.prmtop
+  ligand_topology: raw/1_MD/compound7b/ligand.prmtop
+
+output_settings:
+  output_directory: results/compound7b
+  analysis_name: compound7b
+  save_plots: true
+  save_logs: true
+
+analysis_settings:
+  temperature: 300.0
+  gb_model: OBC2                  # matches Amber igb=5
+  salt_concentration: 0.15        # matches Amber saltcon=0.150
+  sa_model: LCPO                  # matches Amber's LCPO ESURF
+  frame_start: 29700              # 0-indexed; matches Amber startframe=29701 (1-indexed)
+  frame_end: 30000                # matches Amber endframe=30000
+  frame_stride: 1
+  max_frames: 300
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: none
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+  parallel_processing: false
+  reimage_trajectory: false        # dry trajectory has no periodic box (complex.prmtop
+                                    # has box=None); re-imaging is meaningless/a no-op here
+                                    # and previously logged a harmless "no anchor
+                                    # molecules found" warning every load.
+
+forcefield_settings:
+  protein_forcefield: amber
+
+platform_settings:
+  preferred_platform: CPU

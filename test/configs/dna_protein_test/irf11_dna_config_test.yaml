@@ -1,0 +1,39 @@
+# Independent protein-DNA validation dataset: IRF11-MDA5 promoter DNA
+# complex, from Zenodo 10.5281/zenodo.14377950 ("Molecular dynamics
+# simulation of the IRF11-DNA complex"), CC-BY-4.0. GROMACS trajectory
+# (dry, multi-model PDB, 101 frames) + the dataset's own gmx_MMPBSA
+# reference output (GB DELTA TOTAL = -127.23 +/- 6.00 kcal/mol, 10 frames).
+# No topology file provided -- parameterized here via OpenMM's
+# amber14-all.xml (Coordinate Mode), same approach used for the independent
+# Amber tleap/ParmEd reference this config's results are compared against
+# (see FINAL_full.dat: -117.86 +/- 26.18 kcal/mol, all 101 frames).
+input_files:
+  complex_pdb: prepared/complex_ref.pdb
+  trajectory: prepared/complex_traj.dcd
+
+output_settings:
+  output_directory: results_smoketest
+
+analysis_settings:
+  binding_mode: ppi
+  receptor_selection: 'chainid 0'
+  ligand_selection: 'chainid 1'
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  sa_model: LCPO
+  max_frames: 3
+  frame_selection: sequential
+  use_cache: false
+  verbose: 1
+  entropy_method: none
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+  parallel_processing: false
+  reimage_trajectory: false
+
+forcefield_settings:
+  protein_forcefield: amber14-all.xml
+
+platform_settings:
+  preferred_platform: CPU
