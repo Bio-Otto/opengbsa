@@ -81,25 +81,16 @@ def test_detect_mode_tpr():
 
 
 @gromacs_skip
-def test_load_gromacs_tpr_branch_is_currently_broken():
-    """KNOWN BUG, not a regression introduced by this test: `_load_gromacs`'s
-    .tpr branch (topology.py:113-118) calls `parmed.load_file(path)`
-    directly on the .tpr, but ParmEd's own format registry cannot identify
-    raw GROMACS .tpr files (confirmed: raises `FormatNotFound`, not an
-    ImportError or a missing-optional-dependency error -- ParmEd simply has
-    no .tpr parser). This is a genuinely separate code path from the one
-    `mmgbsa_core.py`'s real native-TPR analysis uses (`mmgbsa/tpr_loader.py`'s
-    `load_tpr_as_parmed`, built on the third-party `TprParser` library) --
-    `TopologyLoader._load_gromacs` appears to be dead/unreachable from the
-    actual CLI/runner execution path (consistent with `mmgbsa/core/`'s
-    broader "inert scaffolding from an in-progress refactor" state; see
-    `mmgbsa/core/analysis.py`'s own docstring). This test documents the
-    current behavior so a future fix (either wiring in real .tpr support
-    here, or removing this dead branch) has a clear before/after signal --
-    it is NOT a statement that this behavior is desired."""
-    import parmed
+def test_load_gromacs_tpr_branch_raises_not_implemented():
+    """`TopologyLoader._load_gromacs` never actually handles .tpr files --
+    real native-TPR support lives in `mmgbsa/tpr_loader.py`'s
+    `load_tpr_as_parmed` (built on the third-party `TprParser` library) and
+    is invoked directly by `mmgbsa_core.py` before a .tpr path would ever
+    reach `TopologyLoader.load_system`. This branch now raises
+    `NotImplementedError` immediately instead of attempting (and failing) a
+    `parmed.load_file()` call, since ParmEd has no .tpr parser."""
     from mmgbsa.topology import TopologyLoader
     from mmgbsa.inputs import EngineMode
 
-    with pytest.raises(parmed.exceptions.FormatNotFound):
+    with pytest.raises(NotImplementedError):
         TopologyLoader.load_system(GROMACS_TPR, EngineMode.GROMACS)

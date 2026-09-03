@@ -6,13 +6,13 @@ This section documents the public API of OpenGBSA.
 Core Analysis
 -------------
 
-.. module:: mmgbsa.core
+.. module:: mmgbsa.mmgbsa_core
 
 .. class:: GBSACalculator
 
    The main engine for MM/GBSA calculations.
 
-   .. method:: __init__(temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full', protein_forcefield='amber', use_cache=True, visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE')
+   .. method:: __init__(temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15, use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber', charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full', visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None, reimage_trajectory=True, charmm_params=None, charmm_coordinates=None)
 
       Initialize the calculator with specific physics and analysis parameters.
 

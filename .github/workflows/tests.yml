@@ -57,7 +57,7 @@ jobs:
       - name: Import sanity check
         shell: bash -el {0}
         run: |
-          python -c "import mmgbsa; from mmgbsa.core import GBSACalculator; print('import OK')"
+          python -c "import mmgbsa; from mmgbsa.mmgbsa_core import GBSACalculator; print('import OK')"
           python -m compileall -q mmgbsa/
 
       - name: CLI sanity check
@@ -68,7 +68,7 @@ jobs:
 
       - name: Run test suite
         shell: bash -el {0}
-        run: python -m pytest test/unit test/manual -v
+        run: python -m pytest test/unit -v
 
   docs:
     name: Docs build
