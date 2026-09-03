@@ -73,3 +73,21 @@ Controls the physics model and sampling protocols.
 *   **Type**: Boolean
 *   **Default**: ``true``
 *   **Description**: If true, decomposes the binding free energy into contributions from each receptor residue. Essential for identifying "hotspot" residues critical for binding.
+
+``nonbonded_cutoff``
+~~~~~~~~~~~~~~~~~~~~
+*   **Type**: Float or ``null``
+*   **Units**: Angstrom
+*   **Default**: ``null`` (no cutoff -- exact ``O(N^2)`` nonbonded/GB Born-radius evaluation)
+*   **Description**: Optional distance cutoff for both the nonbonded and GB
+    Born-radius calculations (OpenMM's ``CutoffNonPeriodic`` nonbonded
+    method, analogous to Amber ``sander``'s ``rgbmax``). Leaving this unset
+    is the most accurate option and matches the values used throughout
+    this project's own validation work (see the Tutorial section), but is
+    the single most expensive part of the calculation for larger systems --
+    setting a cutoff (e.g. ``16``-``25``) trades a small amount of accuracy
+    for a significant speedup on systems with more than a few thousand
+    atoms. Changing this value changes the computed energies (it is not a
+    performance-only knob), so a config's `nonbonded_cutoff` should stay
+    fixed across any comparison you intend to make (e.g. against an Amber
+    reference computed with a specific ``rgbmax``).

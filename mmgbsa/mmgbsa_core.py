@@ -1087,6 +1087,144 @@ class GBSAForceManager:
         return energy_decomposition
 
 
+# --- Parallel per-frame energy evaluation (CPU-only) -----------------------
+#
+# Mirrors the worker pattern already proven in `decomposition.py`
+# (`_worker_init`/`_worker_analyze_frame`): each worker process
+# deserializes its own copy of the complex/protein/ligand `System`s once
+# (via `openmm.XmlSerializer`, since `System`/`Context` objects can't be
+# pickled directly) and builds its own three `Context`s, then processes
+# whatever frame indices it's given. This is CPU-only -- CUDA/OpenCL
+# contexts cannot be safely shared or re-created across worker processes
+# (same constraint `decomposition.py`'s own parallel path already
+# documents), so `run()` only dispatches to this pool when the resolved
+# platform is CPU; every other platform keeps using the original serial
+# loop unchanged.
+_frame_worker_state = {}
+
+
+def _frame_worker_init(complex_xml, protein_xml, ligand_xml, temperature_k):
+    """Runs once per worker process: deserialize the three Systems and
+    build their Contexts. Force groups (0=NB, 1=GB-OBC, 2=GB-Custom,
+    3=VDW, 4=SA, 10-14=internal) are already baked into the serialized
+    System by `assign_force_groups`, so no re-assignment is needed here."""
+    global _frame_worker_state
+    complex_system = openmm.XmlSerializer.deserialize(complex_xml)
+    protein_system = openmm.XmlSerializer.deserialize(protein_xml)
+    ligand_system = openmm.XmlSerializer.deserialize(ligand_xml)
+
+    platform = openmm.Platform.getPlatformByName('CPU')
+    fric, step = 1.0, 0.001
+    complex_integrator = openmm.LangevinMiddleIntegrator(float(temperature_k), fric, step)
+    protein_integrator = openmm.LangevinMiddleIntegrator(float(temperature_k), fric, step)
+    ligand_integrator = openmm.LangevinMiddleIntegrator(float(temperature_k), fric, step)
+
+    _frame_worker_state['complex_context'] = openmm.Context(complex_system, complex_integrator, platform, {})
+    _frame_worker_state['protein_context'] = openmm.Context(protein_system, protein_integrator, platform, {})
+    _frame_worker_state['ligand_context'] = openmm.Context(ligand_system, ligand_integrator, platform, {})
+
+
+def _frame_worker_process(args):
+    """Processes one trajectory frame using this worker's pre-built
+    Contexts. Reproduces exactly the per-frame calculation from `run()`'s
+    main loop (post get_clean_energy/get_grp_E de-duplication) -- any
+    change to that calculation must be mirrored here, and vice versa.
+    Returns (frame_idx, results_dict) on success, or (frame_idx, None) with
+    the exception recorded in results_dict['error'] on failure, matching
+    the serial loop's own `except: print(...); continue` behavior (the
+    caller logs and skips failed frames instead of aborting the whole run).
+    """
+    (frame_idx, xyz_nm, protein_indices, ligand_indices, complex_pos_full,
+     is_native_mode, is_ppi_coordinate_mode) = args
+
+    complex_context = _frame_worker_state['complex_context']
+    protein_context = _frame_worker_state['protein_context']
+    ligand_context = _frame_worker_state['ligand_context']
+
+    try:
+        ligand_pos = unit.Quantity(xyz_nm[np.asarray(ligand_indices)], unit.nanometer)
+        protein_pos = unit.Quantity(xyz_nm[np.asarray(protein_indices)], unit.nanometer)
+
+        ligand_context.setPositions(ligand_pos)
+        ligand_e = ligand_context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        protein_context.setPositions(protein_pos)
+        protein_e = protein_context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        if is_native_mode or is_ppi_coordinate_mode:
+            complex_context.setPositions(unit.Quantity(complex_pos_full, unit.nanometer))
+        else:
+            combined_pos = unit.Quantity(
+                np.concatenate([xyz_nm[np.asarray(protein_indices)], xyz_nm[np.asarray(ligand_indices)]]),
+                unit.nanometer)
+            complex_context.setPositions(combined_pos)
+        complex_e = complex_context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        e_ele = complex_context.getState(getEnergy=True, groups=1).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_vdw = complex_context.getState(getEnergy=True, groups=8).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_gb = complex_context.getState(getEnergy=True, groups={1, 2}).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_sa = complex_context.getState(getEnergy=True, groups=16).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        e_bond = complex_context.getState(getEnergy=True, groups=1024).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_angle = complex_context.getState(getEnergy=True, groups=2048).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_torsion = complex_context.getState(getEnergy=True, groups=4096).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_rbtorsion = complex_context.getState(getEnergy=True, groups=8192).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_cmap = complex_context.getState(getEnergy=True, groups=16384).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+        e_internal = e_bond + e_angle + e_torsion + e_rbtorsion + e_cmap
+
+        def get_clean_energy(context):
+            total = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            eb = context.getState(getEnergy=True, groups=1024).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            ea = context.getState(getEnergy=True, groups=2048).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            et = context.getState(getEnergy=True, groups=4096).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            er = context.getState(getEnergy=True, groups=8192).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            ec = context.getState(getEnergy=True, groups=16384).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+            return total - (eb + ea + et + er + ec)
+
+        ligand_e_clean = get_clean_energy(ligand_context)
+        protein_e_clean = get_clean_energy(protein_context)
+        complex_e_clean = complex_e - e_internal
+        binding_e = complex_e_clean - protein_e_clean - ligand_e_clean
+
+        def get_grp_E(ctx, grps):
+            mask = 0
+            for g in grps: mask |= (1 << g)
+            return ctx.getState(getEnergy=True, groups=mask).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
+
+        c_elec, c_vdw = e_ele, e_vdw
+        c_nb = c_elec + c_vdw
+        p_elec = get_grp_E(protein_context, [0])
+        p_vdw = get_grp_E(protein_context, [3])
+        p_nb = p_elec + p_vdw
+        l_elec = get_grp_E(ligand_context, [0])
+        l_vdw = get_grp_E(ligand_context, [3])
+        l_nb = l_elec + l_vdw
+
+        c_gb = e_gb
+        p_gb = get_grp_E(protein_context, [1, 2])
+        l_gb = get_grp_E(ligand_context, [1, 2])
+
+        c_sa = e_sa
+        p_sa = get_grp_E(protein_context, [4, 16])
+        l_sa = get_grp_E(ligand_context, [4, 16])
+
+        result = {
+            'complex_e': complex_e, 'protein_e': protein_e, 'ligand_e': ligand_e,
+            'binding_e': binding_e,
+            'c_nb': c_nb, 'c_gb': c_gb, 'c_sa': c_sa,
+            'c_vdw': c_vdw, 'c_elec': c_elec, 'p_vdw': p_vdw, 'p_elec': p_elec,
+            'l_vdw': l_vdw, 'l_elec': l_elec, 'p_gb': p_gb, 'l_gb': l_gb,
+            'p_sa': p_sa, 'l_sa': l_sa,
+            'e_bond': e_bond, 'e_angle': e_angle,
+            'e_torsion': e_torsion, 'e_rbtorsion': e_rbtorsion, 'e_cmap': e_cmap,
+            'e_nb': c_elec + c_vdw, 'e_obc': c_gb, 'e_internal': e_internal,
+            'error': None,
+        }
+        return (frame_idx, result)
+    except Exception as e:
+        return (frame_idx, {'error': str(e)})
+
+
 class GBSACalculator(GBSAForceManager):
     """Advanced True Force Field MMGBSA Calculator"""
     
@@ -4045,11 +4183,131 @@ class GBSACalculator(GBSAForceManager):
         
         delta_gb_values = []
         delta_sa_values = []
-        
+
+        # Parallel per-frame dispatch (CPU platform only, and only when QHA
+        # is disabled -- QHA collects every frame into qha_*_frames as it
+        # goes, which is inherently sequential/stateful in the main
+        # process, so the plain serial loop is kept for that case and for
+        # any non-CPU platform, where worker processes can't safely create
+        # their own Context; see _frame_worker_init's docstring). When
+        # eligible, frame_results is populated up front and the loop below
+        # reads from it instead of computing inline -- everything AFTER the
+        # loop (decomposition, entropy, reporting) is completely unchanged
+        # and shared between both paths.
+        frame_results = None
+        use_parallel_frames = (
+            platform.getName() == 'CPU'
+            and self.entropy_method != 'quasiharmonic'
+            and len(traj) > 1
+        )
+        if use_parallel_frames:
+            print(f"Using parallel frame processing on CPU ({self.max_workers} workers)...")
+            complex_xml = openmm.XmlSerializer.serialize(complex_system)
+            protein_xml = openmm.XmlSerializer.serialize(protein_system)
+            ligand_xml = openmm.XmlSerializer.serialize(ligand_system)
+            temp_k = self.temperature
+            if unit.is_quantity(temp_k):
+                temp_k = temp_k.value_in_unit(unit.kelvin)
+
+            tasks = []
+            for i, frame in enumerate(traj):
+                xyz_nm = frame.xyz[0]
+                complex_pos_full = xyz_nm if (is_native_mode or is_ppi_coordinate_mode) else None
+                tasks.append((i, xyz_nm, list(protein_indices), list(ligand_indices),
+                              complex_pos_full, is_native_mode, is_ppi_coordinate_mode))
+
+            frame_results = {}
+            n_workers = max(1, min(self.max_workers, len(tasks)))
+            try:
+                with ProcessPoolExecutor(
+                    max_workers=n_workers, initializer=_frame_worker_init,
+                    initargs=(complex_xml, protein_xml, ligand_xml, float(temp_k))
+                ) as pool:
+                    for frame_idx, result in pool.map(_frame_worker_process, tasks):
+                        frame_results[frame_idx] = result
+            except Exception as e:
+                log.warning(f"Parallel frame processing failed ({e}); falling back to serial loop.")
+                frame_results = None
+
         for i, frame in enumerate(traj):
             if i % 10 == 0:
                 print(f"Frame {i+1}/{len(traj)}")
-            
+
+            if frame_results is not None:
+                # Parallel path: pull this frame's pre-computed result
+                # instead of recomputing it inline below.
+                result = frame_results.get(i)
+                if result is None or result.get('error'):
+                    err = result.get('error') if result else 'no result returned'
+                    print(f"Error calculating energies for frame {i}: {err}")
+                    print("Skipping this frame...")
+                    continue
+
+                complex_e = result['complex_e']; protein_e = result['protein_e']; ligand_e = result['ligand_e']
+                binding_e = result['binding_e']
+                c_nb = result['c_nb']; c_gb = result['c_gb']; c_sa = result['c_sa']
+                c_vdw = result['c_vdw']; c_elec = result['c_elec']
+                p_vdw = result['p_vdw']; p_elec = result['p_elec']
+                l_vdw = result['l_vdw']; l_elec = result['l_elec']
+                p_gb = result['p_gb']; l_gb = result['l_gb']
+                p_sa = result['p_sa']; l_sa = result['l_sa']
+                p_nb = p_vdw + p_elec
+                l_nb = l_vdw + l_elec
+                e_bond = result['e_bond']; e_angle = result['e_angle']
+                e_torsion = result['e_torsion']; e_rbtorsion = result['e_rbtorsion']; e_cmap = result['e_cmap']
+                e_nb = result['e_nb']; e_obc = result['e_obc']; e_internal = result['e_internal']
+                complex_e_clean = complex_e - e_internal
+                c_screen = p_screen = l_screen = 0.0
+                e_bondsa = 0.0
+
+                if i == 0:
+                    print(f"\nBreakdown (kcal/mol):")
+                    print(f"            {'Complex':>12} {'Protein':>12} {'Ligand':>12} {'Delta':>12}")
+                    print(f"  NB (VdV+Ele): {c_nb:12.2f} {p_nb:12.2f} {l_nb:12.2f} {c_nb - p_nb - l_nb:12.2f}")
+                    print(f"    - VdW:      {c_vdw:12.2f} {p_vdw:12.2f} {l_vdw:12.2f} {c_vdw - p_vdw - l_vdw:12.2f}")
+                    print(f"    - Elec:     {c_elec:12.2f} {p_elec:12.2f} {l_elec:12.2f} {c_elec - p_elec - l_elec:12.2f}")
+                    print(f"  GB (PolSol):  {c_gb:12.2f} {p_gb:12.2f} {l_gb:12.2f} {c_gb - p_gb - l_gb:12.2f}")
+                    print(f"  SA (NonPol):  {c_sa:12.2f} {p_sa:12.2f} {l_sa:12.2f} {c_sa - p_sa - l_sa:12.2f}")
+                    print(f"  Total Clean (binding): {binding_e:12.2f}")
+                    print(f"-------------------------------------------------------")
+
+                self.energies['complex'].append(complex_e)
+                self.energies['protein'].append(protein_e)
+                self.energies['ligand'].append(ligand_e)
+                self.energies['binding'].append(binding_e)
+
+                self.energies['complex_nb'].append(c_nb)
+                self.energies['complex_gb'].append(c_gb)
+                self.energies['complex_sa'].append(c_sa)
+                self.energies['complex_screen'].append(c_screen)
+                self.energies['complex_bondsa'].append(e_bondsa)
+
+                delta_nb_values.append(c_nb - p_nb - l_nb)
+                delta_vdw_values.append(c_vdw - p_vdw - l_vdw)
+                delta_elec_values.append(c_elec - p_elec - l_elec)
+                delta_gb_values.append(c_gb - p_gb - l_gb)
+                delta_sa_values.append(c_sa - p_sa - l_sa)
+
+                self.energies['delta_nb'].append(c_nb - p_nb - l_nb)
+                self.energies['delta_gb'].append(c_gb - p_gb - l_gb)
+                self.energies['delta_sa'].append(c_sa - p_sa - l_sa)
+                self.energies['delta_screen'].append(0.0)
+                if 'delta_vdw' not in self.energies: self.energies['delta_vdw'] = []
+                if 'delta_elec' not in self.energies: self.energies['delta_elec'] = []
+                self.energies['delta_vdw'].append(c_vdw - p_vdw - l_vdw)
+                self.energies['delta_elec'].append(c_elec - p_elec - l_elec)
+
+                if 'complex_bond' not in self.energies: self.energies['complex_bond'] = []
+                if 'complex_angle' not in self.energies: self.energies['complex_angle'] = []
+                if 'complex_torsion' not in self.energies: self.energies['complex_torsion'] = []
+                self.energies['complex_bond'].append(e_bond)
+                self.energies['complex_angle'].append(e_angle)
+                self.energies['complex_torsion'].append(e_torsion + e_rbtorsion + e_cmap)
+
+                if i < 5 or i % print_interval == 0:
+                    print(f"Frame {i}: Binding={binding_e:.1f} (NB={e_nb:.1f}, OBC={e_obc:.1f}, Int={e_internal:.1f})")
+                continue
+
             if self.entropy_method == 'quasiharmonic':
                 qha_ligand_frames.append(frame.atom_slice(ligand_indices))
                 if qha_analyze_complex:
@@ -4176,7 +4434,18 @@ class GBSACalculator(GBSAForceManager):
                 # We essentially want (NB + GBSA) terms.
                 # Valid groups: 0 (Generic Nonbonded), 1 (NB), 2 (OBC), 4 (SA), 8 (Screen), 16 (BondSA)
                 
-                # Helper to get valid energy (excluding internal)
+                # Helper to get valid energy (excluding internal), for
+                # protein/ligand contexts only -- their bond/angle/torsion/
+                # rbtorsion/cmap groups aren't computed anywhere else in this
+                # loop (unlike the complex context's, see e_bond..e_cmap
+                # above), so these 5 getState() calls per context are the
+                # only way to get complex_e_clean's protein/ligand
+                # counterparts. Do NOT call this for complex_context -- its
+                # clean energy is `complex_e - e_internal` (both already
+                # computed above from the SAME getState() calls used for
+                # e_bond/e_angle/e_torsion/e_rbtorsion/e_cmap), so a second
+                # full pass through complex_context's 5 internal-energy
+                # groups would be a pure duplicate of the calls above.
                 def get_clean_energy(context):
                     # Get total energy
                     total = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
@@ -4190,31 +4459,39 @@ class GBSACalculator(GBSAForceManager):
 
                 ligand_e_clean = get_clean_energy(ligand_context)
                 protein_e_clean = get_clean_energy(protein_context)
-                complex_e_clean = get_clean_energy(complex_context)
-                
+                complex_e_clean = complex_e - e_internal
+
                 binding_e = complex_e_clean - protein_e_clean - ligand_e_clean
-                
+
                 # Calculate Delta Components for Visualization (Robust Group Masking)
                 # Groups: 0(NB), 1(GB-OBC), 2(GB-Custom), 3(NB-Custom), 4(SA), 8(Screen)
                 def get_grp_E(ctx, grps):
                     mask = 0
                     for g in grps: mask |= (1 << g)
                     return ctx.getState(getEnergy=True, groups=mask).getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-                
+
                 # --- Optimized VdW / Electrostatic Separation (Direct Group Mapping) ---
                 # Based on analysis: Group 0 = Electrostatics (NonbondedForce with eps=0)
                 #                    Group 3 = VdW (CustomNonbondedForce)
-                
-                # Complex
-                c_elec = get_grp_E(complex_context, [0])
-                c_vdw = get_grp_E(complex_context, [3])
+
+                # Complex: e_ele/e_vdw/e_gb/e_sa above already used groups=1
+                # (bitmask for group 0), groups=8 (bitmask for group 3), and
+                # groups={1,2}/groups=16 respectively -- getState()'s groups
+                # parameter accepts either a bitmask int or a set of group
+                # indices (both documented, equivalent forms; {1,2} and
+                # (1<<1)|(1<<2) select the same two groups), so get_grp_E's
+                # calls for the complex context below would recompute
+                # mathematically identical values via a second getState()
+                # round-trip. Reuse the values already computed instead.
+                c_elec = e_ele
+                c_vdw = e_vdw
                 c_nb = c_elec + c_vdw
 
                 # Protein
                 p_elec = get_grp_E(protein_context, [0])
                 p_vdw = get_grp_E(protein_context, [3])
                 p_nb = p_elec + p_vdw
-                
+
                 # Ligand
                 l_elec = get_grp_E(ligand_context, [0])
                 l_vdw = get_grp_E(ligand_context, [3])
@@ -4224,15 +4501,15 @@ class GBSACalculator(GBSAForceManager):
                 delta_nb_values.append(c_nb - p_nb - l_nb)
                 delta_vdw_values.append(c_vdw - p_vdw - l_vdw)
                 delta_elec_values.append(c_elec - p_elec - l_elec)
-                
+
                 # GB: Standard(1) + Custom(2)
-                c_gb = get_grp_E(complex_context, [1, 2])
+                c_gb = e_gb
                 p_gb = get_grp_E(protein_context, [1, 2])
                 l_gb = get_grp_E(ligand_context, [1, 2])
                 delta_gb_values.append(c_gb - p_gb - l_gb)
-                
+
                 # SA: Standard(4) + BondSA(16)
-                c_sa = get_grp_E(complex_context, [4, 16])
+                c_sa = e_sa
                 p_sa = get_grp_E(protein_context, [4, 16])
                 l_sa = get_grp_E(ligand_context, [4, 16])
                 delta_sa_values.append(c_sa - p_sa - l_sa)
