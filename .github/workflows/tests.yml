@@ -11,6 +11,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -31,7 +32,7 @@ jobs:
       - name: Install conda dependencies
         shell: bash -el {0}
         run: |
-          conda install -y -n opengbsa-ci \
+          mamba install -y -n opengbsa-ci \
             "openmm=8.5.0beta" \
             "mdtraj>=1.9.0" \
             "openff-toolkit>=0.14.0" \
