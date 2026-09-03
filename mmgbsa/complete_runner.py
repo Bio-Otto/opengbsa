@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 
 # Import your existing modules
 try:
-    from .core import GBSACalculator
+    from .mmgbsa_core import GBSACalculator
     from .entropy import run_ultra_robust_nma
     from .decomposition import PerResidueDecomposition
     OPENMM_AVAILABLE = True

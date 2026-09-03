@@ -26,7 +26,7 @@ from openmm import app, openmm, unit
 
 import mdtraj as md
 import parmed
-from .core import GBSACalculator
+from .mmgbsa_core import GBSACalculator
 
 from .logger import ToolLogger
 

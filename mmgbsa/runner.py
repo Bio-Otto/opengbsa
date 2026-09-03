@@ -18,9 +18,8 @@ warnings.filterwarnings("ignore", message="Unable to load toolkit 'OpenEye Toolk
 warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecated")
 
 # Import your existing modules
-from .core import GBSACalculator
+from .mmgbsa_core import GBSACalculator
 from .entropy import run_ultra_robust_nma
-from .decomposition import PerResidueDecomposition
 from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
 from .reporting import HTMLReportGenerator

@@ -2,21 +2,13 @@
 """
 Integration of Normal Mode Analysis with MM/GBSA calculations
 Combines your existing NormalModeAnalysis class with MM/GBSA workflow
-"""
-"""
-⚠️  REFACTORING IN PROGRESS ⚠️
 
-This monolithic module is being restructured into modular components:
-    - mmgbsa.core.platform: Platform configuration
-    - mmgbsa.core.caching: System caching
-    - mmgbsa.core.topology: Structure management
-    - mmgbsa.core.parameterization: Ligand/protein parameterization
-    - mmgbsa.core.analysis: Analysis execution
-    - mmgbsa.core.results: Result handling
-    - mmgbsa.core.calculator: Main GBSACalculator (coordinator)
-
-For new code, import from mmgbsa.core.* instead of mmgbsa.core.
-This file will be gradually phased out after transition period.
+This is the real MM/GBSA engine (GBSACalculator, StructureManager,
+GBSAForceManager) -- import directly from this module. An earlier
+`mmgbsa/core/` package attempted to extract this into smaller components
+but was never wired into the actual execution path (its own classes were
+unused scaffolding delegating straight back here); it was removed rather
+than completed, see CHANGELOG.md.
 """
 
 import numpy as np
