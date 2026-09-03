@@ -38,11 +38,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install build dependencies
-        run: python -m pip install --upgrade pip build numpy
+        run: python -m pip install --upgrade pip build wheel numpy
 
       - name: Download TprParser sdist
         run: |
-          pip download --no-deps --no-binary ":all:" --no-build-isolation "TprParser==${{ github.event.inputs.tprparser-version }}" -d src
+          mkdir -p src
+          URL=$(python -c "import json, urllib.request; d = json.load(urllib.request.urlopen('https://pypi.org/pypi/TprParser/${{ github.event.inputs.tprparser-version }}/json')); print(next(f['url'] for f in d['urls'] if f['packagetype'] == 'sdist'))")
+          echo "Downloading $URL"
+          curl -sL "$URL" -o "src/TprParser-${{ github.event.inputs.tprparser-version }}.tar.gz"
 
       - name: Extract sdist
         run: |
