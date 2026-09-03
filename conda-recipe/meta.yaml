@@ -6,8 +6,8 @@ source:
   path: ..
 
 channels:
+  - conda-forge/label/openmm_rc
   - conda-forge
-  - defaults
 
 build:
   noarch: python
@@ -37,7 +37,6 @@ requirements:
     - numpy >=1.21.0,<2.0.0
     - scipy >=1.7.0
     - pandas >=1.3.0
-    - h5py >=3.7.0
     - matplotlib >=3.5.0
     - seaborn >=0.11.0
     - pyyaml >=6.0
@@ -47,10 +46,15 @@ requirements:
 about:
   home: https://github.com/Bio-Otto/opengbsa
   license: MIT
-  license_file: LICENSE
+  license_file:
+    - LICENSE
+    - THIRD_PARTY_LICENSES.md
   summary: "OpenGBSA - A comprehensive MM/GBSA analysis package with advanced features"
   description: |
     OpenGBSA is a comprehensive MM/GBSA analysis package with advanced features including entropy analysis, per-residue decomposition, and YAML-based configuration.
+
+    Note: native GROMACS .tpr support is provided by an optional, vendored
+    GPLv3-licensed component (TprParser); see THIRD_PARTY_LICENSES.md.
 
 extra:
   recipe-maintainers:

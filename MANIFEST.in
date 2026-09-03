@@ -3,6 +3,7 @@ include mmgbsa/*.yaml
 include mmgbsa/*.yml
 include mmgbsa/*.txt
 include mmgbsa/*.md
+include THIRD_PARTY_LICENSES.md
 
 prune mmgbsa/core
 prune mmgbsa_results
