@@ -89,7 +89,7 @@ Citing OpenGBSA
 ---------------
 If you use OpenGBSA in your research, please cite:
 
-*   **OpenGBSA**: [Citation pending, currently link to GitHub repository]
+*   **OpenGBSA**: see `CITATION.cff <https://github.com/bio-otto/opengbsa/blob/main/CITATION.cff>`_ in the repository root for citation metadata.
 *   **OpenMM**: Eastman, P., et al. (2017). OpenMM 7: Rapid development of high performance algorithms for molecular dynamics. *PLoS Computational Biology*, 13(7), e1005659.
 *   **MDTraj**: McGibbon, R. T., et al. (2015). MDTraj: A modern open library for the analysis of molecular dynamics trajectories. *Biophysical Journal*, 109(8), 1528-1532.
 
