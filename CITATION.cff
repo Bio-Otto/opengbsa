@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: OpenGBSA
+type: software
+authors:
+  - family-names: Özdemir
+    given-names: H. Ibrahim
+    email: halil.ibrahim.oozdemir@gmail.com
+    orcid: "https://orcid.org/0000-0002-9275-1324"
+repository-code: "https://github.com/bio-otto/opengbsa"
+url: "https://opengbsa.readthedocs.io/"
+license: MIT
+version: 0.0.7
+keywords:
+  - molecular dynamics
+  - MM/GBSA
+  - GBSA
+  - binding free energy
+  - OpenMM
+  - computational chemistry

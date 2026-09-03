@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-09-03
+
+### Added
+- **Nucleic-acid support**: `binding_mode: ppi` and Native Mode topology-splitting now correctly handle RNA and DNA "ligands" (previously, ligand-detection logic assumed a small-molecule `ligand_resname` and silently mis-split protein-RNA/DNA complexes). Validated end-to-end against independent Amber references on real protein-RNA and protein-DNA datasets.
+- Five new self-contained, independently-verified validation test cases under `test/configs/` (NAMD/CHARMM peptide, GROMACS PPI x2, RNA-protein, DNA-protein), each with its own data-fetch script and expected-result README, plus a new ReadTheDocs Tutorial section walking through all five.
+- `opengbsa --fetch-test-data`/`--list-test-data` CLI flags (Pooch + Zenodo-backed) so `test/unit`'s core fixtures no longer need to be committed to the repository. Published as Zenodo record [10.5281/zenodo.22139199](https://doi.org/10.5281/zenodo.22139199).
+- `CITATION.cff` for software citation metadata.
+
+### Changed
+- **Performance**: the main per-frame MM/GBSA energy loop is now parallelized across CPU cores (`ProcessPoolExecutor`), and redundant duplicate energy queries were removed from the per-frame calculation (~42 -> ~24 `getState()` calls/frame). Measured ~2.37x speedup on a 300-frame run, with numerically-verified identical results (bit-identical VdW/electrostatic/surface-area/internal energies; GB shows ~1e-4 kcal/mol differences that are OpenMM's own floating-point non-determinism, present even between two runs of the unmodified original code). Only activates on the CPU platform when entropy_method is not `quasiharmonic`; GPU platforms and QHA runs are unaffected.
+- Documented the previously-undocumented `nonbonded_cutoff` config option in the configuration reference (no default behavior change).
+- `test/unit/`: added 39 new tests covering `ConfigManager`, `TopologyLoader`'s Amber/GROMACS loading paths, and an end-to-end `MMGBSARunner` regression test (18 -> 57 tests). Moved three files that contained no actual test functions (`test_protein_param.py`, `test_numpy_patch.py`, `test_runner_simple.py` -- developer debug scripts pytest was silently collecting without running anything) to `test/manual/`.
+
 ### Fixed
 - **Removed dead `mmgbsa/core.py`:** the old monolithic module was fully shadowed by the `mmgbsa/core/` package and unreachable; deleted (~4,570 lines).
 - **Removed dead `mmgbsa/core/` package** (not the same file as the entry above -- this is the *package* that had shadowed it): despite its docstrings describing a "modular refactor" of `mmgbsa_core.py` into `platform`/`caching`/`topology`/`parameterization`/`analysis`/`results`/`calculator` submodules, the package's own code admitted this refactor was never actually wired in (`AnalysisEngine`'s `frame_selector`/`energy_calc`/`decomposition`/`aggregator` were built but never called; its `GBSACalculator` was a thin facade whose every method delegated straight back to the real `mmgbsa.mmgbsa_core.GBSACalculator`). No production code outside `mmgbsa/core/` itself used any of its manager classes -- only a handful of `scripts/scratch/` developer scripts (also removed) did. `mmgbsa/runner.py`, `mmgbsa/complete_runner.py`, and `mmgbsa/decomposition.py` now import `GBSACalculator` directly from `mmgbsa.mmgbsa_core`, with no API or behavior change (the facade's `__init__` signature was already an exact passthrough copy of the real one).
@@ -25,9 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed stale root-level scratch scripts (`run_mmpbsa.py`, `mmgbsa_cli.py`) that imported the deleted `mmgbsa.core` module and duplicated the packaged `opengbsa` CLI entry point; installation docs now reference `opengbsa --help` directly.
 - Removed two broken `test/unit/` scripts (`test_combined_system.py`, `test_gasteiger.py`) that referenced a hardcoded developer machine path and the deleted `mmgbsa.core` module, breaking `pytest test/` collection for anyone running it from a fresh checkout.
 
-### Changed
-- Docstrings added/expanded across most of `mmgbsa/*.py`, documenting actual behavior and known limitations rather than stale stubs.
-- Removed leftover `print(f"DEBUG...")` statements from `mmgbsa_core.py`, `parameterizer.py`, and `decomposition.py` (including one in a per-frame multiprocessing worker), converting the still-useful ones to `log.debug()`.
+### Known issues
+- `TopologyLoader._load_gromacs`'s `.tpr` branch (`mmgbsa/topology.py`) calls `parmed.load_file()` directly on a `.tpr` file, but ParmEd has no `.tpr` parser and raises `FormatNotFound`. This code path is separate from (and apparently unreachable compared to) the real native-TPR support `mmgbsa_core.py` actually uses (`tpr_loader.py`'s `TprParser`-based loader). Documented in `test/unit/test_topology_loading.py`; not yet fixed or removed.
 
 ## [0.0.6] - 2026-03-04
 

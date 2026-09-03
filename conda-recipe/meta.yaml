@@ -1,6 +1,6 @@
 package:
   name: opengbsa
-  version: "0.0.6"
+  version: "0.0.7"
 
 source:
   path: ..
@@ -11,7 +11,7 @@ channels:
 
 build:
   noarch: python
-  number: 20
+  number: 0
   entry_points:
     - opengbsa = mmgbsa.cli:main
   script: |

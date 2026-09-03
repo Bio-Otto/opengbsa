@@ -41,7 +41,7 @@ conda install -c conda-forge openmm mdtraj rdkit parmed
 pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
 
 # Install the package (requires OpenMM 8.5.0beta from openmm_rc)
-conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.6
+conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.7
 ```
 
 ---
@@ -157,8 +157,13 @@ python test/run_comprehensive_tests.py test_gb_obc2
 ## 📞 Support
 
 See `config_master.yaml` for a fully annotated config with all available options.
-See `docs/` for detailed guides:
-- [Configuration Guide](docs/CONFIGURATION.md)
-- [GROMACS Guide](docs/GROMACS_GUIDE.md)
-- [Installation Guide](docs/INSTALLATION.md)
-- [Output Files](docs/OUTPUTS.md)
+Full documentation, including a step-by-step Tutorial covering five worked
+validation examples, is on ReadTheDocs: **[opengbsa.readthedocs.io](https://opengbsa.readthedocs.io/)**.
+
+---
+
+## 📄 Citing OpenGBSA
+
+If you use OpenGBSA in your research, please cite it -- see
+[`CITATION.cff`](CITATION.cff) for citation metadata (also usable via
+GitHub's "Cite this repository" button).
