@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **All 5 GB models (`HCT`/`OBC1`/`OBC2`/`GBn`/`GBn2`) are now independently validated against Amber MMPBSA.py**, not just `OBC2` (the only model prior validation work exercised). This surfaced four real, previously-unknown bugs in `mmgbsa_core.py`'s GB-model handling:
+  - `GBSACalculator._create_fallback_obc_force` always built an `OBC2`-physics force regardless of the configured `gb_model` -- `HCT`/`OBC1`/`GBn`/`GBn2` silently fell back to `OBC2` energetics whenever this fallback path was taken (which, for Coordinate Mode, was every run, since `openmmforcefields`'s `SystemGenerator` always rejects the `implicitSolvent` kwarg there). Fixed by dispatching to the matching `openmm.app.internal.customgbforces` class per model.
+  - Explicit `receptor_topology`/`ligand_topology` inputs (loaded from separate prmtop files in Native Mode) never had their GB radii synchronized with the complex structure's radii, producing a complex/receptor+ligand radii mismatch large enough to change a real system's `OBC2` result by ~200 kcal/mol.
+  - `GBn`'s radii set was incorrectly mapped to `mbondi` instead of `bondi` -- confirmed this wasn't OpenGBSA-specific: ParmEd's own official `createSystem(implicitSolvent=app.GBn)` path raises the same "Radii must be between 1 and 2 Angstroms for neck lookup" error when given mbondi's valid Amber-standard hydroxyl-hydrogen radii, since `GBn`'s neck-lookup table is calibrated for `bondi`'s radius range specifically.
+  - `GBn`/`GBn2` need a model-specific per-element `screen` (Born-radius scaling) value from OpenMM's own lookup table, not the generic prmtop-derived value every other model uses -- this was the largest remaining error source, responsible for a ~13 kcal/mol `GBn2` discrepancy against Amber before being fixed.
+  See `test/configs/ppi_1gcq_test/README.md`'s "All 5 GB models, validated" section for the full comparison table and per-bug detail.
+
+### Added
+- `test/configs/ppi_1gcq_test/prepare_system.py`: new `--gb-model {HCT,OBC1,OBC2,GBn,GBn2}` flag for `--build-amber-reference`, so the independent Amber reference topology's radii set can be built matching any of the 5 supported GB models (previously hardcoded to whatever `tleap`/ParmEd defaulted to, implicitly OBC2-only).
+
 ## [0.0.7] - 2026-09-03
 
 ### Added

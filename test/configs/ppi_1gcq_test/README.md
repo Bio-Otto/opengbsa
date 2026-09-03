@@ -30,10 +30,13 @@ For a fast smoke test (3 frames instead of 300), use `1gcq_config_test.yaml`
 / `2oob_config_test.yaml` instead.
 
 To also reproduce the independent Amber reference used to validate these
-numbers (requires `tleap` on `PATH` for 1GCQ; OpenMM+ParmEd only for 2OOB):
+numbers (requires `tleap` on `PATH` for 1GCQ; OpenMM+ParmEd only for 2OOB).
+`--gb-model` selects which of the 5 supported GB models the reference
+prmtop's radii/screen set should match (default `OBC2`; see "All 5 GB
+models" below):
 
 ```bash
-python3 prepare_system.py --system 1gcq --build-amber-reference
+python3 prepare_system.py --system 1gcq --build-amber-reference --gb-model OBC2
 python3 prepare_system.py --system 2oob --build-amber-reference
 ```
 
@@ -41,10 +44,70 @@ python3 prepare_system.py --system 2oob --build-amber-reference
 
 | System | Amber reference ΔH_bind (kcal/mol) | OpenGBSA ΔH_bind (kcal/mol) | Diff |
 |---|---|---|---|
-| 1GCQ | -30.11 ± 6.68 | -36.12 ± 6.00 | 6.01 |
+| 1GCQ | -37.89 ± 6.53 | -36.12 ± 6.00 | 1.77 |
 | 2OOB | -25.49 ± 4.15 | -24.46 ± 4.11 | 1.03 |
 
-(300 frames each, last 300 of a 7501-frame trajectory.)
+(300 frames each, last 300 of a 7501-frame trajectory. OBC2/`igb=5`.)
+
+## All 5 GB models, validated (1GCQ)
+
+Every GB model this project supports (`HCT`, `OBC1`, `OBC2`, `GBn`,
+`GBn2`) is now independently validated against Amber MMPBSA.py on 1GCQ,
+not just OBC2 -- built via `prepare_system.py --system 1gcq
+--build-amber-reference --gb-model <model>` (writes to
+`prepared/1gcq/amber_reference/<model>/`, each with its own correctly
+radii-matched prmtop: `mbondi` for HCT, `mbondi2` for OBC1/OBC2, `bondi`
+for GBn, `mbondi3` for GBn2 -- see that script's `GB_MODEL_RADII_SET`).
+
+| GB model | Amber `igb=` | Amber ΔH_bind | OpenGBSA ΔH_bind | Diff |
+|---|---|---|---|---|
+| HCT | 1 | -50.31 ± 7.50 | -47.50 ± 6.72 | 2.81 |
+| OBC1 | 2 | -38.38 ± 6.15 | -35.45 ± 5.57 | 2.93 |
+| OBC2 | 5 | -37.89 ± 6.53 | -36.12 ± 6.00 | 1.77 |
+| GBn | 7 | -41.71 ± 5.25 | -40.93 ± 5.27 | 0.78 |
+| GBn2 | 8 | -42.96 ± 4.92 | -41.51 ± 4.99 | 1.45 |
+
+(All 300 frames.) All five agree with Amber in sign and magnitude within
+a tight, consistent 0.78-2.93 kcal/mol range -- comparable to or better
+than the OBC2-only validation this project previously relied on.
+
+This validation pass found and fixed four real bugs in
+`mmgbsa/mmgbsa_core.py`'s GB-model handling, none of which were visible
+before every model was actually exercised against an independent
+reference (prior validation work only ever used `gb_model: OBC2`):
+
+1. **`GBSACalculator._create_fallback_obc_force` only ever built an OBC2
+   force**, regardless of `self.gb_model` -- HCT/OBC1/GBn/GBn2 silently
+   fell back to OBC2 physics whenever this fallback path was taken
+   (confirmed: all 5 `gb_model` values produced bit-identical energies on
+   this exact system before the fix, since Coordinate Mode's
+   `SystemGenerator` always rejects OpenMM's `implicitSolvent` kwarg and
+   lands in this fallback). Fixed by dispatching to the matching
+   `openmm.app.internal.customgbforces` class
+   (`GBSAHCTForce`/`GBSAOBC1Force`/`GBSAOBC2Force`/`GBSAGBnForce`/
+   `GBSAGBn2Force`) instead.
+2. **Explicit `receptor_topology`/`ligand_topology` inputs (loaded from
+   separate prmtop files) never had their GB radii synced with the
+   complex's radii**, producing a large complex/receptor+ligand radii
+   mismatch on any Native-Mode run using this feature (confirmed: this
+   desync alone changed a real system's OBC2 result from -27.6 to -236.0
+   kcal/mol on an unrelated protein-RNA validation case -- not a
+   `gb_model` effect at all, just three structures disagreeing about GB
+   radii on the same atoms).
+3. **`GBn`'s radii set was wrong in this codebase** (`mbondi` instead of
+   `bondi`) -- confirmed this isn't an OpenGBSA-specific bug: ParmEd's own
+   official `createSystem(implicitSolvent=app.GBn)` path raises the exact
+   same `"Radii must be between 1 and 2 Angstroms for neck lookup"` error
+   when handed mbondi's (valid, Amber-standard) 0.8 A hydroxyl-hydrogen
+   radii, since GBn's neck-lookup table is calibrated for bondi's radius
+   range specifically.
+4. **`GBn`/`GBn2` need a model-specific per-element `screen` value**
+   (OpenMM's own `_SCREEN_PARAMETERS` table), not the generic
+   prmtop-derived screen value every other model uses -- this was the
+   single largest remaining error source, responsible for a ~13 kcal/mol
+   GBn2 discrepancy against Amber before being found and fixed (GBn's
+   screen values happen to be numerically closer to the generic set, so
+   its error was smaller, ~3 kcal/mol, before this fix).
 
 ## What this example demonstrates
 
