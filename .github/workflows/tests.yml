@@ -25,8 +25,9 @@ jobs:
         with:
           miniforge-version: latest
           python-version: ${{ matrix.python-version }}
-          channels: conda-forge/label/openmm_rc,conda-forge,defaults
+          channels: conda-forge/label/openmm_rc,conda-forge
           channel-priority: strict
+          conda-remove-defaults: true
           activate-environment: opengbsa-ci
 
       - name: Install conda dependencies
