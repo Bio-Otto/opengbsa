@@ -21,40 +21,39 @@ Thank you for your interest in contributing to OpenGBSA! This document provides 
 ### Installation
 ```bash
 # Clone your fork
-git clone https://github.com/your-username/mmgbsa.git
-cd mmgbsa
+git clone https://github.com/your-username/opengbsa.git
+cd opengbsa
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Create environment (conda recommended -- several dependencies are conda-only)
+conda create -n opengbsa python=3.10
+conda activate opengbsa
+conda install -c conda-forge openmm mdtraj rdkit parmed
 
-# Install dependencies
-pip install -r requirements.txt
-pip install -e .  # Install in development mode
+# Install the package in development mode
+pip install -e ".[dev]"
 ```
 
 ### Development Dependencies
+The `dev` extra in `pyproject.toml` installs `pytest`, `black`, `flake8`, `mypy`, and `sphinx`:
 ```bash
-pip install -r requirements-dev.txt  # If available
-# Or install manually:
-pip install pytest black flake8 mypy sphinx
+pip install -e ".[dev]"
 ```
 
 ## 🧪 Testing
 
 ### Run Tests
 ```bash
-# Run all tests
-pytest
+# Run the automated unit test suite
+pytest test/unit
 
 # Run with coverage
-pytest --cov=mmgbsa
+pytest test/unit --cov=mmgbsa
 
-# Run specific test file
-pytest test/test_mmgbsa.py
+# Run a specific test file
+pytest test/unit/test_config.py
 
 # Run with verbose output
-pytest -v
+pytest test/unit -v
 ```
 
 ### Test Data
@@ -153,19 +152,22 @@ Brief description of changes
 ## 🏗️ Project Structure
 
 ```
-mmgbsa/
+opengbsa/
 ├── mmgbsa/              # Main package
 │   ├── __init__.py
-│   ├── core/           # Core functionality
-│   ├── analysis/       # Analysis modules
-│   ├── utils/          # Utility functions
-│   └── config/         # Configuration handling
-├── tests/              # Test suite
-├── docs/               # Documentation
-├── examples/           # Example scripts
-├── setup.py           # Package setup
-├── requirements.txt   # Dependencies
-└── README.md         # Project documentation
+│   ├── mmgbsa_core.py   # GBSACalculator and core energy pipeline
+│   ├── runner.py        # MMGBSARunner: config-driven execution
+│   ├── config.py        # ConfigManager: YAML validation/loading
+│   ├── topology.py      # Topology loading (Amber/GROMACS/CHARMM)
+│   ├── reporting.py     # HTML report generation
+│   └── forcefields/     # Bundled force field files
+├── test/
+│   ├── unit/            # Automated pytest suite (run in CI)
+│   ├── configs/         # Self-contained validation datasets
+│   └── manual/          # Ad hoc developer scripts, not run in CI
+├── docs/                # Sphinx documentation source
+├── pyproject.toml       # Package metadata and dependencies
+└── README.md            # Project documentation
 ```
 
 ## 🐛 Bug Reports

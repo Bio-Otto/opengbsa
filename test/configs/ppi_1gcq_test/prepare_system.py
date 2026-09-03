@@ -41,6 +41,28 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 
+# Amber GB-model-to-radii-set pairing (must match mmgbsa/mmgbsa_core.py's
+# StructureManager._GB_MODEL_RADII_SET) -- GBn pairs with plain 'bondi',
+# NOT 'mbondi': confirmed both OpenMM's own GBSAGBnForce and ParmEd's
+# createSystem(implicitSolvent=app.GBn) reject mbondi's valid 0.8 A
+# hydroxyl/thiol-H radii outright ("Radii must be between 1 and 2
+# Angstroms for neck lookup"), since GBn's neck-lookup table is
+# calibrated for bondi's radius range.
+GB_MODEL_RADII_SET = {
+    "HCT": "mbondi",
+    "OBC1": "mbondi2",
+    "OBC2": "mbondi2",
+    "GBn": "bondi",
+    "GBn2": "mbondi3",
+}
+GB_MODEL_IGB = {
+    "HCT": 1,
+    "OBC1": 2,
+    "OBC2": 5,
+    "GBn": 7,
+    "GBn2": 8,
+}
+
 SYSTEMS = {
     "1gcq": {
         "raw_dir": "raw/1GCQ/complex/without_water",
@@ -177,11 +199,18 @@ def run_tleap(script_path):
     return result.stdout
 
 
-def build_amber_reference_tleap(pdb_path, out_dir):
+def build_amber_reference_tleap(pdb_path, out_dir, gb_model="OBC2"):
     """1GCQ's route: split into per-chain PDBs, fix each chain's N-terminal
     H1, run tleap, combine. tleap reorders atoms to its own canonical
     per-residue order, so a name-based reindex map is also written out for
-    use when reordering the trajectory to match."""
+    use when reordering the trajectory to match.
+
+    `gb_model` selects tleap's `set default PBRadii` value (see
+    GB_MODEL_RADII_SET) so the resulting prmtop's embedded GB radii match
+    what an MMPBSA.py run with the corresponding `igb=` (GB_MODEL_IGB)
+    actually expects -- a prmtop built with the wrong radii set either
+    silently gives wrong GB energies or (for GBn/GBn2) MMPBSA.py/sander
+    outright rejects it."""
     # mdtraj infers bonds by residue-template/geometry on *load* even from a
     # PDB with no CONECT records, and a plain atom_slice()+save_pdb() writes
     # those inferred bonds back out as real CONECT records -- which can
@@ -210,9 +239,11 @@ def build_amber_reference_tleap(pdb_path, out_dir):
         fix_nterm_h(chain_pdb)
         chain_pdbs.append(chain_pdb)
 
+    radii_set = GB_MODEL_RADII_SET.get(gb_model, "mbondi2")
     tleap_script = out_dir / "tleap_complex.in"
     tleap_script.write_text(
         "source leaprc.protein.ff14SB\n"
+        f"set default PBRadii {radii_set}\n"
         f"molA = loadpdb {chain_pdbs[0].name}\n"
         f"molB = loadpdb {chain_pdbs[1].name}\n"
         "combined = combine {molA molB}\n"
@@ -220,13 +251,18 @@ def build_amber_reference_tleap(pdb_path, out_dir):
         "quit\n"
     )
     run_tleap(tleap_script)
-    print(f"Amber reference (tleap): {out_dir / 'complex.prmtop'}")
+    print(f"Amber reference (tleap, PBRadii={radii_set} for gb_model={gb_model}): "
+          f"{out_dir / 'complex.prmtop'}")
 
 
-def build_amber_reference_openmm(pdb_path, out_dir, his68_hie_to_hid=False):
+def build_amber_reference_openmm(pdb_path, out_dir, his68_hie_to_hid=False, gb_model="OBC2"):
     """2OOB's route: OpenMM ForceField.createSystem + ParmEd
     openmm.load_topology, exported directly to .prmtop -- preserves the
-    input PDB's atom order (no reindexing needed, unlike tleap)."""
+    input PDB's atom order (no reindexing needed, unlike tleap).
+
+    `gb_model` selects the ParmEd `changeRadii` set applied to the
+    resulting structure (see GB_MODEL_RADII_SET/build_amber_reference_tleap's
+    docstring for why this must match the target MMPBSA.py `igb=` value)."""
     import parmed as pmd
     from openmm import app, unit
 
@@ -248,10 +284,12 @@ def build_amber_reference_openmm(pdb_path, out_dir, his68_hie_to_hid=False):
     system = ff.createSystem(topology, nonbondedMethod=app.NoCutoff,
                               constraints=None, rigidWater=False)
     struct = pmd.openmm.load_topology(topology, system, xyz=positions.value_in_unit(unit.angstrom))
-    pmd.tools.changeRadii(struct, "mbondi2").execute()
+    radii_set = GB_MODEL_RADII_SET.get(gb_model, "mbondi2")
+    pmd.tools.changeRadii(struct, radii_set).execute()
     struct.save(str(out_dir / "complex.prmtop"), overwrite=True)
     struct.save(str(out_dir / "complex.inpcrd"), overwrite=True)
-    print(f"Amber reference (OpenMM+ParmEd): {out_dir / 'complex.prmtop'}")
+    print(f"Amber reference (OpenMM+ParmEd, radii={radii_set} for gb_model={gb_model}): "
+          f"{out_dir / 'complex.prmtop'}")
 
 
 def _convert_hie_to_hid(pdb_path, out_path, resnum):
@@ -296,18 +334,23 @@ def main():
     ap.add_argument("--build-amber-reference", action="store_true",
                      help="Also build an independent Amber reference topology "
                           "(tleap for 1gcq, OpenMM+ParmEd for 2oob) for cross-checking.")
+    ap.add_argument("--gb-model", choices=sorted(GB_MODEL_RADII_SET), default="OBC2",
+                     help="GB model the Amber reference prmtop's radii should match "
+                          "(only used with --build-amber-reference). Default OBC2 "
+                          "(mbondi2, igb=5) -- the model this project's prior "
+                          "validation work used throughout.")
     args = ap.parse_args()
 
     out_dir = HERE / "prepared" / args.system
     pdb_out, dcd_out = prepare_common(args.system, out_dir)
 
     if args.build_amber_reference:
-        ref_dir = out_dir / "amber_reference"
+        ref_dir = out_dir / "amber_reference" / args.gb_model.lower()
         ref_dir.mkdir(parents=True, exist_ok=True)
         if args.system == "1gcq":
-            build_amber_reference_tleap(pdb_out, ref_dir)
+            build_amber_reference_tleap(pdb_out, ref_dir, gb_model=args.gb_model)
         else:
-            build_amber_reference_openmm(pdb_out, ref_dir)
+            build_amber_reference_openmm(pdb_out, ref_dir, gb_model=args.gb_model)
 
     print(f"\nDone. Config for this system: {args.system}_config.yaml "
           f"(already points at prepared/{args.system}/).")

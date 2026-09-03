@@ -104,18 +104,15 @@ class TopologyLoader:
 
     @staticmethod
     def _load_gromacs(path, options):
-        """Loads Gromacs top/tpr."""
-        # OpenMM GromacsTopFile handles .top, GromacsGroFile handles .gro
-        # .tpr support usually requires conversion or specific tools.
-        # OpenMM's GromacsTopFile is strictly for .top
-        # If user provides .tpr, we might need 'gmx_MMPBSA' style conversion or Parmed.
-        # For now, let's assume .top for direct OpenMM support or raise warning.
+        """Loads Gromacs .top. Real .tpr support lives in mmgbsa/tpr_loader.py
+        and is invoked directly by mmgbsa_core.py before this loader is ever
+        reached -- ParmEd itself has no .tpr parser, so this path raises
+        rather than silently mis-loading."""
         if path.endswith('.tpr'):
-             # Placeholder for TPR support (ParmEd?)
-             import parmed as pmd
-             struct = pmd.load_file(path)
-             system = struct.createSystem(**options)
-             return system, struct.topology, struct.positions
+             raise NotImplementedError(
+                 "TopologyLoader cannot load .tpr files directly; use "
+                 "mmgbsa.tpr_loader.load_tpr_as_parmed instead."
+             )
         else:
              top = app.GromacsTopFile(path)
              # Filter options for GromacsTopFile.createSystem

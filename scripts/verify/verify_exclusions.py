@@ -11,7 +11,7 @@ def verify_exclusions(prmtop_path):
     # Be careful: standard createSystem puts everything in NonbondedForce.
     # We need to verify what happens in core.py's flow, BUT debugging the structure itself helps.
     # Actually, we need to inspect the System *as created by core.py*.
-    # Using 'mmgbsa.core' to create system is better.
+    # Using 'mmgbsa.mmgbsa_core' to create system is better.
     
     # Let's fallback to standard Prmtop check first.
     # Creating system with standard options

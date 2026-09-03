@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-09-03
+
+### Fixed
+- **All 5 GB models (`HCT`/`OBC1`/`OBC2`/`GBn`/`GBn2`) are now independently validated against Amber MMPBSA.py**, not just `OBC2` (the only model prior validation work exercised). This surfaced four real, previously-unknown bugs in `mmgbsa_core.py`'s GB-model handling:
+  - `GBSACalculator._create_fallback_obc_force` always built an `OBC2`-physics force regardless of the configured `gb_model` -- `HCT`/`OBC1`/`GBn`/`GBn2` silently fell back to `OBC2` energetics whenever this fallback path was taken (which, for Coordinate Mode, was every run, since `openmmforcefields`'s `SystemGenerator` always rejects the `implicitSolvent` kwarg there). Fixed by dispatching to the matching `openmm.app.internal.customgbforces` class per model.
+  - Explicit `receptor_topology`/`ligand_topology` inputs (loaded from separate prmtop files in Native Mode) never had their GB radii synchronized with the complex structure's radii, producing a complex/receptor+ligand radii mismatch large enough to change a real system's `OBC2` result by ~200 kcal/mol.
+  - `GBn`'s radii set was incorrectly mapped to `mbondi` instead of `bondi` -- confirmed this wasn't OpenGBSA-specific: ParmEd's own official `createSystem(implicitSolvent=app.GBn)` path raises the same "Radii must be between 1 and 2 Angstroms for neck lookup" error when given mbondi's valid Amber-standard hydroxyl-hydrogen radii, since `GBn`'s neck-lookup table is calibrated for `bondi`'s radius range specifically.
+  - `GBn`/`GBn2` need a model-specific per-element `screen` (Born-radius scaling) value from OpenMM's own lookup table, not the generic prmtop-derived value every other model uses -- this was the largest remaining error source, responsible for a ~13 kcal/mol `GBn2` discrepancy against Amber before being fixed.
+  See `test/configs/ppi_1gcq_test/README.md`'s "All 5 GB models, validated" section for the full comparison table and per-bug detail.
+- **CI workflow (`.github/workflows/tests.yml`) was broken**: its import-sanity check still referenced `mmgbsa.core`, a module deleted in 0.0.7 (the real class is `mmgbsa.mmgbsa_core.GBSACalculator`). Fixed the import path and dropped `test/manual` from the pytest invocation (that directory holds ad hoc developer scripts, not a maintained suite -- see 0.0.7's changelog entry for why it was split out from `test/unit`).
+- **`docs/source/api_reference.rst`** documented `GBSACalculator` under the deleted `mmgbsa.core` module path with a stale `__init__` signature; corrected to `mmgbsa.mmgbsa_core` with the current signature.
+- **Packaging**: `MANIFEST.in` had no exclusion rules, so `python -m build --sdist` could bundle local scratch/output directories (e.g. `mmgbsa_results/`, `*.egg-info/`) into the release tarball if present in the working tree at build time. Added explicit `prune`/`global-exclude` rules.
+
+### Removed
+- Eleven dead scripts across `test/diagnostics/`, `test/manual/`, `test/utils/`, and `scripts/debug/`/`scripts/verify/` that imported the deleted `mmgbsa.core` module (unreachable since 0.0.7, none imported by any other file).
+- `docs/notes/REFACTORING_PLAN.md`, a stale internal planning document for the `mmgbsa/core/` refactor that was abandoned and removed in 0.0.7 (never part of the built Sphinx docs).
+- `Dockerfile`/`docker-compose.yml`: both referenced source files removed years ago (`mmgbsa_v3.py`, `mmgbsa_runner.py`, etc.) and pinned a stale OpenMM/CUDA/Python combination; neither was reachable from the current package layout, so they were deleted rather than rewritten. Re-add if/when a maintained container image is needed.
+
+### Added
+- `test/configs/ppi_1gcq_test/prepare_system.py`: new `--gb-model {HCT,OBC1,OBC2,GBn,GBn2}` flag for `--build-amber-reference`, so the independent Amber reference topology's radii set can be built matching any of the 5 supported GB models (previously hardcoded to whatever `tleap`/ParmEd defaulted to, implicitly OBC2-only).
+
 ## [0.0.7] - 2026-09-03
 
 ### Added

@@ -131,12 +131,21 @@ class StructureManager:
     """
     # Standard Amber GB-model-to-radii-set pairing (see e.g. Amber Reference
     # Manual / MMPBSA.py docs): HCT pairs with 'mbondi', OBC1/OBC2 with
-    # 'mbondi2', GBn with 'mbondi', GBn2 with 'mbondi3'.
+    # 'mbondi2', GBn with 'bondi' (NOT 'mbondi' -- confirmed against
+    # OpenMM's own GBSAGBnForce.getStandardParameters(), which builds its
+    # reference radii via `_bondi_radii()` -- plain bondi, where every H
+    # atom gets a fixed 1.2 A regardless of what it's bonded to, unlike
+    # mbondi's bonded-atom-dependent H radii (e.g. 0.8 A for O/S-bonded
+    # hydroxyl/thiol H). Using 'mbondi' for GBn previously caused
+    # OpenMM's GBnForce to reject valid mbondi hydroxyl-H radii outright
+    # with "Radii must be between 1 and 2 Angstroms for neck lookup", since
+    # GBn's neck-lookup table is calibrated for bondi's radius range, not
+    # mbondi's), GBn2 with 'mbondi3'.
     _GB_MODEL_RADII_SET = {
         'HCT': 'mbondi',
         'OBC1': 'mbondi2',
         'OBC2': 'mbondi2',
-        'GBn': 'mbondi',
+        'GBn': 'bondi',
         'GBn2': 'mbondi3',
     }
 
@@ -226,28 +235,39 @@ class StructureManager:
 
         # GROMACS-origin and CHARMM-origin structures (.top, .tpr, .psf)
         # carry no intrinsic GB radii at all (all-zero solvent_radius/
-        # screen); assign the radii set that actually matches the
-        # configured GB model, via ParmEd's own (Amber-validated)
-        # mbondi*/bondi rule sets, rather than silently falling back to a
-        # crude, atom-type-blind element-only radius table (e.g. treating
-        # every H the same regardless of what it's bonded to, unlike
-        # mbondi2's real per-atom-type H radii). Previously this fallback
-        # caused a large, systematic (~20 kcal/mol observed on real OXA-MD
-        # benchmark systems) discrepancy against Amber MMPBSA.py reference
-        # results for GROMACS-sourced inputs; CHARMM-origin inputs need the
-        # identical treatment for the identical reason.
-        if is_gromacs_origin or is_charmm_origin:
-            origin_label = 'GROMACS-origin' if is_gromacs_origin else 'CHARMM/NAMD-origin'
-            try:
-                from parmed.tools import changeRadii
-                radii_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
-                changeRadii(struct, radii_set).execute()
-                log.info(f"Applied '{radii_set}' GB radii set to {origin_label} structure "
-                         f"(matching gb_model='{gb_model}').")
-            except Exception as e:
-                log.warning(f"Failed to apply GB radii set to {origin_label} structure: {e}. "
-                            f"GB energies will use the crude element-only radii fallback and "
-                            f"will NOT be comparable to Amber MMPBSA.py results.")
+        # screen); Amber-native structures (.prmtop) DO carry real radii,
+        # but only for whatever radius set they were originally built with
+        # (typically mbondi2, from the source tleap run) -- if the
+        # requested gb_model needs a different set (e.g. GBn/GBn2 need
+        # mbondi/mbondi3, whose radii fall in a different numeric range),
+        # reusing the prmtop's own mbondi2 radii either silently gives
+        # wrong GB energies (for models that don't validate their input
+        # range) or crashes outright (confirmed: GBn/GBn2 raise "Radii must
+        # be between 1 and 2 Angstroms for neck lookup" when handed
+        # mbondi2 radii un-adjusted, since OpenMM's own neck-lookup table
+        # only covers the mbondi/mbondi3 range). So this now always
+        # assigns the radii set matching the configured GB model, via
+        # ParmEd's own (Amber-validated) mbondi*/bondi rule sets, for every
+        # structure origin -- not just GROMACS/CHARMM-origin ones (that
+        # restriction previously caused a large, systematic (~20 kcal/mol
+        # observed on real OXA-MD benchmark systems) discrepancy against
+        # Amber MMPBSA.py reference results for GROMACS-sourced inputs,
+        # and separately left Amber-native inputs unable to use any
+        # gb_model but whatever radius set their own prmtop happened to be
+        # built with).
+        origin_label = ('GROMACS-origin' if is_gromacs_origin
+                         else 'CHARMM/NAMD-origin' if is_charmm_origin
+                         else 'Amber-native')
+        try:
+            from parmed.tools import changeRadii
+            radii_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
+            changeRadii(struct, radii_set).execute()
+            log.info(f"Applied '{radii_set}' GB radii set to {origin_label} structure "
+                     f"(matching gb_model='{gb_model}').")
+        except Exception as e:
+            log.warning(f"Failed to apply GB radii set to {origin_label} structure: {e}. "
+                        f"GB energies will use the crude element-only radii fallback and "
+                        f"will NOT be comparable to Amber MMPBSA.py results.")
 
         # Implicit solvent and GBSA evaluation does not support explicit waters inside the structural force tree.
         # Stripping is now handled deliberately in the main pipeline AFTER exporting the solvated PDB for MDTraj
@@ -732,27 +752,54 @@ class GBSAForceManager:
         log.success(f"GBSA forces refined successfully")
         return system
 
+    # Maps this codebase's gb_model strings to the matching OpenMM
+    # CustomAmberGBForceBase subclass (openmm.app.internal.customgbforces).
+    # All five share an identical constructor signature (solventDielectric,
+    # soluteDielectric, SA, cutoff, kappa) and addParticle([charge, radius,
+    # screen]) call convention, which is what makes a single code path for
+    # all five models possible below -- confirmed directly against each
+    # class's __init__ signature.
+    _GB_MODEL_FORCE_CLASS_NAME = {
+        'HCT': 'GBSAHCTForce',
+        'OBC1': 'GBSAOBC1Force',
+        'OBC2': 'GBSAOBC2Force',
+        'GBn': 'GBSAGBnForce',
+        'GBn2': 'GBSAGBn2Force',
+    }
+
     def _create_fallback_obc_force(self, system, topology):
         """
-        Build the polar GB force for OBC1/OBC2 (used both as the fallback
-        when no GB force exists yet, and -- via `refine_gbsa_forces` -- to
-        UNCONDITIONALLY REPLACE any GB force ParmEd/OpenMM's own
-        `createSystem` already built, so that this codebase's own GB radii
-        (`_get_gb_radius`/`_get_gb_scale`) are enforced).
+        Build the polar GB force matching `self.gb_model` (used both as the
+        fallback when no GB force exists yet, and -- via
+        `refine_gbsa_forces` -- to UNCONDITIONALLY REPLACE any GB force
+        ParmEd/OpenMM's own `createSystem` already built, so that this
+        codebase's own GB radii (`_get_gb_radius`/`_get_gb_scale`) are
+        enforced).
 
-        Uses OpenMM's built-in `openmm.GBSAOBCForce` when `salt_concentration`
-        is zero (that class has no salt/kappa support at all -- confirmed via
-        its API surface, which exposes no kappa parameter). When salt
-        concentration is nonzero, uses the `CustomGBForce`-based
-        `GBSAOBC2Force` instead, with kappa derived the same way ParmEd's own
-        `Structure.omm_gbsa_force` derives it from salt concentration, so
-        that Debye-Huckel screening is actually applied to the GB energy --
-        previously, this method always returned a plain `GBSAOBCForce`
-        regardless of `salt_concentration`, silently discarding any
-        configured salt screening for every OBC1/OBC2 run (since
-        `refine_gbsa_forces` always calls this to replace whatever GB force
-        was there before, including a salt-aware one ParmEd may have built).
+        Despite the name (kept for backward compatibility -- this method is
+        called from several sites), this is NOT OBC-only: it dispatches to
+        the `openmm.app.internal.customgbforces` class matching
+        `self.gb_model` (see `_GB_MODEL_FORCE_CLASS_NAME`). Previously this
+        method always built a `GBSAOBC2Force`/`GBSAOBCForce` regardless of
+        `self.gb_model`, so selecting HCT/OBC1/GBn/GBn2 silently fell back
+        to OBC2 physics every time this fallback path was taken (confirmed:
+        all 5 gb_model values produced bit-identical energies on a real
+        Coordinate-Mode PPI system, since `SystemGenerator` there always
+        rejects the `implicitSolvent` kwarg and lands here; and OBC1/OBC2
+        were indistinguishable even in Native Mode, since both took this
+        same OBC2-only path).
+
+        All five `customgbforces` classes share one constructor signature
+        and `addParticle([charge, radius, screen])` convention (unlike
+        OpenMM's own native `openmm.GBSAOBCForce`, which only implements
+        OBC and has a different `addParticle(charge, radius, scale)` calling
+        convention with no kappa/salt support at all) -- using
+        `customgbforces` uniformly for every model, including kappa=0.0 for
+        the no-salt case, removes the previous OBC-only/native-vs-custom
+        branch entirely rather than needing a separate code path per model.
         """
+        from openmm.app.internal import customgbforces
+
         charges = self._extract_charges_from_system(system)
 
         try:
@@ -766,63 +813,90 @@ class GBSAForceManager:
             conc = conc.value_in_unit(unit.molar)
         use_salt = bool(conc) and conc > 0
 
+        kappa = 0.0
         if use_salt:
-            from openmm.app.internal.customgbforces import GBSAOBC2Force
             temp_k = getattr(self, 'temperature', 300.0)
             if unit.is_quantity(temp_k):
                 temp_k = temp_k.value_in_unit(unit.kelvin)
             kappa = 50.33355 * (conc / (self.solvent_dielectric * temp_k)) ** 0.5 * 7.3  # nm^-1
-            cutoff_nm = (self.nonbonded_cutoff * unit.angstroms).value_in_unit(unit.nanometer) \
-                if self.nonbonded_cutoff is not None else None
-            gb_force = GBSAOBC2Force(
-                solventDielectric=self.solvent_dielectric,
-                soluteDielectric=self.solute_dielectric,
-                SA=None, cutoff=cutoff_nm, kappa=kappa,
-            )
-            # NOTE: GBSAOBC2Force's addParticle (inherited from
-            # CustomAmberGBForceBase) already subtracts the 0.009 nm OBC
-            # offset from the radius AND multiplies scale by that
-            # offset-subtracted radius internally -- confirmed against
-            # OpenMM's own getStandardParameters()/ParmEd's own
-            # createSystem(implicitSolvent=OBC2), both of which pass raw
-            # (un-offset, un-multiplied) radius/scale straight through.
-            # This code previously pre-applied both transformations itself,
-            # so they were applied TWICE (once here, once inside
-            # addParticle), corrupting every Born radius and roughly
-            # doubling the magnitude of the resulting GB energy -- verified
-            # numerically against a direct sander (Amber igb=5) single-frame
-            # energy: the double-applied version gave -4992 kcal/mol vs
-            # sander's -2482 kcal/mol for the same structure, while raw
-            # (correctly single-applied) parameters give -2473 kcal/mol,
-            # a 0.4% match.
-            for i, atom in enumerate(atoms_list):
-                charge = charges[i]
-                raw_radius_nm = self._get_gb_radius(atom) * 0.1
-                raw_scale = self._get_gb_scale(atom)
-                gb_force.addParticle([charge, raw_radius_nm, raw_scale])
-            try:
-                gb_force.finalize()
-            except AttributeError:
-                pass
-            log.info(f"Built salt-screened GB force (CustomGBForce/GBSAOBC2Force, "
-                     f"kappa={kappa:.4f} nm^-1) for salt_concentration={conc} M.")
-            return gb_force
 
-        gb_force = openmm.GBSAOBCForce()
-        if self.nonbonded_cutoff is not None:
-            gb_force.setNonbondedMethod(openmm.GBSAOBCForce.CutoffNonPeriodic)
-            gb_force.setCutoffDistance(self.nonbonded_cutoff * unit.angstroms)
-        else:
-            gb_force.setNonbondedMethod(openmm.GBSAOBCForce.NoCutoff)
+        cutoff_nm = (self.nonbonded_cutoff * unit.angstroms).value_in_unit(unit.nanometer) \
+            if self.nonbonded_cutoff is not None else None
 
-        gb_force.setSolventDielectric(self.solvent_dielectric)
-        gb_force.setSoluteDielectric(self.solute_dielectric)
-        gb_force.setSurfaceAreaEnergy(0.0)
+        force_class_name = self._GB_MODEL_FORCE_CLASS_NAME.get(self.gb_model, 'GBSAOBC2Force')
+        force_class = getattr(customgbforces, force_class_name)
+        gb_force = force_class(
+            solventDielectric=self.solvent_dielectric,
+            soluteDielectric=self.solute_dielectric,
+            SA=None, cutoff=cutoff_nm, kappa=kappa,
+        )
+        # NOTE: every customgbforces addParticle (inherited from
+        # CustomAmberGBForceBase) already subtracts the 0.009 nm OBC offset
+        # from the radius AND multiplies scale by that offset-subtracted
+        # radius internally -- confirmed against OpenMM's own
+        # getStandardParameters()/ParmEd's own createSystem(implicitSolvent=
+        # OBC2), both of which pass raw (un-offset, un-multiplied) radius/
+        # scale straight through. Pre-applying both transformations here
+        # ourselves would apply them TWICE, corrupting every Born radius and
+        # roughly doubling the magnitude of the resulting GB energy --
+        # verified numerically against a direct sander (Amber igb=5)
+        # single-frame energy: the double-applied version gave -4992
+        # kcal/mol vs sander's -2482 kcal/mol for the same structure, while
+        # raw (correctly single-applied) parameters give -2473 kcal/mol, a
+        # 0.4% match.
+        # GBn2 (Amber igb=8) is the one model in this family whose
+        # addParticle takes 6 parameters, not 3: [charge, radius, screen,
+        # alpha, beta, gamma] -- the extra three are fixed, element- and
+        # nucleic-acid-vs-protein-dependent Born-radius correction
+        # coefficients (GBSAGBn2Force._atom_params/_atom_params_nucleic),
+        # NOT derived from this structure's own charges/radii the way the
+        # first three parameters are. Confirmed directly against OpenMM's
+        # own GBSAGBn2Force.getStandardParameters() classmethod, which
+        # looks these up the same way (by element, and by whether the
+        # atom's residue name is one of the 8 standard RNA/DNA residue
+        # names) rather than exposing them as configurable per-run inputs.
+        # GBn/GBn2 also use a model-specific per-element `screen` value
+        # (OpenMM's internal `_SCREEN_PARAMETERS` element-keyed table),
+        # NOT this structure's own prmtop-derived `atom.screen` -- confirmed
+        # against OpenMM's own getStandardParameters() for each class:
+        # OBC1/OBC2/HCT read `_screen_parameter(atom)[0]` (the "standard"
+        # index, consistent with reusing the prmtop's own mbondi/mbondi2
+        # SCREEN values), but GBn reads index [1] and GBn2 reads index [2]
+        # (protein) or [3] (nucleic acid) -- all three noticeably different
+        # from index 0 for every element (e.g. hydrogen: 0.85 at index 0 vs
+        # 1.09/1.43/1.70 at indices 1/2/3). Reusing this structure's own
+        # `_get_gb_scale`/`atom.screen` for GBn/GBn2 was silently using the
+        # wrong screen values for every atom -- confirmed as the root cause
+        # of a real ~13 kcal/mol discrepancy against Amber MMPBSA.py for
+        # GBn2 on a real system (GBn's error was smaller, ~3 kcal/mol,
+        # since its screen values happen to be numerically closer to the
+        # standard set than GBn2's).
+        is_gbn = force_class_name == 'GBSAGBnForce'
+        is_gbn2 = force_class_name == 'GBSAGBn2Force'
         for i, atom in enumerate(atoms_list):
             charge = charges[i]
-            radius = self._get_gb_radius(atom) * 0.1
-            scale = self._get_gb_scale(atom)
-            gb_force.addParticle(charge, radius, scale)
+            raw_radius_nm = self._get_gb_radius(atom) * 0.1
+            if is_gbn or is_gbn2:
+                residue_name = getattr(getattr(atom, 'residue', None), 'name', None)
+                is_nucleic = residue_name in customgbforces._NUCLEIC_ACID_RESIDUES
+                screen_index = 1 if is_gbn else (3 if is_nucleic else 2)
+                raw_scale = customgbforces._screen_parameter(atom)[screen_index]
+            else:
+                raw_scale = self._get_gb_scale(atom)
+            params = [charge, raw_radius_nm, raw_scale]
+            if is_gbn2:
+                element = getattr(atom, 'element', None)
+                table = (customgbforces.GBSAGBn2Force._atom_params_nucleic if is_nucleic
+                         else customgbforces.GBSAGBn2Force._atom_params)
+                params += list(table.get(element, customgbforces.GBSAGBn2Force._default_atom_params))
+            gb_force.addParticle(params)
+        try:
+            gb_force.finalize()
+        except AttributeError:
+            pass
+        log.info(f"Built GB force ({force_class_name}, matching gb_model='{self.gb_model}'"
+                 f"{f', kappa={kappa:.4f} nm^-1' if use_salt else ''}) "
+                 f"for salt_concentration={conc} M.")
         return gb_force
 
     def _get_gb_radius(self, atom):
@@ -3749,7 +3823,35 @@ class GBSACalculator(GBSAForceManager):
                      if self.nonbonded_cutoff is not None:
                          nb_method = app.CutoffNonPeriodic
                          nb_cutoff = self.nonbonded_cutoff * unit.angstroms
-                         
+
+                     # Ensure this struct's GB radii match self.gb_model,
+                     # independent of whatever radius set its own source
+                     # prmtop happened to be built with. This matters
+                     # specifically for receptor_struct/ligand_struct when
+                     # receptor_topology/ligand_topology point at
+                     # SEPARATELY-loaded prmtop files (see the
+                     # `pmd.load_file(receptor_topology)`/
+                     # `pmd.load_file(ligand_topology)` branches above) --
+                     # those never go through StructureManager.load_complex,
+                     # so without this they'd keep whatever radii their own
+                     # file has even after load_complex's changeRadii call
+                     # updated complex_struct's radii to match gb_model,
+                     # producing a complex/receptor/ligand radii MISMATCH
+                     # (confirmed: this desync alone changed a real system's
+                     # OBC2 binding energy from -27.6 to -236.0 kcal/mol --
+                     # not a gb_model effect, just complex and
+                     # receptor+ligand disagreeing about GB radii on the
+                     # same atoms). Applying it uniformly here, to every
+                     # struct this function builds a System from, keeps all
+                     # three consistent regardless of where each struct
+                     # originated.
+                     try:
+                         from parmed.tools import changeRadii
+                         radii_set = StructureManager._GB_MODEL_RADII_SET.get(self.gb_model, 'mbondi2')
+                         changeRadii(struct, radii_set).execute()
+                     except Exception as e:
+                         log.warning(f"Failed to apply GB radii set to {name} structure: {e}.")
+
                      sys = StructureManager.create_openmm_system(
                          struct, 
                          implicitSolvent=self.gbsa_manager.current_app_model,

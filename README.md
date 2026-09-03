@@ -41,7 +41,7 @@ conda install -c conda-forge openmm mdtraj rdkit parmed
 pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
 
 # Install the package (requires OpenMM 8.5.0beta from openmm_rc)
-conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.7
+conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.8
 ```
 
 ---
@@ -121,15 +121,14 @@ In your output directory you will find:
 ## 🧪 Running Tests
 
 ```bash
-# Run the full comprehensive test suite (48 configs)
-python test/run_comprehensive_tests.py
-
-# Run a single named test
-python test/run_comprehensive_tests.py test_gb_obc2
-
-# All configs are in:
-# test/configs/comprehensive/
+# Run the automated unit test suite
+python -m pytest test/unit -v
 ```
+
+Self-contained, independently-verified end-to-end validation cases (real
+protein-ligand, protein-protein, and nucleic-acid systems, each checked
+against an independent Amber MMPBSA.py reference) live under `test/configs/`
+-- see each subdirectory's `README.md` for how to fetch its data and run it.
 
 ---
 

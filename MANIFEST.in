@@ -3,3 +3,12 @@ include mmgbsa/*.yaml
 include mmgbsa/*.yml
 include mmgbsa/*.txt
 include mmgbsa/*.md
+
+prune mmgbsa/core
+prune mmgbsa_results
+prune mmgbsa_results_v0.0.1
+prune .mmgbsa_cache
+global-exclude *.egg-info
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
