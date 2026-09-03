@@ -1,0 +1,64 @@
+name: Build TprParser wheel for macOS
+
+# Manually-triggered, one-off builder: TprParser (vendored, GPLv3, optional
+# native .tpr support -- see THIRD_PARTY_LICENSES.md) only publishes Linux
+# and Windows wheels on PyPI. This job compiles its last source release
+# (0.1.57; newer PyPI releases ship wheel-only, no sdist) from source on a
+# macOS runner and uploads the resulting wheel as a build artifact, to be
+# reviewed and committed into conda-recipe/wheels/ by hand. Not part of the
+# regular test/release pipeline -- run on demand when adding macOS TPR
+# support or bumping the TprParser version.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tprparser-version:
+        description: "TprParser sdist version to build (must have a source release on PyPI)"
+        required: true
+        default: "0.1.57"
+
+jobs:
+  build:
+    name: Build (Python ${{ matrix.python-version }}, ${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.10"
+            arch: arm64
+            runs-on: macos-14
+          - python-version: "3.10"
+            arch: x86_64
+            runs-on: macos-13
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip build numpy
+
+      - name: Download TprParser sdist
+        run: pip download --no-deps --no-binary :all: --no-build-isolation "TprParser==${{ github.event.inputs.tprparser-version }}" -d src
+
+      - name: Extract sdist
+        run: |
+          cd src
+          tar xzf TprParser-*.tar.gz
+          rm TprParser-*.tar.gz
+
+      - name: Build wheel
+        run: |
+          cd src/TprParser-${{ github.event.inputs.tprparser-version }}
+          python -m build --wheel --no-isolation --outdir "$GITHUB_WORKSPACE/dist"
+
+      - name: Show built wheel
+        run: ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tprparser-wheel-macos-${{ matrix.arch }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+          if-no-files-found: error
