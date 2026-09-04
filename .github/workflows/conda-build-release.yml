@@ -86,16 +86,18 @@ jobs:
             echo "    max_pin: x.x"
           } > "$(pwd)/variant_config.yaml"
 
-          # bash -el {0} is a login shell, but conda init's hook is only
-          # sourced by interactive shells reading .bashrc -- source it
-          # explicitly so `conda activate` (a shell function) is defined.
-          source "${CONDA}/etc/profile.d/conda.sh"
-          conda activate buildenv
+          # `conda` itself (condabin/conda) always runs on the *base*
+          # env's Python regardless of `conda activate`, so `conda build`
+          # only resolves as a subcommand if conda-build is installed in
+          # base -- installing it into buildenv alone (as above) is not
+          # enough. conda-build does also drop an env-scoped standalone
+          # `conda-build` executable in that env's own bin/, though, so
+          # call that directly -- no activation needed or reliable here.
           echo "=== buildenv Python version ==="
-          python --version
+          "${ENV_PREFIX}/bin/python" --version
 
           echo "=== Actual build ==="
-          conda build conda-recipe \
+          "${ENV_PREFIX}/bin/conda-build" conda-recipe \
               -c conda-forge/label/openmm_rc -c conda-forge \
               --output-folder "$(pwd)/build_output" \
               --no-test \
@@ -116,10 +118,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          source "${CONDA}/etc/profile.d/conda.sh"
-          conda activate buildenv
-          python -m conda_index "$(pwd)/build_output"
-          conda deactivate
+          ENV_PREFIX="${CONDA}/envs/buildenv"
+          "${ENV_PREFIX}/bin/python" -m conda_index "$(pwd)/build_output"
 
           conda create -y -n smoke \
             -c "$(pwd)/build_output" \
