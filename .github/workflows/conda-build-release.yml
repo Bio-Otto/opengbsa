@@ -168,7 +168,6 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: false
-          python-version: '3.11'
           channels: conda-forge
           channel-priority: strict
           auto-activate: true
