@@ -1,0 +1,223 @@
+name: Conda Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (example: v0.0.8)'
+        required: true
+        type: string
+      publish_to_anaconda:
+        description: 'Upload package to anaconda.org'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-and-smoke:
+    name: Build (${{ matrix.label }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10']
+        os: [ubuntu-latest, macos-14]
+        include:
+          - os: ubuntu-latest
+            label: linux-64
+          - os: macos-14
+            label: osx-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: false
+          channels: conda-forge/label/openmm_rc,conda-forge
+          channel-priority: strict
+          auto-activate: true
+          activate-environment: base
+          miniconda-version: latest
+          conda-remove-defaults: true
+
+      - name: Install build tooling
+        shell: bash -el {0}
+        run: |
+          pip uninstall conda-content-trust -y || true
+          # Isolated env with the exact target Python so conda-build inherits
+          # the correct Python version without touching the base env.
+          conda create -y -n buildenv \
+            -c conda-forge/label/openmm_rc -c conda-forge \
+            "python=${{ matrix.python-version }}" conda-build anaconda-client
+          conda run -n buildenv python --version
+
+      - name: Build conda package
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          mkdir -p build_output
+
+          # conda-forge-pinning ships its own conda_build_config.yaml that
+          # keeps overriding our python variant -- remove it so ours wins.
+          ENV_PREFIX="${CONDA}/envs/buildenv"
+          find "$ENV_PREFIX" -name "conda_build_config.yaml" 2>/dev/null | while read -r f; do
+            echo "Removing pinning file: $f"
+            rm -f "$f"
+          done
+
+          {
+            echo "python:"
+            echo "  - \"${{ matrix.python-version }}\""
+            echo "pin_run_as_build:"
+            echo "  python:"
+            echo "    min_pin: x.x"
+            echo "    max_pin: x.x"
+          } > "$(pwd)/variant_config.yaml"
+
+          echo "=== buildenv Python version ==="
+          conda run -n buildenv python --version
+
+          echo "=== Actual build ==="
+          conda run --no-capture-output -n buildenv \
+            conda build conda-recipe \
+              -c conda-forge/label/openmm_rc -c conda-forge \
+              --output-folder "$(pwd)/build_output" \
+              --no-test \
+              --python "${{ matrix.python-version }}" \
+              --exclusive-config-files "$(pwd)/variant_config.yaml"
+          find build_output -type f
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: conda-pkg-${{ matrix.label }}-py${{ matrix.python-version }}
+          path: build_output/**/*.conda
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Smoke test — install from build output
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+
+          conda run -n buildenv python -m conda_index "$(pwd)/build_output"
+
+          conda create -y -n smoke \
+            -c "$(pwd)/build_output" \
+            -c conda-forge/label/openmm_rc -c conda-forge \
+            "opengbsa" "python=${{ matrix.python-version }}"
+
+          conda run -n smoke python -c "import openmm; print('openmm', openmm.__version__)"
+          conda run -n smoke python -c "from mmgbsa._version import __version__; print('opengbsa', __version__)"
+          conda run -n smoke opengbsa --help
+          conda run -n smoke opengbsa --version
+
+  release:
+    name: Publish release and package
+    needs: [build-and-smoke]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve tag name
+        id: tag
+        shell: bash
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "name=${TAG}" >> "$GITHUB_OUTPUT"
+          # Detect PEP440 pre-release suffixes: aN, bN, rcN, .devN
+          if [[ "${TAG}" =~ ([0-9](a|b|rc)[0-9]|\.dev[0-9]) ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected pre-release tag: ${TAG}"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: conda-pkg-*
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f
+
+      - name: Setup Miniconda for upload
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: false
+          python-version: '3.11'
+          channels: conda-forge
+          channel-priority: strict
+          auto-activate: true
+          activate-environment: base
+          miniconda-version: latest
+          conda-remove-defaults: true
+
+      - name: Upload packages to anaconda.org
+        if: github.event_name == 'push' || github.event.inputs.publish_to_anaconda == 'true'
+        shell: bash -el {0}
+        env:
+          ANACONDA_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_API_TOKEN }}
+        run: |
+          TOKEN="${ANACONDA_TOKEN:-$ANACONDA_API_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "No Anaconda token found. Set ANACONDA_TOKEN or ANACONDA_API_TOKEN in repository secrets."
+            exit 1
+          fi
+
+          pip uninstall conda-content-trust -y || true
+          conda install -y anaconda-client
+          export BINSTAR_TOKEN="$TOKEN"
+          export ANACONDA_API_TOKEN="$TOKEN"
+
+          echo "Checking token..."
+          binstar whoami || true
+
+          mapfile -t PACKAGES < <(find artifacts -type f \( -name "opengbsa-*.conda" -o -name "opengbsa-*.tar.bz2" \) | sort -u)
+          if [ "${#PACKAGES[@]}" -eq 0 ]; then
+            echo "No packages found to upload"
+            exit 1
+          fi
+
+          # Pre-release tags upload to the `beta` label so default channel
+          # users don't get them automatically; opt in via -c bio-otto/label/beta.
+          UPLOAD_LABEL_ARGS=()
+          if [ "${{ steps.tag.outputs.prerelease }}" = "true" ]; then
+            UPLOAD_LABEL_ARGS=(--label beta)
+            echo "Pre-release detected; uploading to label 'beta'."
+          fi
+
+          echo "Uploading ${#PACKAGES[@]} package(s)..."
+          for PACKAGE in "${PACKAGES[@]}"; do
+            echo "  -> $PACKAGE"
+            binstar upload -u bio-otto "${UPLOAD_LABEL_ARGS[@]}" "$PACKAGE" --skip-existing
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          files: artifacts/**/*.conda
+          overwrite_files: true
+          fail_on_unmatched_files: false
+          generate_release_notes: true
+          prerelease: ${{ steps.tag.outputs.prerelease == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

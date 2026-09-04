@@ -1,32 +1,30 @@
+{% set name = "opengbsa" %}
+{% set version = "0.0.8" %}
+
 package:
-  name: opengbsa
-  version: "0.0.8"
+  name: "{{ name|lower }}"
+  version: "{{ version }}"
 
 source:
   path: ..
 
-channels:
-  - conda-forge/label/openmm_rc
-  - conda-forge
-
 build:
-  noarch: python
   number: 0
   entry_points:
     - opengbsa = mmgbsa.cli:main
   script: |
-    pip install --no-index --find-links=conda-recipe/wheels TprParser
-    pip install . --no-deps
+    bash "{{ RECIPE_DIR }}/install_tprparser.sh" || true
+    python -m pip install . --no-deps --ignore-installed -vv
 
 requirements:
   host:
-    - python =3.10
+    - python
     - pip
     - setuptools
     - wheel
     - numpy >=1.21.0,<2.0.0
   run:
-    - python =3.10
+    - python
     - openmm ==8.5.0beta
     - mdtraj >=1.9.0
     - openff-toolkit >=0.14.0
@@ -43,19 +41,37 @@ requirements:
     - pathlib2 >=2.3.0
     - plotly >=5.0.0
 
+test:
+  commands:
+    - opengbsa --help
+    - opengbsa --version
+    - python -c "from mmgbsa._version import __version__; assert __version__ == '{{ version }}'"
+  imports:
+    - mmgbsa
+
 about:
-  home: https://github.com/Bio-Otto/opengbsa
+  home: "https://github.com/Bio-Otto/opengbsa"
   license: MIT
+  license_family: MIT
   license_file:
     - LICENSE
     - THIRD_PARTY_LICENSES.md
   summary: "OpenGBSA - A comprehensive MM/GBSA analysis package with advanced features"
   description: |
-    OpenGBSA is a comprehensive MM/GBSA analysis package with advanced features including entropy analysis, per-residue decomposition, and YAML-based configuration.
+    OpenGBSA is a comprehensive and automated tool for Binding Free Energy,
+    Energy Decomposition, and Entropy calculations for protein-ligand
+    complexes derived from molecular dynamics simulations. Supports GROMACS
+    (.tpr, .top, .gro), Amber (.prmtop), and raw PDB + trajectory inputs.
 
     Note: native GROMACS .tpr support is provided by an optional, vendored
-    GPLv3-licensed component (TprParser); see THIRD_PARTY_LICENSES.md.
+    GPLv3-licensed component (TprParser), installed automatically when a
+    matching wheel is bundled for your platform/Python version -- see
+    THIRD_PARTY_LICENSES.md. Every other input format and feature works
+    without it.
+
+  dev_url: "https://github.com/Bio-Otto/opengbsa"
+  doc_url: "https://opengbsa.readthedocs.io/"
 
 extra:
   recipe-maintainers:
-    - bio-otto 
+    - Bio-Otto
