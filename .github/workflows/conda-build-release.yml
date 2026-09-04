@@ -86,12 +86,12 @@ jobs:
             echo "    max_pin: x.x"
           } > "$(pwd)/variant_config.yaml"
 
+          conda activate buildenv
           echo "=== buildenv Python version ==="
-          conda run -n buildenv python --version
+          python --version
 
           echo "=== Actual build ==="
-          conda run --no-capture-output -n buildenv \
-            conda build conda-recipe \
+          conda build conda-recipe \
               -c conda-forge/label/openmm_rc -c conda-forge \
               --output-folder "$(pwd)/build_output" \
               --no-test \
@@ -112,7 +112,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          conda run -n buildenv python -m conda_index "$(pwd)/build_output"
+          conda activate buildenv
+          python -m conda_index "$(pwd)/build_output"
+          conda deactivate
 
           conda create -y -n smoke \
             -c "$(pwd)/build_output" \
