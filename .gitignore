@@ -250,3 +250,7 @@ test/manual/
 test/configs/*/raw/
 test/configs/*/prepared/
 test/configs/*/results/
+
+# Transient configs written by the manuscript speed benchmark
+# (~/Desktop/OpenGBSA_Article/analysis/run_speed_benchmark.sh)
+.bench_*.yaml
