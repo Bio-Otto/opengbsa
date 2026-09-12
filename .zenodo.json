@@ -1,0 +1,41 @@
+{
+  "title": "OpenGBSA: an OpenMM-native, multi-format MM/GBSA analysis package",
+  "description": "<p>OpenGBSA computes Molecular Mechanics/Generalized Born Surface Area (MM/GBSA) binding free energies from molecular dynamics trajectories. It is built natively on OpenMM rather than wrapping an external engine, so it runs on CUDA and OpenCL GPUs and requires no AmberTools installation.</p><p><strong>Features:</strong> five Generalized Born models (HCT, OBC1, OBC2, GBn, GBn2), two surface-area models (ACE, LCPO), three entropy methods (interaction entropy, quasi-harmonic, normal mode), and per-residue energy decomposition. Input is accepted from four MD ecosystems: GROMACS (.tpr/.top/.gro), Amber (.prmtop), CHARMM/NAMD (.psf), and plain PDB plus trajectory. Binding modes cover protein-ligand, protein-protein, and protein-nucleic-acid complexes.</p><p><strong>Validation:</strong> binding enthalpies agree with the Amber MMPBSA.py reference implementation to Pearson r = 1.00 (RMSD 0.4 kcal/mol) across 18 replicas, and to r = 1.0000 (RMSD 0.09 kcal/mol) on an independent third-party dataset. Per-residue decomposition agrees to r = 1.000 across 4320 residues.</p>",
+  "creators": [
+    {
+      "name": "Özdemir, H. Ibrahim",
+      "orcid": "0000-0002-9275-1324"
+    }
+  ],
+  "license": "MIT",
+  "upload_type": "software",
+  "access_right": "open",
+  "keywords": [
+    "MM/GBSA",
+    "binding free energy",
+    "molecular dynamics",
+    "OpenMM",
+    "generalized Born",
+    "computational chemistry",
+    "drug design",
+    "protein-ligand interactions",
+    "energy decomposition"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/Bio-Otto/opengbsa",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://opengbsa.readthedocs.io/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.22139199",
+      "relation": "references",
+      "scheme": "doi"
+    }
+  ]
+}
