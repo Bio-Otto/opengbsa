@@ -12,6 +12,151 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
+def reimage_molecules(traj):
+    """
+    Re-image a trajectory across periodic boundaries, equivalent to
+    `gmx trjconv -pbc mol -center` (centered on the largest molecule(s)),
+    with no external tool required.
+
+    A raw MD trajectory (e.g. GROMACS XTC) does not guarantee that molecules
+    stay whole or centered -- as the simulation progresses a protein or
+    ligand can drift and get wrapped to the opposite side of the periodic
+    box, which does not change the physics but corrupts every energy
+    calculation done directly on those raw coordinates (see
+    TrajectoryProcessor.load_and_process for the numerical evidence).
+
+    The wrapping is implemented here in numpy, bond-by-bond per frame, and
+    molecules are placed in the image nearest the anchor molecules
+    (cpptraj `autoimage` semantics), rather than relying on mdtraj's
+    `image_molecules()` or `gmx trjconv -pbc mol`, for reasons observed on
+    real production data:
+
+    1. **Anchor heuristic.** mdtraj's default `guess_anchor_molecules()`
+       heuristic is degenerate for systems with few molecules: with <= 9
+       molecules the cutoff equals the size of the largest molecule, so no
+       molecule can ever qualify (observed on a 3-chain antibody/PD-1
+       complex: "Could not find any anchor molecules ... more than 1849
+       atoms").
+
+    2. **Frame-to-frame continuity.** mdtraj's C-level imaging assumes the
+       first frame is whole and unwraps later frames relative to previous
+       ones, which leaves molecules split across the box when a molecule
+       jumps more than half a box between saved frames (observed at 41 ns
+       of that same complex: an intra-residue HIS CB-CG bond left 10 nm
+       long). Per-frame bond-by-bond wrapping has no such assumption.
+
+    3. **Bound-partner separation.** `trjconv -pbc mol` wraps each
+       molecule's center of mass into the primary cell independently; when
+       a multi-chain complex straddles a box boundary this can place a
+       chain on the opposite side of the box from its bound partners
+       (observed at 34/41/68 ns of that same complex, where trjconv's
+       output put one chain ~9.5 nm away from the other two, corrupting
+       inter-chain energies). Placing every molecule in the image nearest
+       the anchors keeps the complex intact in every frame.
+
+    Steps: rebuild a standard bond graph if the topology has none (the
+    temporary PDB written by TprLoader carries no CONECT records); walk
+    every molecule's bond tree to make it whole; place each molecule in the
+    image nearest the anchor molecules; then shift the anchors' center of
+    mass to the box center (the `-center` part of trjconv).
+
+    Parameters
+    ----------
+    traj : md.Trajectory
+        Trajectory with periodic unit cell information.
+
+    Returns
+    -------
+    md.Trajectory
+        Re-imaged copy; the input trajectory is not modified.
+    """
+    import numpy as np
+    from collections import deque
+
+    top = traj.topology
+
+    # 1) Rebuild a standard bond graph if the topology has none.
+    if top.n_bonds == 0:
+        try:
+            top.create_standard_bonds()
+        except Exception as e:
+            log.warning(f"Could not rebuild standard bonds ({e}); "
+                        f"molecule imaging may fail.")
+
+    molecules = list(top.find_molecules())
+    if not molecules:
+        raise ValueError("Trajectory topology has no molecules (no usable "
+                         "bond graph); cannot re-image.")
+
+    box = traj.unitcell_lengths
+    if box is None:
+        raise ValueError("This trajectory does not define a periodic unit cell")
+
+    result = traj[:]
+    xyz = result.xyz
+    n_frames = xyz.shape[0]
+
+    bonds = np.asarray([[b0.index, b1.index] for b0, b1 in top.bonds],
+                       dtype=np.int64)
+    mol_indices = [np.asarray([a.index for a in m], dtype=np.int64)
+                   for m in molecules]
+
+    # Anchors: largest molecule plus anything at least half its size --
+    # robust for multi-chain complexes whose inter-chain links (e.g.
+    # engineered disulfides) are absent from the standard bond set.
+    largest = max(len(m) for m in molecules)
+    anchors = [m for m in molecules if len(m) >= max(1, largest // 2)]
+    anchor_indices = sorted({a.index for m in anchors for a in m})
+
+    if len(bonds):
+        # adjacency for bond-tree walking
+        n_atoms = xyz.shape[1]
+        adj = [[] for _ in range(n_atoms)]
+        for b0, b1 in bonds:
+            adj[b0].append(b1)
+            adj[b1].append(b0)
+
+        # 2) Per-frame, per-molecule wrapping (`-pbc mol`): walk each
+        # molecule's bond tree from an arbitrary root and shift every atom
+        # into the primary image of its already-placed bonded neighbour.
+        roots = [int(mi[0]) for mi in mol_indices]
+        for f in range(n_frames):
+            L = box[f]
+            for root, mi in zip(roots, mol_indices):
+                visited = {root}
+                queue = deque([root])
+                while queue:
+                    i = queue.popleft()
+                    xi = xyz[f, i]
+                    for j in adj[i]:
+                        if j not in visited:
+                            visited.add(j)
+                            delta = xyz[f, j] - xi
+                            xyz[f, j] -= np.round(delta / L) * L
+                            queue.append(j)
+
+            # Place every molecule in the image NEAREST the anchor
+            # molecules' center of mass (cpptraj `autoimage` behaviour).
+            # Wrapping each molecule's COM into the primary cell instead
+            # (what `trjconv -pbc mol` does) can separate bound partners:
+            # when a multi-chain complex straddles a box boundary, chains
+            # are wrapped into opposite sides of the box and inter-chain
+            # distances become box-length large (observed at 34/41/68 ns of
+            # a 3-chain antibody/PD-1 trajectory, where trjconv's output
+            # put one chain ~9.5 nm from the other two).
+            anchor_com = xyz[f, anchor_indices].mean(axis=0)
+            for mi in mol_indices:
+                com = xyz[f, mi].mean(axis=0)
+                xyz[f, mi] -= np.round((com - anchor_com) / L) * L
+
+    # 3) Center anchor COM in the box (the `-center` part of trjconv).
+    com = xyz[:, anchor_indices, :].mean(axis=1)
+    xyz += (box / 2.0 - com)[:, np.newaxis, :]
+
+    return result
+
+
 class TrajectoryProcessor:
     """
     Handles loading, slicing, and processing (stripping) of trajectories.
@@ -219,7 +364,7 @@ class TrajectoryProcessor:
         # cpptraj `autoimage` does before MMPBSA.py ever sees a trajectory.
         if reimage:
             try:
-                traj = traj.image_molecules(inplace=False)
+                traj = reimage_molecules(traj)
             except Exception as e:
                 log.warning(f"image_molecules() failed ({e}); proceeding with "
                             f"un-imaged coordinates. Energies may be biased if "

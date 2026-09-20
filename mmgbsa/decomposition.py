@@ -27,6 +27,7 @@ from openmm import app, openmm, unit
 import mdtraj as md
 import parmed
 from .mmgbsa_core import GBSACalculator
+from .trajectory import reimage_molecules
 
 from .logger import ToolLogger
 
@@ -342,7 +343,7 @@ class PerResidueDecomposition:
             # decomposition silently re-image the same trajectory anyway.
             if getattr(self.mmgbsa_calculator, 'reimage_trajectory', True):
                 try:
-                    decomp_traj = decomp_traj.image_molecules(inplace=False)
+                    decomp_traj = reimage_molecules(decomp_traj)
                 except Exception as e:
                     log.warning(f"image_molecules() failed ({e}); proceeding with "
                                 f"un-imaged coordinates. Per-residue energies may be "

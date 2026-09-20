@@ -90,7 +90,7 @@ except ImportError:
 # New Modular Imports
 from .inputs import InputManager, EngineMode
 from .topology import TopologyLoader
-from .trajectory import TrajectoryProcessor
+from .trajectory import TrajectoryProcessor, reimage_molecules
 from openmm import app, openmm, unit
 try:
     from openff.toolkit.topology import Molecule
@@ -3370,7 +3370,7 @@ class GBSACalculator(GBSAForceManager):
                 # corrupts every downstream vdW/electrostatic energy.
                 if self.reimage_trajectory:
                     try:
-                        clean_xtc = clean_xtc.image_molecules(inplace=False)
+                        clean_xtc = reimage_molecules(clean_xtc)
                     except Exception as e:
                         log.warning(f"image_molecules() failed on distilled trajectory ({e}); "
                                     f"proceeding with un-imaged coordinates.")
@@ -4210,7 +4210,7 @@ class GBSACalculator(GBSAForceManager):
                 traj = md.load(xtc_file, top=final_pdb_path)
                 if self.reimage_trajectory:
                     try:
-                        traj = traj.image_molecules(inplace=False)
+                        traj = reimage_molecules(traj)
                     except Exception as e2:
                         log.warning(f"image_molecules() failed on fallback trajectory load ({e2}); "
                                     f"proceeding with un-imaged coordinates.")
