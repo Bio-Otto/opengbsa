@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - 'v*'
+  # PRs to main build and smoke-test both platforms, so packaging problems
+  # show up before a tag; the release job below never runs for them.
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_tag:
@@ -17,7 +21,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -134,7 +138,11 @@ jobs:
   release:
     name: Publish release and package
     needs: [build-and-smoke]
+    # Tag pushes and manual runs only: a PR never uploads or creates a release.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub release
 
     steps:
       - name: Resolve tag name
