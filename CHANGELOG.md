@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-10-18
+
 ### Changed
 - **GPU runs are 10–12× faster.** On CUDA and OpenCL the energy evaluation itself takes about 2 ms per frame, but more than 95% of each frame went to Python work around it: positions were set from per-atom `Quantity` lists, every frame was copied into a new mdtraj `Trajectory` (`traj[i]`), and Shrake–Rupley SASA was computed for the progress printout every tenth frame. Positions are now set from numpy arrays, frames are read as coordinate views (`traj.xyz[i]`), and the SASA diagnostic is printed for the first frame only. Calculation time for 100 frames on an RTX 2080 SUPER: 2OOB 7.0 → 0.7 s, 1GCQ 7.3 → 0.7 s, IRF11 12.4 → 1.1 s, 3dd2 19.5 → 1.6 s. Per-frame results are unchanged (largest difference 4e-12 kcal/mol).
 - The CPU worker path no longer copies a `Trajectory` per frame when preparing its tasks (1GCQ, 8 workers: 18.0 → 16.4 s; results bit-identical).

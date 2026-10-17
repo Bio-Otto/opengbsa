@@ -10,8 +10,8 @@ authors:
 repository-code: "https://github.com/bio-otto/opengbsa"
 url: "https://opengbsa.readthedocs.io/"
 license: MIT
-version: 0.0.9
-date-released: "2026-10-17"
+version: 0.0.10
+date-released: "2026-10-18"
 keywords:
   - molecular dynamics
   - MM/GBSA
