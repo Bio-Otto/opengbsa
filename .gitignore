@@ -250,6 +250,12 @@ test/manual/
 test/configs/*/raw/
 test/configs/*/prepared/
 test/configs/*/results/
+# Derived Amber topologies and solvent-free trajectories built by
+# prepare_amber.py / make_configs.py (antibody_vrc01_test), plus run logs
+test/configs/*/amber/
+test/configs/*/amber_run/
+test/configs/*/logs/
+test/configs/*/params/
 
 # Transient configs written by the manuscript speed benchmark
 # (~/Desktop/OpenGBSA_Article/analysis/run_speed_benchmark.sh)
