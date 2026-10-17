@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-10-17
+
+### Added
+- **Built-in trajectory re-imaging, equivalent to `gmx trjconv -pbc mol -center` with no external tools.** The new `reimage_molecules()` in `mmgbsa/trajectory.py` makes every molecule whole bond by bond, places each molecule in the periodic image nearest the anchor molecules (cpptraj `autoimage` semantics) and centres the anchors in the box. Multi-chain anchors (for example an antibody's heavy and light chains bound to an antigen) are placed one after another so that they stay together, so a complex that straddles a box boundary is never split between chains. All re-imaging paths use it: `TrajectoryProcessor.load_and_process`, per-residue decomposition and Native Mode. When a topology has no bonds (the temporary PDB written by the TPR loader has no CONECT records), a standard bond graph is rebuilt first. Regression test: `test/unit/test_reimage_multichain.py`.
+
+### Fixed
+- **`reimage_trajectory: true` could silently leave coordinates un-imaged.** mdtraj's anchor heuristic finds no anchor molecule in systems with nine or fewer molecules, and its imaging assumes frame-to-frame continuity, so a molecule that moved more than half a box between saved frames stayed split. In both cases energies were computed on broken molecules without a warning. Re-imaging now goes through the new implementation above.
+- **GROMACS `.tpr` topologies with CHARMM36 crashed in PPI mode** with `IndexError` in ParmEd's `Structure.copy` inside `StructureManager.split_components`: Urey–Bradley type indices from TPR-origin structures can exceed the deduplicated type list. Urey–Bradley terms are now cleared in place on the complex before splitting. They are intramolecular, so they cancel exactly in the complex − receptor − ligand difference.
+
+### Changed
+- **Performance: each force group is evaluated once per frame.** The per-frame energies used 32 `getState()` calls that asked for the total and for individual force groups, so the expensive GB, non-polar and nonbonded forces ran two (complex) or three (receptor, ligand) times per frame. `_frame_energy_terms()` now evaluates every force group once and sums them for the total; the parallel CPU workers and the serial (GPU) loop share it. Also:
+  - each CPU worker gets `cpu_count // n_workers` OpenMM threads instead of all hardware threads each (an explicit `OPENMM_CPU_THREADS` is respected);
+  - frames are sent to the workers in chunks;
+  - the serial loop no longer computes three Shrake–Rupley SASAs per frame that were only printed every `print_interval` frames.
+
+  Measured on 100 frames (i9-9900K, RTX 2080 SUPER): CUDA 6.2–6.5× faster, CPU with 8 workers 2.1–2.2× faster. CPU energies are unchanged within OpenMM's run-to-run noise. CUDA binding energies are now closer to the CPU values, because bonded terms cancel exactly instead of being subtracted from large mixed-precision totals. Regression test: `test/unit/test_frame_energy_terms.py`.
+
 ## [0.0.8] - 2026-09-03
 
 ### Fixed
