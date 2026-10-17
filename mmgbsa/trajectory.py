@@ -53,13 +53,24 @@ def reimage_molecules(traj):
        (observed at 34/41/68 ns of that same complex, where trjconv's
        output put one chain ~9.5 nm away from the other two, corrupting
        inter-chain energies). Placing every molecule in the image nearest
-       the anchors keeps the complex intact in every frame.
+       the anchors avoids this -- PROVIDED the anchors are first brought into
+       a single image themselves (see 4).
+
+    4. **Anchors split across images.** When several chains qualify as
+       anchors and the complex straddles a box boundary, the anchors' mean
+       position must not be computed until the anchors share one image;
+       otherwise it lies between images and chains are placed half a box
+       apart. An earlier version did exactly that, and on antibody/PD-1
+       complexes separated the antibody from PD-1 by 25-52 A in 2.5-7% of
+       frames of trajectories that were intact before re-imaging.
 
     Steps: rebuild a standard bond graph if the topology has none (the
     temporary PDB written by TprLoader carries no CONECT records); walk
-    every molecule's bond tree to make it whole; place each molecule in the
-    image nearest the anchor molecules; then shift the anchors' center of
-    mass to the box center (the `-center` part of trjconv).
+    every molecule's bond tree to make it whole; bring the anchor molecules
+    into one image (largest first, each next one nearest the centre of those
+    already placed); place every other molecule in the image nearest the
+    anchors' centre; then shift the anchors' center of mass to the box center
+    (the `-center` part of trjconv).
 
     Parameters
     ----------
@@ -108,6 +119,11 @@ def reimage_molecules(traj):
     largest = max(len(m) for m in molecules)
     anchors = [m for m in molecules if len(m) >= max(1, largest // 2)]
     anchor_indices = sorted({a.index for m in anchors for a in m})
+    # Anchors as index arrays, largest first: the order in which they are
+    # brought into a common image in step 2b below.
+    anchor_mols = sorted((np.asarray([a.index for a in m], dtype=np.int64)
+                          for m in anchors), key=len, reverse=True)
+    anchor_set = set(anchor_indices)
 
     if len(bonds):
         # adjacency for bond-tree walking
@@ -136,17 +152,44 @@ def reimage_molecules(traj):
                             xyz[f, j] -= np.round(delta / L) * L
                             queue.append(j)
 
-            # Place every molecule in the image NEAREST the anchor
-            # molecules' center of mass (cpptraj `autoimage` behaviour).
-            # Wrapping each molecule's COM into the primary cell instead
-            # (what `trjconv -pbc mol` does) can separate bound partners:
-            # when a multi-chain complex straddles a box boundary, chains
-            # are wrapped into opposite sides of the box and inter-chain
-            # distances become box-length large (observed at 34/41/68 ns of
-            # a 3-chain antibody/PD-1 trajectory, where trjconv's output
-            # put one chain ~9.5 nm from the other two).
+            # 2b) Bring the ANCHORS into one image first. When a multi-chain
+            # complex straddles a box boundary, its chains sit in different
+            # periodic images; averaging them as they are gives a centre that
+            # belongs to none of them, and placing each chain nearest that
+            # point can put a bound chain a box length from its partners.
+            # This needs a complex that is large relative to the box (chain
+            # centres spread over ~L/2, e.g. an antibody Fv/PD-1 complex in a
+            # cubic box with 1 nm padding); compact complexes are unaffected,
+            # which is why it went unnoticed. Regression test:
+            # test/unit/test_reimage_multichain.py.
+            # This happened: on antibody/PD-1 complexes where all three chains
+            # qualify as anchors, the previous version (which averaged the
+            # anchors before placing them) separated the antibody from PD-1 by
+            # 25-52 A in 20/800 and 55/800 frames of trajectories that were
+            # intact in the raw coordinates -- zero interface energy, no
+            # warning; found by cross-validation against Amber MMPBSA.py.
+            # So: keep the largest anchor where it is, then place each further
+            # anchor in the image nearest the centre of those already placed.
+            placed = [anchor_mols[0]]
+            for mi in anchor_mols[1:]:
+                ref = xyz[f, np.concatenate(placed)].mean(axis=0)
+                com = xyz[f, mi].mean(axis=0)
+                xyz[f, mi] -= np.round((com - ref) / L) * L
+                placed.append(mi)
+
+            # 2c) Place every remaining molecule in the image NEAREST the
+            # (now coherent) anchor centre of mass (cpptraj `autoimage`
+            # behaviour). Wrapping each molecule's COM into the primary cell
+            # instead (what `trjconv -pbc mol` does) can separate bound
+            # partners: when a multi-chain complex straddles a box boundary,
+            # chains are wrapped into opposite sides of the box and
+            # inter-chain distances become box-length large (observed at
+            # 34/41/68 ns of a 3-chain antibody/PD-1 trajectory, where
+            # trjconv's output put one chain ~9.5 nm from the other two).
             anchor_com = xyz[f, anchor_indices].mean(axis=0)
             for mi in mol_indices:
+                if int(mi[0]) in anchor_set:
+                    continue
                 com = xyz[f, mi].mean(axis=0)
                 xyz[f, mi] -= np.round((com - anchor_com) / L) * L
 
