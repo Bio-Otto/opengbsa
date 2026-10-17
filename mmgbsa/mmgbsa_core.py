@@ -123,6 +123,23 @@ try:
 except ImportError:
     SystemGenerator = None
 
+if SystemGenerator is not None:
+    class _ProteinOnlySystemGenerator(SystemGenerator):
+        """SystemGenerator without a small-molecule template generator.
+
+        SystemGenerator loads its default OpenFF force field (~0.5 s) unless
+        small_molecule_forcefield=None, but with None its __init__ calls
+        add_molecules(None), which raises (openmmforcefields 0.14). Protein-only
+        systems never add molecules, so that call is skipped; everything else,
+        including create_system, is SystemGenerator's own."""
+
+        def add_molecules(self, molecules):
+            if molecules is None:
+                return
+            super().add_molecules(molecules)
+else:
+    _ProteinOnlySystemGenerator = None
+
 
 class StructureManager:
     """
@@ -1779,65 +1796,75 @@ class GBSACalculator(GBSAForceManager):
         # Load results
         df = pd.read_csv(results['output_file'])
         
-        # Generate plots
-        try:
-            import matplotlib.pyplot as plt
+        # Generate plots. run() and run_comprehensive() both call this report for
+        # the same per-frame CSV; the figure depends only on that CSV, so it is
+        # drawn once (a 600-dpi PNG costs ~1.7 s).
+        png_path = output_dir / 'energy_analysis.png'
+        csv_path = Path(results['output_file'])
+        plot_key = (str(csv_path.resolve()), csv_path.stat().st_mtime_ns, str(png_path.resolve()))
+        if getattr(self, '_energy_plot_key', None) == plot_key and png_path.exists():
+            print(f"✓ Energy plots up to date: {png_path}")
+        else:
+            try:
+                import matplotlib.pyplot as plt
             
-            # 1. Binding energy over time
-            plt.figure(figsize=(12, 8))
+                # 1. Binding energy over time
+                plt.figure(figsize=(12, 8))
             
-            plt.subplot(2, 2, 1)
-            plt.plot(df['frame'], df['binding_energy'])
-            plt.xlabel('Frame')
-            plt.ylabel('Binding Energy (kcal/mol)')
-            plt.title('Binding Energy vs Time')
-            plt.grid(True, alpha=0.3)
+                plt.subplot(2, 2, 1)
+                plt.plot(df['frame'], df['binding_energy'])
+                plt.xlabel('Frame')
+                plt.ylabel('Binding Energy (kcal/mol)')
+                plt.title('Binding Energy vs Time')
+                plt.grid(True, alpha=0.3)
             
-            # 2. Energy distribution
-            plt.subplot(2, 2, 2)
-            plt.hist(df['binding_energy'], bins=20, alpha=0.7, edgecolor='black')
-            plt.xlabel('Binding Energy (kcal/mol)')
-            plt.ylabel('Frequency')
-            plt.title('Binding Energy Distribution')
-            plt.grid(True, alpha=0.3)
+                # 2. Energy distribution
+                plt.subplot(2, 2, 2)
+                plt.hist(df['binding_energy'], bins=20, alpha=0.7, edgecolor='black')
+                plt.xlabel('Binding Energy (kcal/mol)')
+                plt.ylabel('Frequency')
+                plt.title('Binding Energy Distribution')
+                plt.grid(True, alpha=0.3)
             
-            # 3. Running average
-            plt.subplot(2, 2, 3)
-            running_avg = df['binding_energy'].expanding().mean()
-            plt.plot(df['frame'], running_avg)
-            plt.xlabel('Frame')
-            plt.ylabel('Running Average (kcal/mol)')
-            plt.title('Convergence Analysis')
-            plt.grid(True, alpha=0.3)
+                # 3. Running average
+                plt.subplot(2, 2, 3)
+                running_avg = df['binding_energy'].expanding().mean()
+                plt.plot(df['frame'], running_avg)
+                plt.xlabel('Frame')
+                plt.ylabel('Running Average (kcal/mol)')
+                plt.title('Convergence Analysis')
+                plt.grid(True, alpha=0.3)
             
-            # 4. Component energies (Binding Decomposition)
-            plt.subplot(2, 2, 4)
-            if 'delta_nb' in df.columns:
-                plt.plot(df['frame'], df['delta_nb'], label='ΔNB (VdW+Ele)', alpha=0.7)
-                plt.plot(df['frame'], df['delta_gb'], label='ΔGB (Polar)', alpha=0.7)
-                plt.plot(df['frame'], df['delta_sa'], label='ΔSA (Nonpolar)', alpha=0.7)
-                plt.title('Binding Energy Components')
-            else:
-                plt.plot(df['frame'], df['complex_energy'], label='Complex', alpha=0.7)
-                plt.plot(df['frame'], df['protein_energy'], label='Protein', alpha=0.7)
-                plt.plot(df['frame'], df['ligand_energy'], label='Ligand', alpha=0.7)
-                plt.title('Component Energies')
+                # 4. Component energies (Binding Decomposition)
+                plt.subplot(2, 2, 4)
+                if 'delta_nb' in df.columns:
+                    plt.plot(df['frame'], df['delta_nb'], label='ΔNB (VdW+Ele)', alpha=0.7)
+                    plt.plot(df['frame'], df['delta_gb'], label='ΔGB (Polar)', alpha=0.7)
+                    plt.plot(df['frame'], df['delta_sa'], label='ΔSA (Nonpolar)', alpha=0.7)
+                    plt.title('Binding Energy Components')
+                else:
+                    plt.plot(df['frame'], df['complex_energy'], label='Complex', alpha=0.7)
+                    plt.plot(df['frame'], df['protein_energy'], label='Protein', alpha=0.7)
+                    plt.plot(df['frame'], df['ligand_energy'], label='Ligand', alpha=0.7)
+                    plt.title('Component Energies')
             
-            plt.xlabel('Frame')
-            plt.ylabel('Energy (kcal/mol)')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
+                plt.xlabel('Frame')
+                plt.ylabel('Energy (kcal/mol)')
+                plt.legend()
+                plt.grid(True, alpha=0.3)
             
-            plt.tight_layout()
-            plt.savefig(output_dir / 'energy_analysis.png', dpi=600, bbox_inches='tight')
-            plt.close()
+                plt.tight_layout()
+                plt.savefig(output_dir / 'energy_analysis.png', dpi=600, bbox_inches='tight',
+                            pil_kwargs={'compress_level': 1})  # lossless; fast zlib level
+                self._energy_plot_key = plot_key
+                plt.close()
             
-            print(f"✓ Energy plots saved to {output_dir / 'energy_analysis.png'}")
+                print(f"✓ Energy plots saved to {output_dir / 'energy_analysis.png'}")
             
-        except ImportError:
-            print("Matplotlib not available, skipping plots")
-        except Exception as e:
-            print(f"Error generating plots: {e}")
+            except ImportError:
+                print("Matplotlib not available, skipping plots")
+            except Exception as e:
+                print(f"Error generating plots: {e}")
         
         # Bootstrap uncertainty analysis
         bootstrap_results = self.bootstrap_uncertainty(df['binding_energy'])
@@ -2847,8 +2874,9 @@ class GBSACalculator(GBSAForceManager):
             return system, modeller.topology, modeller.positions
         elif ligand_mol is None:
             # Protein-only/PPI mode: avoid initializing small-molecule toolkits.
-            system_generator = SystemGenerator(
+            system_generator = _ProteinOnlySystemGenerator(
                 forcefields=sys_ffs,
+                small_molecule_forcefield=None,
                 forcefield_kwargs=general_kwargs,
                 nonperiodic_forcefield_kwargs=nonperiodic_kwargs
             )
@@ -2889,8 +2917,9 @@ class GBSACalculator(GBSAForceManager):
                 # We have to create a new one without implicitSolvent.
                 fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
                 if ligand_mol is None:
-                    fallback_generator = SystemGenerator(
+                    fallback_generator = _ProteinOnlySystemGenerator(
                         forcefields=sys_ffs,
+                        small_molecule_forcefield=None,
                         forcefield_kwargs=general_kwargs,
                         nonperiodic_forcefield_kwargs=fallback_kwargs
                     )
@@ -4322,8 +4351,8 @@ class GBSACalculator(GBSAForceManager):
                 temp_k = temp_k.value_in_unit(unit.kelvin)
 
             tasks = []
-            for i, frame in enumerate(traj):
-                xyz_nm = frame.xyz[0]
+            for i in range(traj.n_frames):
+                xyz_nm = traj.xyz[i]  # a view; traj[i] deep-copies a whole Trajectory
                 complex_pos_full = xyz_nm if (is_native_mode or is_ppi_coordinate_mode) else None
                 tasks.append((i, xyz_nm, list(protein_indices), list(ligand_indices),
                               complex_pos_full, is_native_mode, is_ppi_coordinate_mode))
@@ -4347,7 +4376,12 @@ class GBSACalculator(GBSAForceManager):
                 log.warning(f"Parallel frame processing failed ({e}); falling back to serial loop.")
                 frame_results = None
 
-        for i, frame in enumerate(traj):
+        # Frames are read as coordinate views (traj.xyz[i]) and positions are set
+        # from numpy arrays: building a Trajectory per frame (traj[i]) and a
+        # per-atom Quantity list cost ~25x the GPU energy evaluation itself.
+        lig_idx = np.asarray(ligand_indices)
+        prot_idx = np.asarray(protein_indices)
+        for i in range(traj.n_frames):
             if i % 10 == 0:
                 print(f"Frame {i+1}/{len(traj)}")
 
@@ -4427,6 +4461,7 @@ class GBSACalculator(GBSAForceManager):
                 continue
 
             if self.entropy_method == 'quasiharmonic':
+                frame = traj[i]
                 qha_ligand_frames.append(frame.atom_slice(ligand_indices))
                 if qha_analyze_complex:
                     qha_protein_frames.append(frame.atom_slice(protein_indices))
@@ -4442,9 +4477,9 @@ class GBSACalculator(GBSAForceManager):
                     # So passing `protein_indices + ligand_indices` is correct for the system.
                     qha_complex_frames.append(frame.atom_slice(complex_selection))
                 
-            xyz = frame.xyz[0] * unit.nanometer
-            ligand_pos = unit.Quantity([xyz[j] for j in ligand_indices], unit.nanometer)
-            protein_pos = unit.Quantity([xyz[j] for j in protein_indices], unit.nanometer)
+            xyz = traj.xyz[i]
+            ligand_pos = unit.Quantity(xyz[lig_idx], unit.nanometer)
+            protein_pos = unit.Quantity(xyz[prot_idx], unit.nanometer)
             complex_pos = unit.Quantity(xyz, unit.nanometer)
             
             # Initialize components if not present
@@ -4490,9 +4525,8 @@ class GBSACalculator(GBSAForceManager):
                 if is_native_mode or is_ppi_coordinate_mode:
                     complex_context.setPositions(complex_pos)
                 else:
-                    combined_pos = unit.Quantity(list(protein_pos.value_in_unit(unit.nanometer)) +
-                                                list(ligand_pos.value_in_unit(unit.nanometer)),
-                                                unit.nanometer)
+                    combined_pos = unit.Quantity(np.concatenate((xyz[prot_idx], xyz[lig_idx])),
+                                                 unit.nanometer)
                     complex_context.setPositions(combined_pos)
                 # One evaluation per force group, shared with the parallel worker
                 # (_frame_energy_terms); the total is the sum of the groups.
@@ -4528,14 +4562,16 @@ class GBSACalculator(GBSAForceManager):
                     print(f"  Protein Internal: {protein_e - protein_e_clean:.2f}")
                     print(f"  Ligand Internal:  {ligand_e - ligand_e_clean:.2f}")
 
-                # explicit SASA calculation (User Request) -- diagnostic print only, so
-                # computed only on the frames where it is printed
-                if i == 0 or i % print_interval == 0:
+                # explicit SASA calculation (User Request) -- a diagnostic print only,
+                # so computed on the first frame alone (on every printed frame it
+                # took ~40% of a GPU run)
+                if i == 0:
                   try:
                       # Create sliced trajectories for SASA (Exclude solvent!)
                       # protein_indices and ligand_indices already exclude solvent
                       complex_indices = sorted(protein_indices + ligand_indices)
-                    
+                      frame = traj[i]
+
                       complex_traj = frame.atom_slice(complex_indices)
                       protein_traj = frame.atom_slice(protein_indices)
                       ligand_traj = frame.atom_slice(ligand_indices)
@@ -4551,11 +4587,10 @@ class GBSACalculator(GBSAForceManager):
                       protein_sasa = protein_sasa_nm2 * 100.0
                       ligand_sasa = ligand_sasa_nm2 * 100.0
 
-                      if i == 0 or i % print_interval == 0:
-                          print(f"\nSASA Values (Å²):")
-                          print(f"  Protein: {protein_sasa:.2f}")
-                          print(f"  Ligand: {ligand_sasa:.2f}")
-                          print(f"  Complex: {complex_sasa:.2f}")
+                      print(f"\nSASA Values (Å²):")
+                      print(f"  Protein: {protein_sasa:.2f}")
+                      print(f"  Ligand: {ligand_sasa:.2f}")
+                      print(f"  Complex: {complex_sasa:.2f}")
                         
                   except Exception as e:
                       if i == 0: 
