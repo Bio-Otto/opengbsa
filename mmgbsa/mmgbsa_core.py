@@ -296,6 +296,15 @@ class StructureManager:
             tuple: (receptor_structure, ligand_structure)
         """
         import parmed as pmd
+        # WORKAROUND (ParmEd bug): TPR-origin CHARMM structures carry
+        # Urey-Bradley type indices that can exceed the deduplicated type
+        # list produced by Structure.copy(), raising IndexError in
+        # parmed/structure.py. UB terms are intramolecular and cancel
+        # exactly between complex and components in MMGBSA deltas, so
+        # dropping UB bonds entirely (for the complex and both split
+        # structures alike) is numerically safe. (Clear the TrackedList in
+        # place; assigning a plain list breaks ParmEd's change-tracking.)
+        complex_structure.urey_bradleys.clear()
         # Create copies to avoid mutating original
         # Use generic Structure class to avoid AmberParm pointer update issues during stripping
         receptor = complex_structure.copy(cls=pmd.Structure)
