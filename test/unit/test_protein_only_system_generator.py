@@ -34,6 +34,13 @@ def test_constructs_without_template_generator():
 @pytest.mark.parametrize("pdb", ["proteins/ace-ala-nh2.pdb", "proteins/MainChain_TRP.pdb"])
 def test_same_system_as_default_generator(pdb):
     topology = app.PDBFile(get_data_file_path(pdb)).topology
-    default = SystemGenerator(**KWARGS).create_system(topology)
+    try:
+        default_generator = SystemGenerator(**KWARGS)
+    except ImportError as e:
+        # The reference loads OpenFF's small-molecule stack, which imports
+        # pkg_resources (absent with recent setuptools, e.g. in CI). The
+        # protein-only generator never imports it, which is part of the point.
+        pytest.skip(f"default SystemGenerator cannot load its OpenFF force field here: {e}")
+    default = default_generator.create_system(topology)
     protein_only = _ProteinOnlySystemGenerator(small_molecule_forcefield=None, **KWARGS).create_system(topology)
     assert XmlSerializer.serialize(protein_only) == XmlSerializer.serialize(default)
