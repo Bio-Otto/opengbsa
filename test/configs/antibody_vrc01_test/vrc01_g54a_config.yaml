@@ -1,0 +1,89 @@
+# Antibody-antigen validation: HIV-1 gp120 bound to the VRC01 antibody Fv.
+#
+# Source: Zenodo 10.5281/zenodo.6879091 (CC-BY-4.0), accompanying
+# Conti, Lau & Ovchinnikov, Antibodies 2022, 11(3):51,
+# https://doi.org/10.3390/antib11030051
+#
+# Exercises OpenGBSA's native NAMD/CHARMM Mode (.psf topology + .pdb
+# coordinates + CHARMM36 parameters) on an antibody-antigen interface -- a
+# larger and flatter interface than the other validation cases, and the
+# molecular class most relevant to therapeutic antibody work.
+#
+# TWO PROPERTIES OF THIS DEPOSIT REQUIRE CARE, both verified rather than
+# assumed:
+#
+#  1. The PDB chain-ID column is BLANK; the chain information lives in the
+#     segid column (G120 / HC / LC / ION1 / ION2 / WAT), which MDTraj does not
+#     read -- it sees ONE chain of 19,042 atoms. So `chainid 0/1` selections
+#     (as used by the CTLA4 case) cannot split this system. The segids are
+#     contiguous atom blocks, so residue-index ranges are used instead; the
+#     ranges below were derived from ParmEd's segid assignment and verified to
+#     reproduce the exact per-segment atom counts:
+#       G120 (antigen)  resid   0-350  -> 5,398 atoms
+#       HC   (heavy)    resid 351-469  -> 1,885 atoms
+#       LC   (light)    resid 470-570  -> 1,535 atoms
+#     The antibody is HC+LC together, resid 351-570 -> 3,420 atoms.
+#
+#  2. MDTraj CANNOT load this .psf at all: the antibody uses Kabat residue
+#     numbering with insertion codes (52A, 100A, 100B) and MDTraj parses the
+#     PSF residue field as a bare int, raising
+#     "PSFError: Could not convert residue number [52A]". OpenGBSA loads .psf
+#     through ParmEd, which handles it, and builds its MDTraj reference from
+#     the companion .pdb -- so this path works. Do not "fix" it by routing
+#     topology loading through MDTraj.
+#
+# System: 19,042 atoms total, 8,827 excluding the 3,405 TIP3 waters.
+# Trajectory: 4,601 frames. Truncated solvation shell (solute 9.3 nm in a
+# 12.8 nm box, water centred on the solute), complex bound throughout
+# (min antigen-antibody distance 1.78 A, stable across all frames).
+#
+# Experimental reference: dG = -11.78 kcal/mol for g54a
+# (Conti 2022, Table 1, RSC3/VRC01 column).
+
+input_files:
+  complex_pdb: raw/g54a.psf
+  solvated_topology: raw/g54a.pdb
+  trajectory: raw/g54a.dcd
+
+analysis_settings:
+  binding_mode: ppi
+  receptor_selection: 'resid 0 to 350'      # gp120 antigen (segid G120)
+  ligand_selection: 'resid 351 to 570'      # VRC01 Fv, heavy + light (HC+LC)
+  temperature: 300.0
+  gb_model: OBC2
+  salt_concentration: 0.15
+  max_frames: 300
+  # Sample the last 300 of 4,601 frames: the deposit does not document where
+  # equilibration ends, so the tail is the safest production window.
+  frame_start: 4301
+  frame_end: 4601
+  frame_selection: sequential
+  verbose: 2
+  use_cache: false
+  # NOTE: parallel_processing is IGNORED by the current release --
+  # use_parallel_frames in mmgbsa_core.py tests only the platform, so
+  # CPU runs always fan out. max_workers is what actually controls the
+  # worker count. Serial and parallel paths were verified identical
+  # (10 frames, 1 vs 4 workers, both -47.72 +/- 5.19), so this
+  # affects run time only, never the answer.
+  parallel_processing: false
+  max_workers: 4
+  energy_decomposition: false
+  run_entropy_analysis: false
+  run_per_residue_decomposition: false
+
+forcefield_settings:
+  # Not shipped with the deposit. These are the standard CHARMM36m protein and
+  # water/ion sets; all 45 atom types present in wt.psf were verified to be
+  # covered by them, and ParmEd load_parameters() succeeds (19,147 bonds,
+  # 19,524 angles, 23,678 dihedrals, 566 CMAP terms).
+  charmm_params:
+    - params/par_all36m_prot.prm
+    - params/toppar_water_ions_prot.str
+  charmm_coordinates: raw/g54a.pdb
+
+output_settings:
+  output_directory: results/g54a
+
+platform_settings:
+  preferred_platform: CPU
