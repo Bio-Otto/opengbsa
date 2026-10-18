@@ -1522,6 +1522,8 @@ class GBSACalculator(GBSAForceManager):
         # Platform settings for separate analysis/decomposition configuration
         self.preferred_platform = None
         self.decomposition_platform = None
+        self.strict_platform = False
+        self.platform_requested = self.platform_used = self.platform_fallback = None
 
     def set_platform_settings(self, platform_settings):
         """
@@ -1541,13 +1543,14 @@ class GBSACalculator(GBSAForceManager):
         if isinstance(platform_settings, dict):
             self.preferred_platform = platform_settings.get('preferred_platform')
             self.decomposition_platform = platform_settings.get('decomposition_platform')
+            self.strict_platform = bool(platform_settings.get('strict_platform', False))
             
             if self.preferred_platform:
                 self.platform_preference = self.preferred_platform
             
             if self.verbose:
                 if self.preferred_platform:
-                    print(f"  Platform for analysis: {self.preferred_platform}")
+                    print(f"  Requested platform for analysis: {self.preferred_platform}")
                 if self.decomposition_platform:
                     print(f"  Platform for decomposition: {self.decomposition_platform}")
 
@@ -3162,10 +3165,20 @@ class GBSACalculator(GBSAForceManager):
         Returns:
         --------
         tuple : (platform, properties) - OpenMM platform and device properties
+
+        A requested platform that cannot be used (e.g. a CUDA runtime newer than
+        the driver supports) falls back to the next choice, as before, but the
+        fallback is no longer silent: a warning names the requested and the
+        actual platform, and both are recorded on the instance
+        (``platform_requested``, ``platform_used``, ``platform_fallback``) and in
+        the results summary. With ``platform_settings.strict_platform: true`` an
+        unusable requested platform is an error instead.
         """
         # Platform priority: parameter > instance decomposition > instance preference > environment > auto-detect
         # We validate platforms by creating a tiny Context because CUDA/OpenCL may be
         # discoverable yet unusable at runtime (e.g., no device available).
+        last_error = [None]   # why the most recent platform test failed
+
         def _can_use_platform(name, props):
             try:
                 plat = openmm.Platform.getPlatformByName(name)
@@ -3176,75 +3189,64 @@ class GBSACalculator(GBSAForceManager):
                 del _ctx
                 del test_integrator
                 return plat
-            except Exception:
+            except Exception as exc:
+                last_error[0] = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
                 return None
         
-        # 1. Use provided platform_name if available (e.g., decomposition override)
-        if platform_name and str(platform_name).lower() != 'auto':
-            try:
-                properties = {}
-                if platform_name == 'CUDA':
-                    properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
-                elif platform_name == 'OpenCL':
-                    properties = {'OpenCLPrecision': 'mixed'}
-                platform = _can_use_platform(str(platform_name), properties)
-                if platform is None:
-                    raise RuntimeError(f"Platform '{platform_name}' is not usable on this machine")
-                print(f"Using forced platform: {platform_name}")
-                return platform, properties
-            except Exception as e:
-                print(f"⚠️ Warning: Forced platform '{platform_name}' failed: {e}. Falling back to default preference.")
-        
-        # 2. Check for user preference
-        pref = getattr(self, 'platform_preference', None)
-        if pref and str(pref).lower() != 'auto':
-            try:
-                properties = {}
-                if pref == 'CUDA':
-                    properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
-                elif pref == 'OpenCL':
-                    properties = {'OpenCLPrecision': 'mixed'}
-                platform = _can_use_platform(str(pref), properties)
-                if platform is None:
-                    raise RuntimeError(f"Platform '{pref}' is not usable on this machine")
-                print(f"Using forced platform: {pref}")
-                return platform, properties
-            except Exception as e:
-                print(f"⚠️ Warning: Forced platform '{pref}' failed: {e}. Falling back to auto-detection.")
+        fallbacks = []   # (requested platform, reason) for every explicit request that failed
 
-        # 3. Check environment variable
+        def _chosen(platform, properties, requested):
+            used = platform.getName()
+            self.platform_requested = requested
+            self.platform_used = used
+            self.platform_fallback = '; '.join(f"{n}: {r}" for n, r in fallbacks) or None
+            if fallbacks:
+                msg = (f"Requested OpenMM platform '{fallbacks[0][0]}' is not usable "
+                       f"({fallbacks[0][1]}); this run uses '{used}' instead.")
+                if getattr(self, 'strict_platform', False):
+                    raise RuntimeError(msg + " Set platform_settings.strict_platform: false "
+                                       "to allow the fallback.")
+                log.warning(f"PLATFORM FALLBACK: {msg} Energies are unaffected, but timings are "
+                            f"not those of '{fallbacks[0][0]}'. Set platform_settings.strict_platform: "
+                            f"true to stop instead.")
+            print(f"Running on OpenMM platform: {used}")
+            return platform, properties
+
+        def _props(name):
+            if name == 'CUDA':
+                return {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
+            if name == 'OpenCL':
+                return {'OpenCLPrecision': 'mixed'}
+            return {}
+
+        # 1. explicit platform_name (e.g. a decomposition override), 2. the instance
+        # preference, 3. the OPENMM_DEFAULT_PLATFORM environment variable
         env_pref = os.environ.get('OPENMM_DEFAULT_PLATFORM')
-        if env_pref:
-            try:
-                if env_pref == 'CUDA':
-                     properties = {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}
-                elif env_pref == 'OpenCL':
-                     properties = {'OpenCLPrecision': 'mixed'}
-                else:
-                     properties = {}
-                platform = _can_use_platform(env_pref, properties)
-                if platform is None:
-                    raise RuntimeError(f"Environment platform '{env_pref}' is not usable on this machine")
-                print(f"Using platform from environment: {env_pref}")
-                return platform, properties
-            except Exception as e:
-                print(f"⚠️ Warning: Environment platform '{env_pref}' failed: {e}. Falling back to auto-detection.")
+        for source, requested in (("Forced platform", platform_name),
+                                  ("Forced platform", getattr(self, 'platform_preference', None)),
+                                  ("Environment platform", env_pref)):
+            if not requested or str(requested).lower() == 'auto':
+                continue
+            requested = str(requested)
+            properties = _props(requested)
+            platform = _can_use_platform(requested, properties)
+            if platform is not None:
+                print(f"Using {source.lower()}: {requested}")
+                return _chosen(platform, properties, requested)
+            fallbacks.append((requested, last_error[0] or "it is not usable on this machine"))
+            print(f"⚠️ Warning: {source} '{requested}' is not usable on this machine; trying the next choice.")
 
         # 4. Auto-detect: Try CUDA -> OpenCL -> CPU
         for candidate, props, msg in [
-            ('CUDA', {'CudaPrecision': 'mixed', 'CudaDeviceIndex': '0'}, "Using CUDA platform"),
-            ('OpenCL', {'OpenCLPrecision': 'mixed'}, "Using OpenCL platform"),
+            ('CUDA', _props('CUDA'), "Using CUDA platform"),
+            ('OpenCL', _props('OpenCL'), "Using OpenCL platform"),
             ('CPU', {}, "Using CPU platform"),
         ]:
             platform = _can_use_platform(candidate, props)
             if platform is not None:
-                properties = props
                 print(msg)
-                break
-        else:
-            raise RuntimeError("No usable OpenMM platform found (CUDA/OpenCL/CPU).")
-        
-        return platform, properties
+                return _chosen(platform, props, fallbacks[0][0] if fallbacks else 'auto')
+        raise RuntimeError("No usable OpenMM platform found (CUDA/OpenCL/CPU).")
 
     def run_comprehensive(self, ligand_mol, complex_pdb, xtc_file, ligand_pdb, max_frames=50, 
                     energy_decomposition=False, frame_start=None, frame_end=None, 
@@ -3670,6 +3672,8 @@ class GBSACalculator(GBSAForceManager):
         
         # Setup optimized platform
         platform, properties = self.setup_optimized_platform()
+        self.analysis_platform = {'requested': self.platform_requested, 'used': self.platform_used,
+                                  'fallback': self.platform_fallback}
         
         # Check if complex_pdb is an Amber prmtop file
         is_prmtop = complex_pdb.endswith('.prmtop') or complex_pdb.endswith('.parm7')
@@ -5201,6 +5205,9 @@ class GBSACalculator(GBSAForceManager):
             'delta_g': delta_g,
             'parameterized_residues': self.parameterized_residues,
             'physics_assumptions': merged_assumptions,
+            'platform_requested': getattr(self, 'analysis_platform', {}).get('requested'),
+            'platform_used': getattr(self, 'analysis_platform', {}).get('used'),
+            'platform_fallback': getattr(self, 'analysis_platform', {}).get('fallback'),
             'bootstrap_results': self._calculate_bootstrap(df['binding_energy'].values) if len(df) > 5 else None
         }
 

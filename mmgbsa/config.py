@@ -534,6 +534,11 @@ advanced_settings:
 platform_settings:
   # Preferred OpenMM platform. Options: 'CUDA', 'OpenCL', 'CPU', 'Reference'
   preferred_platform: 'CUDA'
+
+  # If the preferred platform cannot be used (no GPU, or a CUDA runtime newer
+  # than the driver supports), OpenGBSA warns, runs on the next usable platform
+  # and records both in results_summary.yaml. Set true to stop with an error.
+  strict_platform: false
   
   # CUDA device index to use if platform is CUDA
   cuda_device: 0
