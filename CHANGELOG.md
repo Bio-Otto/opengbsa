@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.13] - 2026-10-19
+
 ### Fixed
 - **Coordinate Mode now uses the GB radii set of the selected model.** With a PDB or GROMACS coordinates and no topology file, the system is built through an OpenMM ForceField, and the topology reaching the GB force is an `openmm.app.Topology` whose atoms carry no radii. Up to 0.0.12 every such atom got one radius per element (every hydrogen 1.2 Å) whatever `gb_model` was selected, instead of, e.g., mbondi2's 1.3 Å for N-bonded hydrogens; mbondi (HCT) and mbondi3 (GBn2) differ on more atoms. Now these atoms get the `gb_model` set, or an explicit `gb_radii_set`, assigned by ParmEd's `changeRadii` from each atom's element and bonded partner, as tleap does. Inputs with a topology file (Amber, GROMACS `.top`/`.tpr`, CHARMM `.psf`) were not affected. Effect on the validation cases: 1GCQ up to 1.5 kcal/mol depending on the GB model, 2OOB 0.6, the IRF11 protein–DNA complex 22.5 kcal/mol; all three now match Amber MMPBSA.py on the same frames once its fixed 25 Å Born-radius cutoff is removed (to 0.003, 0.018 and 0.58 kcal/mol). Regression test: `test/unit/test_coordinate_mode_gb_radii.py`.
 
