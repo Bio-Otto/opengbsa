@@ -166,9 +166,54 @@ class StructureManager:
         'GBn2': 'mbondi3',
     }
 
+    _AMBER_TOPOLOGY_SUFFIXES = ('.prmtop', '.parm7', '.top7')
+
+    @staticmethod
+    def gb_radii_decision(struct, gb_model, gb_radii_set='auto', amber_native=False,
+                          label='complex'):
+        """Return the GB radii set to assign to `struct`, or None to keep its own.
+
+        Amber `.prmtop` topologies carry the radii they were built with, and
+        Amber MMPBSA.py always uses those, whatever `igb` is. With
+        `gb_radii_set='auto'` an Amber-native topology therefore keeps its
+        own radii (a warning names the set recommended for `gb_model` when it
+        differs). GROMACS-, CHARMM- and coordinate-mode structures carry no GB
+        radii, so they get the set matching `gb_model`. Two exceptions: an
+        explicit `gb_radii_set` always wins, and GBn/GBn2 fall back to their
+        own set when the topology's radii lie outside the 1-2 A range of
+        OpenMM's neck-integral table, which cannot evaluate them.
+        """
+        model_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
+        if gb_radii_set and gb_radii_set != 'auto':
+            return gb_radii_set
+        if not amber_native:
+            return model_set
+        own = ''
+        try:
+            own = str(struct.parm_data['RADIUS_SET'][0]).strip()
+        except Exception:
+            pass
+        if 'radii' not in own.lower():  # e.g. a converted GROMACS topology records none
+            own = ''
+        if gb_model in ('GBn', 'GBn2'):
+            radii = [a.solvent_radius for a in struct.atoms]
+            if radii and (min(radii) < 1.0 or max(radii) > 2.0):
+                log.warning(f"{label}: the topology's GB radii ({own or 'set not recorded'}) lie "
+                            f"outside the 1-2 A range {gb_model} needs; assigning '{model_set}'. "
+                            f"Results will differ from Amber MMPBSA.py run on this topology.")
+                return model_set
+        log.info(f"{label}: keeping the Amber topology's own GB radii "
+                 f"({own or 'radius set not recorded'}), as Amber MMPBSA.py does.")
+        if own and f"({model_set})" not in own:
+            log.warning(f"{label}: {gb_model} is usually run with '{model_set}' radii, but this "
+                        f"topology has {own}. Keeping the topology's radii so results match "
+                        f"Amber on the same files; set analysis_settings.gb_radii_set: "
+                        f"{model_set} to override.")
+        return None
+
     @staticmethod
     def load_complex(pdb_path, prmtop_path=None, xtc_path=None, gb_model='OBC2',
-                      charmm_params=None):
+                      charmm_params=None, gb_radii_set='auto'):
         """
         Load a complex structure consistent with ParmEd.
 
@@ -176,17 +221,19 @@ class StructureManager:
             pdb_path (str): Path to PDB file (coordinates)
             prmtop_path (str, optional): Path to Amber topology file
             xtc_path (str, optional): Path to trajectory for dynamic dummy atom checking
-            gb_model (str): Configured GB model, used only to pick the correct
-                GB radii set (see `_GB_MODEL_RADII_SET`) when the loaded
-                structure has no per-atom radii of its own (GROMACS-origin
-                and CHARMM/NAMD-origin inputs -- .top via ParmEd, .tpr via
-                `load_tpr_as_parmed`, .psf via ParmEd+CharmmParameterSet --
-                carry no GB radii/screen information at all, since intrinsic
-                GB radii are an Amber-ecosystem convention, not part of the
-                GROMACS or CHARMM force fields themselves). Amber
-                `.prmtop`/`.parm7` inputs already carry correct radii from
-                their own `tleap` parameterization and are never overridden
-                here.
+            gb_model (str): Configured GB model, used to pick the GB radii set
+                (see `_GB_MODEL_RADII_SET`) for structures that have no radii
+                of their own (GROMACS-origin and CHARMM/NAMD-origin inputs --
+                .top via ParmEd, .tpr via `load_tpr_as_parmed`, .psf via
+                ParmEd+CharmmParameterSet -- carry no GB radii, an
+                Amber-ecosystem convention).
+            gb_radii_set (str): 'auto' (default) keeps an Amber `.prmtop`'s own
+                radii, as Amber MMPBSA.py does, and assigns the gb_model set to
+                everything else; a set name ('mbondi', 'mbondi2', 'mbondi3',
+                'bondi') is assigned to every structure. See
+                `gb_radii_decision`. The decision is recorded on the returned
+                structure as `opengbsa_radii_set` (None = kept) so that the
+                receptor and ligand can follow it.
             charmm_params (str or list of str, optional): CHARMM parameter
                 file(s) (.prm/.str/.rtf), required only when `prmtop_path`
                 is a `.psf` file (see `TopologyLoader._load_charmm`, which
@@ -272,19 +319,30 @@ class StructureManager:
         # and separately left Amber-native inputs unable to use any
         # gb_model but whatever radius set their own prmtop happened to be
         # built with).
+        #
+        # Since 0.0.11 an Amber-native topology keeps its own radii by default
+        # (gb_radii_decision): 0.0.8-0.0.10 assigned the gb_model set to every
+        # structure, which silently changed the radii of .prmtop files built
+        # with another set (e.g. mbondi with OBC2) and broke agreement with
+        # Amber MMPBSA.py, which always uses the topology's radii.
         origin_label = ('GROMACS-origin' if is_gromacs_origin
                          else 'CHARMM/NAMD-origin' if is_charmm_origin
                          else 'Amber-native')
-        try:
-            from parmed.tools import changeRadii
-            radii_set = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
-            changeRadii(struct, radii_set).execute()
-            log.info(f"Applied '{radii_set}' GB radii set to {origin_label} structure "
-                     f"(matching gb_model='{gb_model}').")
-        except Exception as e:
-            log.warning(f"Failed to apply GB radii set to {origin_label} structure: {e}. "
-                        f"GB energies will use the crude element-only radii fallback and "
-                        f"will NOT be comparable to Amber MMPBSA.py results.")
+        amber_native = (origin_label == 'Amber-native' and bool(prmtop_path)
+                        and Path(prmtop_path).suffix.lower() in StructureManager._AMBER_TOPOLOGY_SUFFIXES)
+        radii_set = StructureManager.gb_radii_decision(
+            struct, gb_model, gb_radii_set, amber_native=amber_native, label=f"{origin_label} complex")
+        if radii_set is not None:
+            try:
+                from parmed.tools import changeRadii
+                changeRadii(struct, radii_set).execute()
+                log.info(f"Applied '{radii_set}' GB radii set to {origin_label} structure "
+                         f"(gb_model='{gb_model}').")
+            except Exception as e:
+                log.warning(f"Failed to apply GB radii set to {origin_label} structure: {e}. "
+                            f"GB energies will use the crude element-only radii fallback and "
+                            f"will NOT be comparable to Amber MMPBSA.py results.")
+        struct.opengbsa_radii_set = radii_set
 
         # Implicit solvent and GBSA evaluation does not support explicit waters inside the structural force tree.
         # Stripping is now handled deliberately in the main pipeline AFTER exporting the solvated PDB for MDTraj
@@ -1333,7 +1391,8 @@ class GBSACalculator(GBSAForceManager):
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
              visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None,
-             reimage_trajectory=True, charmm_params=None, charmm_coordinates=None):
+             reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
+             gb_radii_set='auto'):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1407,6 +1466,10 @@ class GBSACalculator(GBSAForceManager):
         self.reporting_settings = reporting_settings or {}
         self.verbose = verbose
         self.gb_model = gb_model
+        # 'auto': an Amber .prmtop keeps its own GB radii (as Amber does), other
+        # inputs get the gb_model set; a set name forces it (gb_radii_decision).
+        self.gb_radii_set = gb_radii_set or 'auto'
+        self._gb_radii_decision = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
         self.salt_concentration = salt_concentration
         self.use_cache = use_cache
         self.parallel_processing = parallel_processing
@@ -3743,7 +3806,12 @@ class GBSACalculator(GBSAForceManager):
                      charmm_coord_source if is_charmm_native else complex_pdb,
                      original_complex_pdb, xtc_path=xtc_file, gb_model=self.gb_model,
                      charmm_params=self.charmm_params if is_charmm_native else None,
+                     gb_radii_set=self.gb_radii_set,
                  )
+                 # One radii decision per run, taken from the complex, so the
+                 # receptor and ligand cannot end up with a different set.
+                 self._gb_radii_decision = getattr(complex_struct, 'opengbsa_radii_set',
+                                                   self._gb_radii_decision)
                  log.success(f"Loaded Native Complex: {len(complex_struct.atoms)} atoms")
 
                  import os
@@ -3892,12 +3960,15 @@ class GBSACalculator(GBSAForceManager):
                      # struct this function builds a System from, keeps all
                      # three consistent regardless of where each struct
                      # originated.
-                     try:
-                         from parmed.tools import changeRadii
-                         radii_set = StructureManager._GB_MODEL_RADII_SET.get(self.gb_model, 'mbondi2')
-                         changeRadii(struct, radii_set).execute()
-                     except Exception as e:
-                         log.warning(f"Failed to apply GB radii set to {name} structure: {e}.")
+                     # Since 0.0.11 the set is the complex's decision (None:
+                     # every structure keeps its own Amber topology radii).
+                     radii_set = self._gb_radii_decision
+                     if radii_set is not None:
+                         try:
+                             from parmed.tools import changeRadii
+                             changeRadii(struct, radii_set).execute()
+                         except Exception as e:
+                             log.warning(f"Failed to apply GB radii set to {name} structure: {e}.")
 
                      sys = StructureManager.create_openmm_system(
                          struct, 

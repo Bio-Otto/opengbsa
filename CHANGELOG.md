@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Amber `.prmtop` topologies keep their own GB radii again (regression in 0.0.8–0.0.10).** Since 0.0.8 the radii set matching `gb_model` (mbondi2 for OBC2) was assigned to every structure, including Amber topologies built with another set. Amber MMPBSA.py always uses a topology's own radii, so systems such as the 3CLpro and 3dd2 validation sets (built with mbondi, run with OBC2) moved by up to 5 kcal/mol away from Amber, silently. With the new `gb_radii_set: auto` (default), an Amber topology keeps its radii, with a warning when they differ from the set usually paired with `gb_model`; GROMACS, CHARMM/NAMD and coordinate-mode inputs still get the `gb_model` set; GBn/GBn2 still get their own set when a topology's radii fall outside OpenMM's 1–2 Å neck range. The decision is taken once, from the complex, and applied to receptor and ligand alike. Setting `gb_radii_set` to a set name applies that set everywhere (the 0.0.8–0.0.10 behaviour for OBC2 is `gb_radii_set: mbondi2`). Regression test: `test/unit/test_prmtop_gb_radii.py`.
+
 ## [0.0.10] - 2026-10-18
 
 ### Changed

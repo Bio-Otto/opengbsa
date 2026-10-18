@@ -43,6 +43,13 @@ Controls the physics model and sampling protocols.
 *   **Default**: ``OBC2``
 *   **Description**: Selects the Generalized Born model for polar solvation. ``OBC2`` is generally recommended for protein-ligand systems due to its optimized rescaling parameters. See :doc:`../theory/gb_models` for details.
 
+``gb_radii_set``
+~~~~~~~~~~~~~~~~
+*   **Type**: String
+*   **Options**: ``auto``, ``mbondi``, ``mbondi2``, ``mbondi3``, ``bondi``
+*   **Default**: ``auto``
+*   **Description**: Intrinsic GB radii. With ``auto``, an Amber ``.prmtop`` keeps the radii it was built with, as Amber MMPBSA.py does, and a warning names the set usually paired with ``gb_model`` if it differs. GROMACS, CHARMM/NAMD and coordinate-mode inputs carry no GB radii and get the set matching ``gb_model`` (HCT: ``mbondi``; OBC1/OBC2: ``mbondi2``; GBn: ``bondi``; GBn2: ``mbondi3``). For GBn/GBn2, a topology whose radii lie outside the 1–2 Å range of OpenMM's neck table also gets the model's set. Naming a set applies it to every structure.
+
 ``salt_concentration``
 ~~~~~~~~~~~~~~~~~~~~~~
 *   **Type**: Float
