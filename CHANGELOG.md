@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A requested OpenMM platform that cannot be used no longer falls back silently.** Previously a requested platform that failed (for example a CUDA runtime newer than the installed driver supports) fell back to the next usable one with only a log line, while the startup banner still named the requested platform, so a benchmark could report a CPU timing as a GPU one. The fallback now prints a `PLATFORM FALLBACK` warning naming both platforms and the reason, every run prints `Running on OpenMM platform: <name>`, and `results_summary.yaml` records `platform_requested`, `platform_used` and `platform_fallback`. The new `platform_settings.strict_platform: true` turns the fallback into an error. Energies were never affected, only timings. Regression test: `test/unit/test_platform_fallback.py`.
+
+### Added
+- Antibody–antigen validation case `test/configs/antibody_vrc01_test` (HIV-1 gp120 / VRC01 Fv and four alanine mutants, Zenodo 6879091): fetch, configuration and Amber-reference scripts and the expected results.
+
+### Documentation
+- Configuration reference: platform settings, and a note that Amber MMPBSA.py computes effective Born radii only within 25 Å (`rgbmax = 25`, fixed), which makes OpenGBSA's polar term systematically larger than MMPBSA.py's (about 1% of ΔE_GB for protein–ligand complexes, more at large interfaces).
+
 ## [0.0.11] - 2026-10-18
 
 ### Fixed

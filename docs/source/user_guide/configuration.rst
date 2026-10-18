@@ -98,3 +98,36 @@ Controls the physics model and sampling protocols.
     performance-only knob), so a config's `nonbonded_cutoff` should stay
     fixed across any comparison you intend to make (e.g. against an Amber
     reference computed with a specific ``rgbmax``).
+
+.. note::
+   Amber MMPBSA.py limits only the Born-radius calculation to 25 Å
+   (``rgbmax = 25``, which MMPBSA.py does not let you change) and evaluates every
+   energy term without a cutoff. OpenGBSA has no equivalent of that setting: with
+   the default ``nonbonded_cutoff: null`` it evaluates the Born radii over all
+   atom pairs, so its polar term is systematically larger than MMPBSA.py's, by
+   about 1% of ΔE_GB for protein--ligand complexes and by more at large
+   interfaces. ``nonbonded_cutoff`` is not a substitute, because it also
+   truncates the energy terms.
+
+Platform Settings
+-----------------
+
+``preferred_platform``
+~~~~~~~~~~~~~~~~~~~~~~
+*   **Type**: String
+*   **Options**: ``auto``, ``CUDA``, ``OpenCL``, ``CPU``
+*   **Default**: auto-detection (CUDA, then OpenCL, then CPU)
+*   **Description**: OpenMM platform for the energy evaluation. If the requested
+    platform cannot be used (for example no GPU, or a CUDA runtime newer than the
+    installed driver supports), OpenGBSA warns, runs on the next usable platform,
+    prints ``Running on OpenMM platform: <name>``, and records
+    ``platform_requested``, ``platform_used`` and ``platform_fallback`` in
+    ``results_summary.yaml``. Energies do not depend on the platform; timings do.
+
+``strict_platform``
+~~~~~~~~~~~~~~~~~~~
+*   **Type**: Boolean
+*   **Default**: ``false``
+*   **Description**: Stop with an error instead of falling back when
+    ``preferred_platform`` cannot be used. Use it for benchmarks and any run
+    whose timing matters.
