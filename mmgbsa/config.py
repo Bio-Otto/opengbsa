@@ -175,6 +175,14 @@ class ConfigManager:
             if not self._validate_parameter(param, value, param_type, min_val, max_val):
                 self.validation_errors.append(f"Invalid parameter value: {param} = {value}")
         
+        # Validate gb_radii_set ('auto': an Amber .prmtop keeps its own radii)
+        valid_radii_sets = ['auto', 'mbondi', 'mbondi2', 'mbondi3', 'bondi']
+        radii_set = settings.get('gb_radii_set', 'auto')
+        if radii_set not in valid_radii_sets:
+            self.validation_errors.append(
+                f"Invalid gb_radii_set '{radii_set}'. Must be one of: {valid_radii_sets}"
+            )
+
         # Validate binding_mode
         valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
         binding_mode = settings.get('binding_mode', 'standard')

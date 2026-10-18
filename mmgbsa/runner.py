@@ -241,6 +241,7 @@ class MMGBSARunner:
             reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
             charmm_params=forcefield_settings.get('charmm_params', None),
             charmm_coordinates=forcefield_settings.get('charmm_coordinates', None),
+            gb_radii_set=analysis_settings.get('gb_radii_set', 'auto'),
             cache_dir=cache_dir
         )
 

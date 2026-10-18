@@ -31,9 +31,19 @@ confirms the pipeline runs end-to-end without error.
 
 | | ΔH_bind (kcal/mol) |
 |---|---|
-| Amber MMPBSA.py (independent reference, 300 frames) | -17.93 ± 18.52 |
-| OpenGBSA (300 frames) | -19.71 ± 20.46 |
-| **Difference** | **1.78 kcal/mol** |
+| Amber MMPBSA.py (independent reference, same 300 frames imaged with cpptraj `autoimage`) | -32.57 ± 11.43 |
+| OpenGBSA 0.0.9+ (300 frames, built-in re-imaging) | -35.98 ± 12.11 |
+| **Difference** | **3.41 kcal/mol** (electrostatics agree to 0.003; mostly the non-polar ACE vs LCPO convention) |
+
+**Earlier values were wrong (corrected 2026-10-18).** The previously listed
+Amber -17.93 ± 18.52 and OpenGBSA -19.71 ± 20.46 were both computed on raw,
+un-imaged frames: the Amber reference solvent-stripped the `.dcd` without
+imaging, and OpenGBSA <= 0.0.8 fell back to raw coordinates because mdtraj's
+`image_molecules()` finds no anchor in this few-molecule system. In 120 of the
+300 frames the peptide sat across the periodic boundary from the receptor, so
+the two tools agreed on largely unbound frames. OpenGBSA 0.0.9+ re-images
+correctly (0 no-contact frames) and gives the same result as cpptraj-imaged
+input (-35.979 vs -35.978).
 
 Full methodological write-up (including six OpenGBSA bugs found and fixed
 during this validation -- all in the native CHARMM/NAMD loading path): see

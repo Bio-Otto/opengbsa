@@ -219,6 +219,7 @@ class CompleteMMGBSARunner:
             'max_workers': analysis_settings.get('max_workers', None),
             'protein_forcefield': forcefield_settings.get('protein_forcefield', 'amber'),
             'reimage_trajectory': analysis_settings.get('reimage_trajectory', True),
+            'gb_radii_set': analysis_settings.get('gb_radii_set', 'auto'),
             'charmm_params': forcefield_settings.get('charmm_params', None),
             'charmm_coordinates': forcefield_settings.get('charmm_coordinates', None)
         }
