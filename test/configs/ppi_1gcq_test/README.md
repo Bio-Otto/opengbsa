@@ -42,12 +42,32 @@ python3 prepare_system.py --system 2oob --build-amber-reference
 
 ## Expected result
 
-| System | Amber reference ΔH_bind (kcal/mol) | OpenGBSA ΔH_bind (kcal/mol) | Diff |
-|---|---|---|---|
-| 1GCQ | -37.89 ± 6.53 | -36.12 ± 6.00 | 1.77 |
-| 2OOB | -25.49 ± 4.15 | -24.46 ± 4.11 | 1.03 |
+| System | Amber reference ΔH_bind (kcal/mol) | OpenGBSA ΔH_bind (kcal/mol) | Diff | Diff, Amber without the 25 Å cutoff |
+|---|---|---|---|---|
+| 1GCQ | -37.92 ± 6.53 | -36.30 ± 6.54 | 1.62 | 0.003 |
+| 2OOB | -25.49 ± 4.15 | -23.90 ± 4.17 | 1.59 | 0.018 |
 
-(300 frames each, last 300 of a 7501-frame trajectory. OBC2/`igb=5`.)
+(300 frames each, last 300 of a 7501-frame trajectory. OBC2/`igb=5`. OpenGBSA
+0.0.13 or later; values are frame means ± SD.) Van der Waals, electrostatic and
+non-polar terms agree to within 0.02 kcal/mol; the whole difference is in the
+polar term and comes from Amber MMPBSA.py computing effective Born radii only
+within 25 Å (`rgbmax`, fixed by MMPBSA.py), where OpenMM includes every pair.
+Re-running Amber's polar term without the cutoff (last column) removes it.
+
+Two things to get right when reproducing the Amber side:
+
+- **Up to OpenGBSA 0.0.12, Coordinate Mode ignored the GB radii set.** The
+  GB force was built from an OpenMM topology without radii, so every atom got
+  one radius per element (every hydrogen 1.2 Å) whatever `gb_model` was set,
+  instead of, e.g., mbondi2's 1.3 Å for N-bonded hydrogens. 1GCQ moved by
+  up to 1.5 kcal/mol depending on the model, silently. Fixed in 0.0.13
+  (regression test `test/unit/test_coordinate_mode_gb_radii.py`).
+- **The 1GCQ tleap topology lists atoms in another order than the
+  trajectory** (the ACE cap as H1, CH3 where the trajectory has CH3, H1).
+  `prepare_system.py --build-amber-reference` therefore also writes
+  `complex_prmtop_order.dcd`; give MMPBSA.py that file, not the original
+  trajectory, or it evaluates the cap with two coordinates exchanged
+  (electrostatics off by 0.065 kcal/mol).
 
 ## All 5 GB models, validated (1GCQ)
 
@@ -59,17 +79,19 @@ not just OBC2 -- built via `prepare_system.py --system 1gcq
 radii-matched prmtop: `mbondi` for HCT, `mbondi2` for OBC1/OBC2, `bondi`
 for GBn, `mbondi3` for GBn2 -- see that script's `GB_MODEL_RADII_SET`).
 
-| GB model | Amber `igb=` | Amber ΔH_bind | OpenGBSA ΔH_bind | Diff |
-|---|---|---|---|---|
-| HCT | 1 | -50.31 ± 7.50 | -47.50 ± 6.72 | 2.81 |
-| OBC1 | 2 | -38.38 ± 6.15 | -35.45 ± 5.57 | 2.93 |
-| OBC2 | 5 | -37.89 ± 6.53 | -36.12 ± 6.00 | 1.77 |
-| GBn | 7 | -41.71 ± 5.25 | -40.93 ± 5.27 | 0.78 |
-| GBn2 | 8 | -42.96 ± 4.92 | -41.51 ± 4.99 | 1.45 |
+| GB model | Amber `igb=` | Amber ΔH_bind | OpenGBSA ΔH_bind | Diff | Diff, no cutoff |
+|---|---|---|---|---|---|
+| HCT | 1 | -50.33 ± 7.50 | -48.98 ± 7.51 | 1.36 | 0.002 |
+| OBC1 | 2 | -38.40 ± 6.15 | -36.78 ± 6.16 | 1.63 | 0.003 |
+| OBC2 | 5 | -37.92 ± 6.53 | -36.30 ± 6.54 | 1.62 | 0.003 |
+| GBn | 7 | -41.73 ± 5.26 | -40.93 ± 5.26 | 0.79 | 0.001 |
+| GBn2 | 8 | -42.97 ± 4.92 | -42.15 ± 4.93 | 0.82 | -0.049 |
 
-(All 300 frames.) All five agree with Amber in sign and magnitude within
-a tight, consistent 0.78-2.93 kcal/mol range -- comparable to or better
-than the OBC2-only validation this project previously relied on.
+(All 300 frames, OpenGBSA 0.0.13.) For every model the difference is the
+polar term's 25 Å cutoff in MMPBSA.py; without it Amber and OpenGBSA agree to
+within 0.003 kcal/mol (GBn2: 0.05), and for HCT, OBC1, OBC2 and GBn to within
+0.008 kcal/mol in every frame. Inputs, outputs and scripts for these numbers:
+the paper's data deposit, `coordinate_mode_references/`.
 
 This validation pass found and fixed four real bugs in
 `mmgbsa/mmgbsa_core.py`'s GB-model handling, none of which were visible
