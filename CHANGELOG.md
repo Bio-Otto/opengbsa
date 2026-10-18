@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.12] - 2026-10-18
+
 ### Fixed
 - **A requested OpenMM platform that cannot be used no longer falls back silently.** Previously a requested platform that failed (for example a CUDA runtime newer than the installed driver supports) fell back to the next usable one with only a log line, while the startup banner still named the requested platform, so a benchmark could report a CPU timing as a GPU one. The fallback now prints a `PLATFORM FALLBACK` warning naming both platforms and the reason, every run prints `Running on OpenMM platform: <name>`, and `results_summary.yaml` records `platform_requested`, `platform_used` and `platform_fallback`. The new `platform_settings.strict_platform: true` turns the fallback into an error. Energies were never affected, only timings. Regression test: `test/unit/test_platform_fallback.py`.
 
