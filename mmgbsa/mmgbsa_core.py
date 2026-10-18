@@ -957,16 +957,17 @@ class GBSAForceManager:
         # standard set than GBn2's).
         is_gbn = force_class_name == 'GBSAGBnForce'
         is_gbn2 = force_class_name == 'GBSAGBn2Force'
+        radii, screens = self._assigned_radii(topology, atoms_list)
         for i, atom in enumerate(atoms_list):
             charge = charges[i]
-            raw_radius_nm = self._get_gb_radius(atom) * 0.1
+            raw_radius_nm = (radii[i] if radii else self._get_gb_radius(atom)) * 0.1
             if is_gbn or is_gbn2:
                 residue_name = getattr(getattr(atom, 'residue', None), 'name', None)
                 is_nucleic = residue_name in customgbforces._NUCLEIC_ACID_RESIDUES
                 screen_index = 1 if is_gbn else (3 if is_nucleic else 2)
                 raw_scale = customgbforces._screen_parameter(atom)[screen_index]
             else:
-                raw_scale = self._get_gb_scale(atom)
+                raw_scale = screens[i] if screens else self._get_gb_scale(atom)
             params = [charge, raw_radius_nm, raw_scale]
             if is_gbn2:
                 element = getattr(atom, 'element', None)
@@ -982,6 +983,34 @@ class GBSAForceManager:
                  f"{f', kappa={kappa:.4f} nm^-1' if use_salt else ''}) "
                  f"for salt_concentration={conc} M.")
         return gb_force
+
+    def _assigned_radii(self, topology, atoms_list):
+        """GB radii and screens for a topology that carries none of its own.
+
+        Coordinate Mode builds the system from a PDB through an OpenMM
+        ForceField, so the topology reaching the GB force is an
+        openmm.app.Topology whose atoms have no radii. Up to 0.0.12 those
+        atoms got one radius per element (every hydrogen 1.2 A), whatever
+        gb_model asked for: mbondi2 gives N-bonded hydrogens 1.3 A, and mbondi
+        changes more. They now get the gb_model's set (or an explicit
+        gb_radii_set), assigned by ParmEd's changeRadii from each atom's
+        element and bonded partner, as tleap does. Returns (None, None) when
+        the atoms already carry radii (ParmEd structures from a topology file).
+        """
+        if not atoms_list or any(getattr(a, 'solvent_radius', 0) for a in atoms_list):
+            return None, None
+        import parmed
+        from parmed.tools import changeRadii
+        struct = topology if isinstance(topology, parmed.Structure) else parmed.openmm.load_topology(topology)
+        if len(struct.atoms) != len(atoms_list):
+            raise ValueError(f"GB radii: topology has {len(struct.atoms)} atoms, system {len(atoms_list)}")
+        if not struct.bonds:
+            raise ValueError("GB radii: the topology has no bonds, so hydrogen radii cannot be "
+                             "assigned from their bonded partner")
+        radii_set = StructureManager.gb_radii_decision(struct, self.gb_model, getattr(self, 'gb_radii_set', 'auto'))
+        changeRadii(struct, radii_set).execute()
+        log.info(f"Assigned '{radii_set}' GB radii to a topology without radii ({len(struct.atoms)} atoms).")
+        return [a.solvent_radius for a in struct.atoms], [a.screen for a in struct.atoms]
 
     def _get_gb_radius(self, atom):
         """Get GB radius for atom"""
@@ -1503,6 +1532,7 @@ class GBSACalculator(GBSAForceManager):
 
         # Initialize fixed enhanced GBSA manager
         self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric, sa_model=self.sa_model, nonbonded_cutoff=self.nonbonded_cutoff)
+        self.gbsa_manager.gb_radii_set = self.gb_radii_set
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []

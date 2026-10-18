@@ -39,18 +39,22 @@ python3 prepare_system.py --build-amber-reference
 | | ΔH_bind (kcal/mol) |
 |---|---|
 | Dataset's own gmx_MMPBSA reference (10 frames, `raw/gmx_MMPBSA_wt-IRF11.dat`) | -127.23 ± 6.00 |
-| Independent Amber reference (101 frames, this repo's own build) | -117.86 ± 26.18 |
-| OpenGBSA (101 frames) | -81.38 ± 21.61 |
+| Independent Amber reference (101 frames, this repo's own build) | -109.09 ± 26.17 |
+| OpenGBSA 0.0.13 (101 frames) | -103.85 ± 26.36 |
 
-All three agree in sign and rough magnitude (substantially favorable
-binding, -80 to -130 kcal/mol range). The ~36 kcal/mol OpenGBSA-vs-Amber
-gap is analyzed in detail in this repo's sibling analysis directory
-(`OXA-MD/Publishing/dna_protein_validation/README.md`) and traced to
-force-field/parameterization sensitivity in the polar solvation term
-(ΔEGB has ~7200 kcal/mol magnitude for this highly-charged DNA complex, so
-even a ~0.4% relative difference in GB parameters produces a large
-absolute gap) -- not a splitting/atom-ordering bug; VDW and electrostatic
-components agree to within 0.3 kcal/mol.
+The 5.2 kcal/mol OpenGBSA-vs-Amber difference is almost all in the polar term
+(ΔEGB +6.0 of about 7200 kcal/mol): Amber MMPBSA.py computes effective Born
+radii only within 25 Å (`rgbmax`, fixed by MMPBSA.py), OpenMM over every pair.
+Re-running Amber's polar term without the cutoff leaves 0.58 kcal/mol (van der
+Waals 0.002, electrostatics 0.25, LCPO non-polar 0.54).
+
+Up to OpenGBSA 0.0.12 the difference was 36.7 kcal/mol, from two sources:
+Coordinate Mode gave every atom one GB radius per element (every hydrogen
+1.2 Å) instead of the mbondi2 set (fixed in 0.0.13; 22.5 kcal/mol here), and the
+earlier Amber reference reported a non-polar term (-21.22) that a re-run of the
+same recipe does not reproduce (-12.44). The Amber reference above is that
+re-run; its inputs, outputs and script are in the paper's data deposit
+(`coordinate_mode_references/`).
 
 ## What this example demonstrates
 

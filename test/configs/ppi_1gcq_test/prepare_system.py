@@ -199,11 +199,14 @@ def run_tleap(script_path):
     return result.stdout
 
 
-def build_amber_reference_tleap(pdb_path, out_dir, gb_model="OBC2"):
+def build_amber_reference_tleap(pdb_path, out_dir, gb_model="OBC2", dcd_path=None):
     """1GCQ's route: split into per-chain PDBs, fix each chain's N-terminal
     H1, run tleap, combine. tleap reorders atoms to its own canonical
-    per-residue order, so a name-based reindex map is also written out for
-    use when reordering the trajectory to match.
+    per-residue order (1GCQ: the ACE cap becomes H1, CH3, ... where the
+    trajectory has CH3, H1, ...), so with `dcd_path` the trajectory is also
+    written in the prmtop's atom order (complex_prmtop_order.dcd). MMPBSA.py
+    must read that file: given the original trajectory it silently evaluates
+    the reordered atoms at each other's coordinates.
 
     `gb_model` selects tleap's `set default PBRadii` value (see
     GB_MODEL_RADII_SET) so the resulting prmtop's embedded GB radii match
@@ -253,6 +256,35 @@ def build_amber_reference_tleap(pdb_path, out_dir, gb_model="OBC2"):
     run_tleap(tleap_script)
     print(f"Amber reference (tleap, PBRadii={radii_set} for gb_model={gb_model}): "
           f"{out_dir / 'complex.prmtop'}")
+    if dcd_path is not None:
+        write_prmtop_order_trajectory(chain_pdbs, out_dir / "complex.prmtop", pdb_path, dcd_path,
+                                      out_dir / "complex_prmtop_order.dcd")
+
+
+def write_prmtop_order_trajectory(chain_pdbs, prmtop, pdb_path, dcd_path, out_dcd):
+    """Write the trajectory with its atoms in the tleap prmtop's order, matching
+    atoms by (chain, residue, name). The per-chain PDBs carry the trajectory's
+    atom order and the names tleap read."""
+    import parmed as pmd
+    keys, offsets = [], []
+    for ci, chain_pdb in enumerate(chain_pdbs):
+        cs = pmd.load_file(str(chain_pdb))   # not mdtraj: it renames atoms on load (H1 -> H)
+        offsets.append(len(cs.residues))
+        keys += [(ci, a.residue.idx, a.name) for a in cs.atoms]
+    struct = pmd.load_file(str(prmtop))
+    if len(struct.atoms) != len(keys):
+        raise RuntimeError(f"tleap added or removed atoms ({len(struct.atoms)} vs {len(keys)}); "
+                           "the trajectory cannot be mapped onto this prmtop")
+    lookup = {k: i for i, k in enumerate(keys)}
+    order = []
+    for atom in struct.atoms:
+        ci = 0 if atom.residue.idx < offsets[0] else 1
+        order.append(lookup[(ci, atom.residue.idx - (0 if ci == 0 else offsets[0]), atom.name)])
+    t = md.load(str(dcd_path), top=str(pdb_path))
+    md.Trajectory(t.xyz[:, order], md.Topology.from_openmm(struct.topology), t.time,
+                  t.unitcell_lengths, t.unitcell_angles).save_dcd(str(out_dcd))
+    moved = sum(1 for i, j in enumerate(order) if i != j)
+    print(f"Trajectory in prmtop atom order ({moved} atoms moved): {out_dcd}")
 
 
 def build_amber_reference_openmm(pdb_path, out_dir, his68_hie_to_hid=False, gb_model="OBC2"):
@@ -348,7 +380,7 @@ def main():
         ref_dir = out_dir / "amber_reference" / args.gb_model.lower()
         ref_dir.mkdir(parents=True, exist_ok=True)
         if args.system == "1gcq":
-            build_amber_reference_tleap(pdb_out, ref_dir, gb_model=args.gb_model)
+            build_amber_reference_tleap(pdb_out, ref_dir, gb_model=args.gb_model, dcd_path=dcd_out)
         else:
             build_amber_reference_openmm(pdb_out, ref_dir, gb_model=args.gb_model)
 
