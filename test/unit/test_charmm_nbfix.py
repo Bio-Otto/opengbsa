@@ -52,18 +52,32 @@ def _vdw_energy(system, coords):
     return ctx.getState(getEnergy=True, groups=1 << 1).getPotentialEnergy().value_in_unit(unit.kilocalorie_per_mole)
 
 
+def _lb(e1, r1, e2, r2, r):
+    return _lj(np.sqrt(e1 * e2), r1 + r2, r)
+
+
+EXPECTED = (_lb(0.20, 1.85, 0.20, 1.85, X["NH1"] - X["N"])              # N - NC2
+            + _lb(0.20, 1.85, 0.12, 1.70, X["OD1"] - X["N"])            # N - OC
+            + _lj(NBFIX_EPS, NBFIX_RMIN, X["OD1"] - X["NH1"]))          # NC2 - OC, NBFIX
+WITHOUT_NBFIX = EXPECTED - _lj(NBFIX_EPS, NBFIX_RMIN, 3.2) + _lb(0.20, 1.85, 0.12, 1.70, 3.2)
+
+
 def test_nbfix_is_applied():
     s = _structure()
     assert s.has_NBFIX()
-    lb = lambda e1, r1, e2, r2, r: _lj(np.sqrt(e1 * e2), r1 + r2, r)
-    expected = (lb(0.20, 1.85, 0.20, 1.85, X["NH1"] - X["N"])            # N - NC2
-                + lb(0.20, 1.85, 0.12, 1.70, X["OD1"] - X["N"])          # N - OC
-                + _lj(NBFIX_EPS, NBFIX_RMIN, X["OD1"] - X["NH1"]))       # NC2 - OC, NBFIX
-    without_nbfix = expected - _lj(NBFIX_EPS, NBFIX_RMIN, 3.2) + lb(0.20, 1.85, 0.12, 1.70, 3.2)
     system = StructureManager.create_openmm_system(s, nonbondedMethod=app.NoCutoff)
     got = _vdw_energy(system, s.coordinates)
-    assert got == pytest.approx(expected, abs=1e-6)
-    assert abs(got - without_nbfix) > 1e-3     # the test can tell the two apart
+    assert got == pytest.approx(EXPECTED, abs=1e-6)
+    assert abs(got - WITHOUT_NBFIX) > 1e-3     # the test can tell the two apart
+
+
+def test_amber_prmtop_keeps_its_own_table():
+    """An Amber prmtop stores the full pair table (NBFIX included); it is used as is."""
+    s = _structure()
+    amber = pmd.amber.AmberParm.from_structure(s)
+    assert amber.has_NBFIX()
+    system = StructureManager.create_openmm_system(amber, nonbondedMethod=app.NoCutoff)
+    assert _vdw_energy(system, s.coordinates) == pytest.approx(EXPECTED, abs=1e-6)
 
 
 def test_parmed_alone_drops_it():

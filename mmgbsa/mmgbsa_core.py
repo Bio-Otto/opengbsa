@@ -584,7 +584,12 @@ class StructureManager:
                         print(f"  ❌ Failed to regenerate 1-4 interactions: {e}")
                         print("     Proceeding with zeroed 1-4 interactions (results may be inaccurate).")
                 
-        if hasattr(structure, 'has_NBFIX') and structure.has_NBFIX():
+        # Amber prmtops (incl. chamber) store the full LJ pair table and ParmEd
+        # builds the OpenMM table from it directly; only structures whose NBFIX
+        # lives on their atom types (CHARMM .psf, GROMACS .top) need the rebuild.
+        import parmed
+        if (hasattr(structure, 'has_NBFIX') and structure.has_NBFIX()
+                and not isinstance(structure, parmed.amber.AmberParm)):
             StructureManager._rebuild_nbfix_table(system, structure)
         return system
 
@@ -598,11 +603,13 @@ class StructureManager:
         ParmEd 4.3.1 merges an atom type into an earlier type with the same
         rmin/epsilon whenever the EARLIER type has no NBFIX, even if the later
         one has: NC2 is merged into backbone NH1 and OC into carbonyl O, and
-        their NBFIX disappears. Up to OpenGBSA 0.0.13 every CHARMM .psf and
-        GROMACS CHARMM36 input therefore ran without NBFIX, silently (CTLA4
-        -0.86, VRC01 -2.7, pembrolizumab -1.8 kcal/mol in van der Waals
-        against Amber). Here types are merged only when neither has an NBFIX,
-        and an NBFIX is looked up in both directions.
+        their NBFIX disappears. Up to OpenGBSA 0.0.13 every CHARMM .psf input
+        therefore ran without NBFIX, silently (CTLA4 -0.86, VRC01 about -2.7
+        kcal/mol in van der Waals against Amber). Here types are merged only
+        when neither has an NBFIX, and an NBFIX is looked up in both
+        directions. Amber prmtops (incl. GROMACS .top input, which OpenGBSA
+        converts to one) carry their own pair table and are not rebuilt; a
+        .tpr carries no pair table at all (see tpr_loader).
         """
         import math
         force = next((f for f in system.getForces()

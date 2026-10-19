@@ -368,6 +368,16 @@ def load_tpr_as_parmed(tpr_path: str, xtc_path: str = None) -> pmd.Structure:
                   f"but are NOT applied in Native TPR mode (CMAP parsing is unimplemented). "
                   f"Bonded internal energies from this system will omit the CHARMM CMAP correction. "
                   f"For CMAP-accurate results, use .prmtop Native mode instead.")
+            # CMAP means a CHARMM force field, and CHARMM36 also defines pair-specific
+            # Lennard-Jones terms (NBFIX, GROMACS [ nonbond_params ]). The .tpr reader
+            # gets one LJ parameter set per atom type and cannot see them, so
+            # inter-molecular pairs such as arginine-carboxylate salt bridges lose
+            # their NBFIX (pembrolizumab-PD-1: 1.8 kcal/mol in van der Waals).
+            print("[TprLoader] WARNING: CHARMM force field detected. Pair-specific "
+                  "Lennard-Jones terms (NBFIX, [ nonbond_params ]) cannot be read from a "
+                  ".tpr and are NOT applied; binding energies across salt bridges will "
+                  "differ from the force field. Use the GROMACS .top (converted with "
+                  "ParmEd, which keeps NBFIX) for exact CHARMM36 energies.")
     except Exception:
         pass
 
