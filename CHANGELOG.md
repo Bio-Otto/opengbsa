@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CHARMM NBFIX pair corrections are applied.** For structures with NBFIX terms on their atom types (CHARMM `.psf`, GROMACS CHARMM36 `.top` loaded as such), ParmEd 4.3.1's `createSystem` builds a Lennard-Jones lookup table and merges an atom type into an earlier type with the same rmin/epsilon whenever the earlier type has no NBFIX, even if the later one has. CHARMM36m's arginine NC2 then fell into backbone NH1's class and carboxylate OC into carbonyl O's, and the NC2–OC NBFIX was lost. OpenGBSA now rebuilds the table after `createSystem`, merging types only when neither has an NBFIX. Effect on the van der Waals term against Amber MMPBSA.py (whose chamber topologies keep NBFIX): CTLA4–peptide −0.86 → 0.000 kcal/mol, the VRC01 antibody complexes about −2.7 → 0. Amber prmtops (incl. chamber) keep their own pair table and are unchanged, as are inputs without NBFIX; protein–small-molecule complexes are unchanged unless the ligand carries an NBFIX type. Regression test: `test/unit/test_charmm_nbfix.py`.
+- **Native `.tpr` input with a CHARMM force field now warns that NBFIX is not applied.** A `.tpr` gives one Lennard-Jones parameter set per atom type, so CHARMM36's pair-specific terms (`[ nonbond_params ]`) cannot be recovered from it; the warning points to the GROMACS `.top`, which is converted with ParmEd and keeps them. On pembrolizumab–PD-1 the `.tpr` route put the van der Waals term 1.8 kcal/mol off Amber's; the topology converted from the `.top` reproduces it to 0.001.
+
 ## [0.0.13] - 2026-10-19
 
 ### Fixed
