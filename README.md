@@ -40,8 +40,13 @@ conda activate opengbsa
 conda install -c conda-forge openmm mdtraj rdkit parmed
 pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
 
-# Install the package (requires OpenMM 8.5.0beta from openmm_rc)
-conda install -c bio-otto -c conda-forge/label/openmm_rc -c conda-forge opengbsa=0.0.15
+# Install the package (stable OpenMM >=8.5.1 from conda-forge)
+conda install -c bio-otto -c conda-forge opengbsa=0.0.15
+# GPU (CUDA): match the CUDA runtime to your driver's CUDA version (nvidia-smi,
+# top right), e.g. for a driver that supports CUDA 12.9:
+#   conda install -c conda-forge "cuda-version=12.9"
+# A newer runtime than the driver supports makes OpenMM fall back to the CPU;
+# set platform_settings.strict_platform: true to make that an error.
 ```
 
 ---

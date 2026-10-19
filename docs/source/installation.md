@@ -6,38 +6,54 @@ Follow these steps to install OpenGBSA. The recommended method is using **Conda*
 
 ## 1. Prerequisites
 
-*   **Operating System:** Linux (Recommended: Ubuntu 20.04+) or macOS. WSL2 is recommended for Windows.
+*   **Operating System:** Linux (x86-64) or macOS (Apple Silicon). Windows is not supported natively; WSL2 may work but is untested.
 *   **Package Manager:** [Miniconda](https://docs.conda.io/en/latest/miniconda.html) or [Mambaforge](https://github.com/conda-forge/miniforge).
 
 ---
 
-## 2. Creating the Conda Environment
+## 2. Installing OpenGBSA
 
-OpenGBSA relies on scientific libraries like `openmm`, `mdtraj`, and `openff-toolkit`. Create a clean environment to manage these dependencies:
+One command creates an environment with OpenGBSA and all its dependencies,
+including OpenMM, from the `bio-otto` and `conda-forge` channels:
 
 ```bash
-# 1. Create a new environment (Python 3.10 is recommended)
-conda create -n mmgbsa python=3.10
-
-# 2. Activate the environment
-conda activate mmgbsa
+conda create -n opengbsa -c bio-otto -c conda-forge python=3.10 opengbsa
+conda activate opengbsa
 ```
+
+Packages are built and tested for Linux (x86-64) and macOS (Apple Silicon).
+No AmberTools, sander or APBS installation is needed.
 
 ---
 
-## 3. Installing Dependencies
+## 3. GPU (CUDA) setup
 
-Install the required scientific packages from the `conda-forge` channel:
+OpenMM's CUDA platform needs a CUDA runtime that your NVIDIA driver supports.
+Conda may install a newer runtime than the driver can load; OpenMM then cannot
+use the GPU and OpenGBSA falls back to the CPU with a `PLATFORM FALLBACK`
+warning. Match the runtime to the driver: `nvidia-smi` shows the highest CUDA
+version the driver supports (top right), for example 12.9:
 
 ```bash
-# Core molecular dynamics and chemistry libraries
-conda install -c conda-forge openmm mdtraj openff-toolkit rdkit parmed
-
-# Helper libraries (Visualization and Data Processing)
-pip install matplotlib seaborn pandas pyyaml Jinja2
+conda install -c conda-forge "cuda-version=12.9"
 ```
 
-> **Note:** If you plan to use GPU acceleration, ensure you install the OpenMM package version compatible with your system's CUDA version (Conda typically handles this automatically).
+To make a fallback an error instead of a warning, set
+`platform_settings.strict_platform: true` in the configuration. The OpenCL
+platform needs no CUDA runtime.
+
+### Installing from source
+
+For development, install the dependencies from `conda-forge` and the package in
+editable mode:
+
+```bash
+conda create -n opengbsa-dev -c conda-forge python=3.10 "openmm>=8.5.1,<8.6" mdtraj \
+    openff-toolkit openmmforcefields rdkit parmed prolif mdanalysis scipy pandas \
+    matplotlib seaborn pyyaml plotly pytest
+conda activate opengbsa-dev
+pip install --no-deps -e .
+```
 
 ---
 
