@@ -584,7 +584,60 @@ class StructureManager:
                         print(f"  ❌ Failed to regenerate 1-4 interactions: {e}")
                         print("     Proceeding with zeroed 1-4 interactions (results may be inaccurate).")
                 
+        if hasattr(structure, 'has_NBFIX') and structure.has_NBFIX():
+            StructureManager._rebuild_nbfix_table(system, structure)
         return system
+
+    @staticmethod
+    def _rebuild_nbfix_table(system, structure):
+        """Rebuild ParmEd's NBFIX Lennard-Jones lookup table so no NBFIX is lost.
+
+        For a structure with pair-specific LJ corrections (CHARMM NBFIX, e.g.
+        CHARMM36m's arginine NC2 - carboxylate OC pair), ParmEd's createSystem
+        puts all LJ into a tabulated CustomNonbondedForce. Building the table,
+        ParmEd 4.3.1 merges an atom type into an earlier type with the same
+        rmin/epsilon whenever the EARLIER type has no NBFIX, even if the later
+        one has: NC2 is merged into backbone NH1 and OC into carbonyl O, and
+        their NBFIX disappears. Up to OpenGBSA 0.0.13 every CHARMM .psf and
+        GROMACS CHARMM36 input therefore ran without NBFIX, silently (CTLA4
+        -0.86, VRC01 -2.7, pembrolizumab -1.8 kcal/mol in van der Waals
+        against Amber). Here types are merged only when neither has an NBFIX,
+        and an NBFIX is looked up in both directions.
+        """
+        import math
+        force = next((f for f in system.getForces()
+                      if isinstance(f, openmm.CustomNonbondedForce) and f.getNumTabulatedFunctions() == 2
+                      and {f.getTabulatedFunctionName(0), f.getTabulatedFunctionName(1)} == {'acoef', 'bcoef'}),
+                     None)
+        if force is None or force.getNumParticles() != len(structure.atoms):
+            return
+        classes, index_of, per_atom = [], {}, []
+        for atom in structure.atoms:
+            t = atom.atom_type
+            key = ('nbfix', t.name) if t.nbfix else ('lj', t.rmin, abs(t.epsilon))
+            if key not in index_of:
+                index_of[key] = len(classes)
+                classes.append(t)
+            per_atom.append(index_of[key])
+        n = len(classes)
+        acoef, bcoef = [0.0] * (n * n), [0.0] * (n * n)
+        for i, a in enumerate(classes):
+            for j, b in enumerate(classes):
+                pair = (a.nbfix or {}).get(b.name) or (b.nbfix or {}).get(a.name)
+                if pair is None:
+                    rij = (a.rmin + b.rmin) * 0.1                                  # A -> nm
+                    wdij = math.sqrt(abs(a.epsilon) * abs(b.epsilon)) * 4.184      # kcal -> kJ
+                else:
+                    rij, wdij = pair[0] * 0.1, abs(pair[1]) * 4.184
+                rij6 = rij ** 6
+                acoef[i + n * j] = math.sqrt(wdij) * rij6
+                bcoef[i + n * j] = 2 * wdij * rij6
+        tables = {force.getTabulatedFunctionName(k): force.getTabulatedFunction(k) for k in range(2)}
+        tables['acoef'].setFunctionParameters(n, n, acoef)
+        tables['bcoef'].setFunctionParameters(n, n, bcoef)
+        for i, k in enumerate(per_atom):
+            force.setParticleParameters(i, (k,))
+        log.info(f"Rebuilt the NBFIX Lennard-Jones table ({n} LJ classes).")
 
 
 class GBSAForceManager:
