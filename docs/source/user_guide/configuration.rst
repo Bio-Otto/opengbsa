@@ -87,8 +87,9 @@ Controls the physics model and sampling protocols.
 *   **Units**: Angstrom
 *   **Default**: ``null`` (no cutoff -- exact ``O(N^2)`` nonbonded/GB Born-radius evaluation)
 *   **Description**: Optional distance cutoff for both the nonbonded and GB
-    Born-radius calculations (OpenMM's ``CutoffNonPeriodic`` nonbonded
-    method, analogous to Amber ``sander``'s ``rgbmax``). Leaving this unset
+    calculations (OpenMM's ``CutoffNonPeriodic`` nonbonded method). Unlike
+    Amber's ``rgbmax`` (see ``rgbmax`` below) it also truncates the energy
+    terms. Leaving this unset
     is the most accurate option and matches the values used throughout
     this project's own validation work (see the Tutorial section), but is
     the single most expensive part of the calculation for larger systems --
@@ -99,15 +100,45 @@ Controls the physics model and sampling protocols.
     fixed across any comparison you intend to make (e.g. against an Amber
     reference computed with a specific ``rgbmax``).
 
-.. note::
-   Amber MMPBSA.py limits only the Born-radius calculation to 25 Å
-   (``rgbmax = 25``, which MMPBSA.py does not let you change) and evaluates every
-   energy term without a cutoff. OpenGBSA has no equivalent of that setting: with
-   the default ``nonbonded_cutoff: null`` it evaluates the Born radii over all
-   atom pairs, so its polar term is systematically larger than MMPBSA.py's, by
-   about 1% of ΔE_GB for protein--ligand complexes and by more at large
-   interfaces. ``nonbonded_cutoff`` is not a substitute, because it also
-   truncates the energy terms.
+``sa_model``
+~~~~~~~~~~~~
+*   **Type**: ``LCPO`` or ``ACE``
+*   **Default**: ``LCPO`` (since 0.0.15; earlier versions defaulted to ``ACE``)
+*   **Description**: Non-polar (surface-area) model. ``LCPO`` uses Amber
+    MMPBSA.py's GB defaults (surface tension 0.0072 kcal/mol/Å², offset 0);
+    ``ACE`` is OpenMM's default. The two compute different areas and give
+    different non-polar terms, increasingly so at large interfaces.
+
+``rgbmax``
+~~~~~~~~~~
+*   **Type**: Float or ``null``
+*   **Units**: Angstrom
+*   **Default**: ``null`` (every atom pair contributes to the effective Born radii)
+*   **Description**: Born-radius cutoff, as Amber's ``rgbmax``: only atoms
+    within this distance descreen an atom; an atom straddling the cutoff is
+    integrated up to it. The GB energy pairs themselves stay uncut. Amber
+    MMPBSA.py fixes ``rgbmax = 25`` and does not let the user change it, so
+    without a cutoff OpenGBSA's polar term is systematically larger than
+    MMPBSA.py's: by about 1% of ΔE_GB for protein--ligand complexes and by up
+    to 7% at antibody interfaces.
+
+``amber_compatible``
+~~~~~~~~~~~~~~~~~~~~
+*   **Type**: Boolean
+*   **Default**: ``false``
+*   **Description**: Reproduce Amber MMPBSA.py's GB conventions: ``LCPO``,
+    ``rgbmax: 25`` and MMPBSA.py's solvent dielectric, which depends on the
+    program it uses internally (80.0 with ``sander`` for CHARMM/chamber
+    topologies, 78.3 with its NAB program otherwise). Use it to compare with
+    MMPBSA.py results; settings given explicitly still win. Off by default,
+    because the cutoff is an approximation whose effect grows with system size.
+
+``solvent_dielectric``
+~~~~~~~~~~~~~~~~~~~~~~
+*   **Type**: Float
+*   **Default**: 78.5 (with ``amber_compatible``: MMPBSA.py's value, see above)
+*   **Description**: Solvent dielectric constant of the GB model; it also
+    enters the Debye--Hückel screening.
 
 Platform Settings
 -----------------

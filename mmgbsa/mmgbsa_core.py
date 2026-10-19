@@ -343,6 +343,12 @@ class StructureManager:
                             f"GB energies will use the crude element-only radii fallback and "
                             f"will NOT be comparable to Amber MMPBSA.py results.")
         struct.opengbsa_radii_set = radii_set
+        # CHARMM-family topology? Decides MMPBSA.py's solvent dielectric under
+        # amber_compatible (its sander path, 80.0, serves CHARMM/chamber topologies).
+        # Tagged here because split_components later clears Urey-Bradley terms.
+        struct.opengbsa_charmm_like = bool(
+            is_charmm_origin or isinstance(struct, pmd.amber.ChamberParm)
+            or len(getattr(struct, 'urey_bradleys', [])) or len(getattr(struct, 'cmaps', [])))
 
         # Implicit solvent and GBSA evaluation does not support explicit waters inside the structural force tree.
         # Stripping is now handled deliberately in the main pipeline AFTER exporting the solvated PDB for MDTraj
@@ -426,7 +432,8 @@ class StructureManager:
                            implicitSolventSaltConc=0.0*unit.molar,
                            nonbondedMethod=app.NoCutoff, 
                            nonbondedCutoff=None,
-                           constraints=None):
+                           constraints=None,
+                           solventDielectric=None):
         """
         Create an OpenMM System from a ParmEd Structure.
         """
@@ -447,7 +454,11 @@ class StructureManager:
             'nonbondedCutoff': nonbondedCutoff,
             'constraints': constraints,
             'implicitSolvent': pass_implicit,
-            'implicitSolventSaltConc': pass_salt
+            'implicitSolventSaltConc': pass_salt,
+            # ParmEd builds the HCT/GBn/GBn2 force itself (OBC1/OBC2 are rebuilt in
+            # refine_gbsa_forces); without this it used its default 78.5 whatever
+            # solvent_dielectric was configured.
+            'solventDielectric': solventDielectric if pass_implicit is not None else None,
         }
         # Filter None to let defaults handle it or avoid errors
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -654,13 +665,19 @@ class GBSAForceManager:
     then refines it (separating SA, adding salt if needed).
     """
     
-    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='ACE', nonbonded_cutoff=None):
+    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='LCPO', nonbonded_cutoff=None):
         self.gb_model = gb_model
         self.salt_concentration = salt_concentration
         self.solute_dielectric = solute_dielectric
         self.solvent_dielectric = solvent_dielectric
         self.sa_model = sa_model
         self.nonbonded_cutoff = nonbonded_cutoff
+        # Born-radius cutoff (A) as in Amber's rgbmax; None = every pair (default).
+        self.rgbmax = None
+        # amber_compatible: pick MMPBSA.py's solvent dielectric from the topology
+        # (resolve_mmpbsa_dielectric) unless one was set explicitly.
+        self.dielectric_from_preset = False
+        self._preset_dielectric_resolved = False
         self.physics_assumptions = []
         self._logged_radius_fallback = False
         
@@ -698,6 +715,7 @@ class GBSAForceManager:
         3. Adds the specific SA model (ACE/LCPO).
         """
         log.process(f"Refining GBSA forces for {self.gb_model} model...")
+        self.resolve_mmpbsa_dielectric(topology)
         
         # Determine strict OpenMM Topology for SA/LCPO (which requires it)
         # But for OBC fallback, we prefer the ParmEd Structure (if passed) to get radii.
@@ -888,6 +906,9 @@ class GBSAForceManager:
                  # We simply print what we get.
                  log.info(f"CustomGBForce Particle 0 params: {params}")
 
+        if gb_force is not None:
+            self._apply_rgbmax(gb_force)
+
         # 3. Add Separate Surface Area Force
         sa_force = self._setup_surface_area_force(system, omm_topology)
         sa_force.setForceGroup(4) # Explicitly set to Group 4 to separate from VDW
@@ -910,6 +931,50 @@ class GBSAForceManager:
         'GBn': 'GBSAGBnForce',
         'GBn2': 'GBSAGBn2Force',
     }
+
+    def resolve_mmpbsa_dielectric(self, topology):
+        """amber_compatible: set MMPBSA.py's solvent dielectric for this topology.
+
+        MMPBSA.py evaluates GB with sander (extdiel 80.0) for CHARMM/chamber
+        topologies and with its NAB program (extdiel 78.3) otherwise. Decided once,
+        from the first (complex) structure; a no-op unless the dielectric was left
+        to the preset.
+        """
+        if not getattr(self, 'dielectric_from_preset', False) or getattr(self, '_preset_dielectric_resolved', False):
+            return
+        charmm = bool(getattr(topology, 'opengbsa_charmm_like', False))
+        self.solvent_dielectric = 80.0 if charmm else 78.3
+        self._preset_dielectric_resolved = True
+        log.info(f"amber_compatible: solvent dielectric {self.solvent_dielectric} "
+                 f"({'CHARMM/chamber topology, MMPBSA.py sander path' if charmm else 'MMPBSA.py NAB path'}).")
+
+    def _apply_rgbmax(self, gb_force):
+        """Restrict the effective-Born-radius integral to pairs within rgbmax.
+
+        Amber (sander, NAB) sums the descreening integral only over atoms j within
+        rgbmax of atom i: atoms beyond rgbmax + s_j are skipped and atoms straddling
+        the cutoff are integrated up to rgbmax (U = rgbmax). OpenMM's GB forces
+        integrate every pair. Capping the upper limit U at rgbmax and dropping pairs
+        whose lower limit L exceeds it reproduces Amber's rule for all five models
+        (the GBn/GBn2 neck term acts only near contact). The GB energy pairs stay
+        uncut, as in MMPBSA.py (cut = 999).
+        """
+        if self.rgbmax is None:
+            return
+        if not isinstance(gb_force, openmm.CustomGBForce):
+            raise ValueError("rgbmax needs a CustomGBForce; this GB force cannot apply it.")
+        for k in range(gb_force.getNumComputedValues()):
+            name, expr, kind = gb_force.getComputedValueParameters(k)
+            if kind != openmm.CustomGBForce.ParticlePairNoExclusions or "U=r+sr2;" not in expr:
+                continue
+            new = expr.replace("select(step(r+sr2-or1), ", "select(step(r+sr2-or1)*step(rgbmax-L), ", 1)
+            new = new.replace("U=r+sr2;", "U=min(r+sr2, rgbmax);", 1) + f";rgbmax={self.rgbmax * 0.1:.10g}"
+            if new.count("rgbmax") != 3:
+                raise ValueError(f"Unexpected Born-radius integral for rgbmax: {expr}")
+            gb_force.setComputedValueParameters(k, name, new, kind)
+            log.info(f"Born-radius integral restricted to rgbmax = {self.rgbmax:g} A.")
+            return
+        raise ValueError("No Born-radius integral found to apply rgbmax to.")
 
     def _create_fallback_obc_force(self, system, topology):
         """
@@ -1478,10 +1543,10 @@ class GBSACalculator(GBSAForceManager):
     
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15,
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
-             charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=78.5, entropy_method='none', decomposition_method='full',
-             visualization_settings=None, platform=None, reporting_settings=None, sa_model='ACE', cache_dir=None, nonbonded_cutoff=None,
+             charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
+             visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None, nonbonded_cutoff=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
-             gb_radii_set='auto'):
+             gb_radii_set='auto', amber_compatible=False, rgbmax=None):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1568,6 +1633,24 @@ class GBSACalculator(GBSAForceManager):
         self.ligand_forcefield = 'openff' 
         self.charge_method = charge_method
         self.solute_dielectric = solute_dielectric
+        # amber_compatible reproduces Amber MMPBSA.py's GB conventions: LCPO non-polar
+        # term, effective Born radii only within rgbmax = 25 A, and MMPBSA.py's solvent
+        # dielectric (80.0 on its sander path, used for CHARMM/chamber topologies;
+        # 78.3 on its NAB path, used otherwise). Explicit settings win. By default
+        # OpenGBSA evaluates every pair (no Born-radius cutoff) at dielectric 78.5.
+        self.amber_compatible = bool(amber_compatible)
+        if sa_model is None:
+            sa_model = 'LCPO'
+        elif self.amber_compatible and sa_model != 'LCPO':
+            log.warning(f"amber_compatible uses LCPO; keeping the explicit sa_model='{sa_model}'.")
+        if rgbmax is None and self.amber_compatible:
+            rgbmax = 25.0
+        self.rgbmax = rgbmax
+        self._dielectric_from_preset = solvent_dielectric is None and self.amber_compatible
+        self.dielectric_from_preset = self._dielectric_from_preset     # for the inherited refine path
+        self._preset_dielectric_resolved = False
+        if solvent_dielectric is None:
+            solvent_dielectric = 78.5     # amber_compatible: replaced once the topology is known
         self.solvent_dielectric = solvent_dielectric
         self.entropy_method = entropy_method
         self.decomposition_method = decomposition_method
@@ -1593,6 +1676,12 @@ class GBSACalculator(GBSAForceManager):
         # Initialize fixed enhanced GBSA manager
         self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric, sa_model=self.sa_model, nonbonded_cutoff=self.nonbonded_cutoff)
         self.gbsa_manager.gb_radii_set = self.gb_radii_set
+        self.gbsa_manager.rgbmax = self.rgbmax
+        self.gbsa_manager.dielectric_from_preset = self._dielectric_from_preset
+        if self.amber_compatible or self.rgbmax is not None:
+            log.info(f"GB conventions: sa_model={self.sa_model}, rgbmax="
+                     f"{'none' if self.rgbmax is None else f'{self.rgbmax:g} A'}, solvent dielectric "
+                     f"{'from the topology (MMPBSA.py: 80.0 CHARMM/chamber, 78.3 otherwise)' if self._dielectric_from_preset else self.solvent_dielectric}.")
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []
@@ -4064,12 +4153,15 @@ class GBSACalculator(GBSAForceManager):
                          except Exception as e:
                              log.warning(f"Failed to apply GB radii set to {name} structure: {e}.")
 
+                     self.gbsa_manager.resolve_mmpbsa_dielectric(struct)
+                     self.solvent_dielectric = self.gbsa_manager.solvent_dielectric
                      sys = StructureManager.create_openmm_system(
                          struct, 
                          implicitSolvent=self.gbsa_manager.current_app_model,
                          implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar,
                          nonbondedMethod=nb_method,
-                         nonbondedCutoff=nb_cutoff
+                         nonbondedCutoff=nb_cutoff,
+                         solventDielectric=self.gbsa_manager.solvent_dielectric
                      ) 
                      sys = self.gbsa_manager.refine_gbsa_forces(sys, struct)
                      return sys

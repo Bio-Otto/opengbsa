@@ -183,6 +183,16 @@ class ConfigManager:
                 f"Invalid gb_radii_set '{radii_set}'. Must be one of: {valid_radii_sets}"
             )
 
+        # Born-radius cutoff (A, Amber's rgbmax) and the MMPBSA.py-compatible preset
+        rgbmax = settings.get('rgbmax', None)
+        if rgbmax is not None and (not isinstance(rgbmax, (int, float)) or isinstance(rgbmax, bool) or rgbmax <= 0):
+            self.validation_errors.append(f"Invalid rgbmax '{rgbmax}': a positive distance in A, or null for no cutoff")
+        if not isinstance(settings.get('amber_compatible', False), bool):
+            self.validation_errors.append("amber_compatible must be true or false")
+        sa_model = settings.get('sa_model', None)
+        if sa_model is not None and sa_model not in ('ACE', 'LCPO'):
+            self.validation_errors.append(f"Invalid sa_model '{sa_model}'. Must be one of: ['ACE', 'LCPO']")
+
         # Validate binding_mode
         valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
         binding_mode = settings.get('binding_mode', 'standard')
@@ -405,6 +415,21 @@ analysis_settings:
   
   # Salt concentration in Molar (M) for the implicit solvent model
   salt_concentration: 0.15
+
+  # Non-polar (surface-area) model: 'LCPO' (default; MMPBSA.py's GB default,
+  # gamma 0.0072 kcal/mol/A^2, offset 0) or 'ACE' (OpenMM's default).
+  sa_model: 'LCPO'
+
+  # Reproduce Amber MMPBSA.py's GB conventions: LCPO, effective Born radii only
+  # within rgbmax = 25 A, and MMPBSA.py's solvent dielectric (80.0 for CHARMM/
+  # chamber topologies, which it evaluates with sander; 78.3 otherwise, NAB).
+  # Off by default: OpenGBSA then evaluates every pair at dielectric 78.5.
+  amber_compatible: false
+
+  # Born-radius cutoff in A (Amber's rgbmax): only atoms within this distance
+  # descreen an atom. null = every pair (default); amber_compatible sets 25.
+  # Unlike nonbonded_cutoff it leaves the energy terms uncut.
+  rgbmax: null
 
   # === Frame Selection Strategy ===
   

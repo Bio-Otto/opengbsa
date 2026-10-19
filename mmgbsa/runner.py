@@ -233,15 +233,17 @@ class MMGBSARunner:
             protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
             charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
-            solvent_dielectric=analysis_settings.get('solvent_dielectric', 78.5),
+            solvent_dielectric=analysis_settings.get('solvent_dielectric', None),   # 78.5, or MMPBSA.py's with amber_compatible
             entropy_method=analysis_settings.get('entropy_method', 'none'),
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
-            sa_model=analysis_settings.get('sa_model', 'ACE'),
+            sa_model=analysis_settings.get('sa_model', None),                       # LCPO
             nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
             charmm_params=forcefield_settings.get('charmm_params', None),
             charmm_coordinates=forcefield_settings.get('charmm_coordinates', None),
             gb_radii_set=analysis_settings.get('gb_radii_set', 'auto'),
+            amber_compatible=analysis_settings.get('amber_compatible', False),
+            rgbmax=analysis_settings.get('rgbmax', None),
             cache_dir=cache_dir
         )
 
