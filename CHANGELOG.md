@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.16] - 2026-10-19
+
 ### Changed
-- **OpenGBSA now depends on stable OpenMM from conda-forge** (`openmm >=8.5.1,<8.6`) instead of the 8.5.0 beta from the `openmm_rc` label, so `conda create -n opengbsa -c bio-otto -c conda-forge python=3.10 opengbsa` installs it with no pre-release channel. The validation in the accompanying paper was run with OpenMM 8.5.1.
+- **OpenGBSA now depends on stable OpenMM from conda-forge** (`openmm >=8.5.1,<8.6`) instead of the 8.5.0 beta from the `openmm_rc` label, so `conda create -n opengbsa -c bio-otto -c conda-forge python=3.10 opengbsa` installs it with no pre-release channel. The GPU calculations in the accompanying paper used OpenMM 8.5.1.
 - The unit tests now also run on macOS (Apple Silicon) in CI, alongside Linux.
 
 ### Documentation
