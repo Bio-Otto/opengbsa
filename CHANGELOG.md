@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.15] - 2026-10-19
+
 ### Added
 - **`amber_compatible: true` reproduces Amber MMPBSA.py's GB conventions.** It sets the LCPO non-polar model, a 25 Å Born-radius cutoff and MMPBSA.py's solvent dielectric, which depends on the program MMPBSA.py uses internally: 80.0 (`sander`) for CHARMM/chamber topologies, 78.3 (NAB) otherwise. Explicit settings still win. Against MMPBSA.py on the same frames: 1GCQ +0.001, 3CLpro (baicalein) 0.000, 3dd2 −0.004, 2OOB +0.017, CTLA4 −0.09, VRC01 −0.19, IRF11 −0.56 kcal/mol (the remainders are in the LCPO non-polar term and, for IRF11, electrostatics).
 - **`rgbmax` sets a Born-radius cutoff (Å), as Amber's `rgbmax`.** Only atoms within it descreen an atom; an atom straddling it is integrated up to it, exactly as in `sander`. The GB energy pairs stay uncut. Default `null` (every pair), the more exact calculation; the cutoff's effect grows with system size (0.02 kcal/mol for a 29-atom ligand, 15.8 for an antibody–antigen complex). Regression test: `test/unit/test_rgbmax_amber_compatible.py`.
