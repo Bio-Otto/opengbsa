@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **OpenGBSA now depends on stable OpenMM from conda-forge** (`openmm >=8.5.1,<8.6`) instead of the 8.5.0 beta from the `openmm_rc` label, so `conda create -n opengbsa -c bio-otto -c conda-forge python=3.10 opengbsa` installs it with no pre-release channel. The validation in the accompanying paper was run with OpenMM 8.5.1.
+- The unit tests now also run on macOS (Apple Silicon) in CI, alongside Linux.
+
+### Documentation
+- Installation guide and README: the one-command install, and how to match the CUDA runtime to the driver (`cuda-version`), with `strict_platform` to turn a silent CPU fallback into an error.
+
 ## [0.0.15] - 2026-10-19
 
 ### Added

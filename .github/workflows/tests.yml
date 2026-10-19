@@ -9,13 +9,14 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.10"]
+        os: [ubuntu-latest, macos-14]     # Linux x86-64 and macOS Apple Silicon
 
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +26,9 @@ jobs:
         with:
           environment-name: opengbsa-ci
           create-args: >-
-            -c conda-forge/label/openmm_rc -c conda-forge
+            -c conda-forge
             python=${{ matrix.python-version }}
-            openmm=8.5.0beta
+            "openmm>=8.5.1,<8.6"
             mdtraj>=1.9.0
             openff-toolkit>=0.14.0
             openmmforcefields

@@ -49,7 +49,7 @@ jobs:
         uses: conda-incubator/setup-miniconda@v3
         with:
           auto-update-conda: false
-          channels: conda-forge/label/openmm_rc,conda-forge
+          channels: conda-forge
           channel-priority: strict
           auto-activate: true
           activate-environment: base
@@ -63,7 +63,7 @@ jobs:
           # Isolated env with the exact target Python so conda-build inherits
           # the correct Python version without touching the base env.
           conda create -y -n buildenv \
-            -c conda-forge/label/openmm_rc -c conda-forge \
+            -c conda-forge \
             "python=${{ matrix.python-version }}" conda-build anaconda-client
           conda run -n buildenv python --version
 
@@ -102,7 +102,7 @@ jobs:
 
           echo "=== Actual build ==="
           "${ENV_PREFIX}/bin/conda-build" conda-recipe \
-              -c conda-forge/label/openmm_rc -c conda-forge \
+              -c conda-forge \
               --output-folder "$(pwd)/build_output" \
               --no-test \
               --python "${{ matrix.python-version }}" \
@@ -127,7 +127,7 @@ jobs:
 
           conda create -y -n smoke \
             -c "$(pwd)/build_output" \
-            -c conda-forge/label/openmm_rc -c conda-forge \
+            -c conda-forge \
             "opengbsa" "python=${{ matrix.python-version }}"
 
           conda run -n smoke python -c "import openmm; print('openmm', openmm.__version__)"
