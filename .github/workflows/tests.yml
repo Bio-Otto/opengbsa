@@ -28,7 +28,7 @@ jobs:
           create-args: >-
             -c conda-forge
             python=${{ matrix.python-version }}
-            "openmm>=8.5.1,<8.6"
+            openmm>=8.5.1,<8.6
             mdtraj>=1.9.0
             openff-toolkit>=0.14.0
             openmmforcefields
