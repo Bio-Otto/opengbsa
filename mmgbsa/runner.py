@@ -244,6 +244,7 @@ class MMGBSARunner:
             gb_radii_set=analysis_settings.get('gb_radii_set', 'auto'),
             amber_compatible=analysis_settings.get('amber_compatible', False),
             rgbmax=analysis_settings.get('rgbmax', None),
+            lcpo_typing=analysis_settings.get('lcpo_typing', None),     # 'element'; 'amber' with amber_compatible
             cache_dir=cache_dir
         )
 

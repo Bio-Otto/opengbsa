@@ -189,6 +189,9 @@ class ConfigManager:
             self.validation_errors.append(f"Invalid rgbmax '{rgbmax}': a positive distance in A, or null for no cutoff")
         if not isinstance(settings.get('amber_compatible', False), bool):
             self.validation_errors.append("amber_compatible must be true or false")
+        lcpo_typing = settings.get('lcpo_typing', None)
+        if lcpo_typing is not None and lcpo_typing not in ('element', 'amber'):
+            self.validation_errors.append(f"Invalid lcpo_typing '{lcpo_typing}'. Must be one of: ['element', 'amber']")
         sa_model = settings.get('sa_model', None)
         if sa_model is not None and sa_model not in ('ACE', 'LCPO'):
             self.validation_errors.append(f"Invalid sa_model '{sa_model}'. Must be one of: ['ACE', 'LCPO']")
@@ -420,10 +423,16 @@ analysis_settings:
   # gamma 0.0072 kcal/mol/A^2, offset 0) or 'ACE' (OpenMM's default).
   sa_model: 'LCPO'
 
-  # Reproduce Amber MMPBSA.py's GB conventions: LCPO, effective Born radii only
-  # within rgbmax = 25 A, and MMPBSA.py's solvent dielectric (80.0 for CHARMM/
-  # chamber topologies, which it evaluates with sander; 78.3 otherwise, NAB).
-  # Off by default: OpenGBSA then evaluates every pair at dielectric 78.5.
+  # LCPO parameter assignment: 'element' (default; by element and bonding, as in
+  # OpenMM) or 'amber' (by atom-type name, as Amber MMPBSA.py does; differs for
+  # non-Amber types such as CHARMM or GAFF). amber_compatible sets 'amber'.
+  lcpo_typing: null
+
+  # Reproduce Amber MMPBSA.py's GB conventions: LCPO with Amber's atom typing,
+  # effective Born radii only within rgbmax = 25 A, and MMPBSA.py's solvent
+  # dielectric (80.0 for CHARMM/chamber topologies, which it evaluates with
+  # sander; 78.3 otherwise, NAB). Off by default: OpenGBSA then evaluates every
+  # pair at dielectric 78.5 and assigns LCPO parameters by element.
   amber_compatible: false
 
   # Born-radius cutoff in A (Amber's rgbmax): only atoms within this distance
