@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.17] - 2026-10-20
+
 ### Added
 - **`lcpo_typing` chooses how LCPO parameters are assigned:** `element` (default; by element and bonding, as in OpenMM) or `amber` (by atom-type name, as Amber MMPBSA.py's `sander` `gbsa=1` does, with sp2-carbon parameters for any other element). The two agree for Amber force-field types and differ for others: CHARMM `OC` and `NH3`, GAFF `cl`, and the generic type names ParmEd writes when it converts an OpenMM system. With a topology file, `amber` reads its atom-type names; in Coordinate Mode it reads the Amber atom-type classes of the force field, which `tleap` would write. New module `mmgbsa/lcpo_amber.py`; regression test `test/unit/test_lcpo_amber_typing.py` reproduces `sander`'s ESURF for a GAFF2 ligand with a chlorine (5.3744 kcal/mol).
 
