@@ -26,7 +26,7 @@ from openmm import app, openmm, unit
 
 import mdtraj as md
 import parmed
-from .mmgbsa_core import GBSACalculator
+from .mmgbsa_core import GBSACalculator, SOLVENT_ION_RESNAMES
 from .trajectory import reimage_molecules
 
 from .logger import ToolLogger
@@ -316,8 +316,12 @@ class PerResidueDecomposition:
             # If we loaded using solvated_topology, we MUST strip down to the dry complex
             # If we loaded using complex_pdb (dry), we might already match, or mismatch (and likely crashed above if mismatch).
             
-            selection_query = "not (water or resname NA CL K MG ZN CA HOH WAT TIP3 SOL)"
-            keep_indices = topology.select(selection_query)
+            # Same solvent/ion residue names as the system builder's strip
+            # (mmgbsa_core solvent_mask), CHARMM's included: with only the
+            # Amber/GROMACS names, CHARMM SOD/CLA ions stayed in the trajectory
+            # and every frame had more atoms than the system.
+            keep_indices = np.array([a.index for a in topology.atoms
+                                     if not (a.residue.is_water or a.residue.name in SOLVENT_ION_RESNAMES)])
             
             # Optimization: Only strip if we actually have solvent atoms or if explicit solvated top was used
             if solvated_topology or len(keep_indices) < topology.n_atoms:
@@ -358,7 +362,8 @@ class PerResidueDecomposition:
             # In many workflows `complex_pdb` here is a distilled/temporary PDB without full FF params.
             topology_for_params = decomposition_topology_file or complex_pdb
             systems = self._prepare_decomposition_systems(
-                ligand_mol, complex_pdb, ligand_pdb, topology_for_params
+                ligand_mol, complex_pdb, ligand_pdb, topology_for_params,
+                ligand_selection=ligand_selection
             )
             
             if not systems:
@@ -761,7 +766,8 @@ class PerResidueDecomposition:
         
         return frame_indices
     
-    def _prepare_decomposition_systems(self, ligand_mol, complex_pdb, ligand_pdb, topology_file=None):
+    def _prepare_decomposition_systems(self, ligand_mol, complex_pdb, ligand_pdb, topology_file=None,
+                                       ligand_selection=None):
         """
         Prepare OpenMM systems for energy decomposition
         """
@@ -826,10 +832,19 @@ class PerResidueDecomposition:
             # explicit index-matching step.
             if protein_system is not None:
                 try:
-                    ligand_resname_for_protein = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
-                    protein_indices_in_complex = self.mmgbsa_calculator.get_protein_indices(
-                        complex_topology, ligand_resname_for_protein
-                    )
+                    if ligand_selection:
+                        # A selection-defined ligand (e.g. a protein chain):
+                        # the receptor is every other atom of the dry complex.
+                        # find_ligand_resname would guess one residue name
+                        # (a CHARMM 'HSD', say) and miscount the receptor.
+                        lig = set(self.mmgbsa_calculator.get_selection_indices(complex_topology, ligand_selection))
+                        protein_indices_in_complex = [i for i in range(complex_system.getNumParticles())
+                                                      if i not in lig]
+                    else:
+                        ligand_resname_for_protein = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
+                        protein_indices_in_complex = self.mmgbsa_calculator.get_protein_indices(
+                            complex_topology, ligand_resname_for_protein
+                        )
                     if protein_system.getNumParticles() != len(protein_indices_in_complex):
                         log.warning(
                             f"  Protein system has {protein_system.getNumParticles()} particles but "

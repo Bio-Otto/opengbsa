@@ -13,6 +13,7 @@ than completed, see CHANGELOG.md.
 
 import numpy as np
 import pandas as pd
+import copy
 import time
 from pathlib import Path
 import pickle
@@ -121,6 +122,14 @@ except ImportError:
 
 # Initialize logger
 log = ToolLogger()
+
+# Solvent and ion residue names stripped before the calculation, in the
+# Amber/GROMACS and the CHARMM conventions (the per-residue decomposition
+# strips its trajectory with the same set).
+SOLVENT_ION_RESNAMES = ("WAT", "HOH", "H2O", "SOL", "TIP3", "TIP", "SPC",
+                        "NA", "CL", "K", "MG", "ZN", "CA",
+                        "Na+", "Cl-", "K+", "Mg2+", "Ca2+", "Zn2+",
+                        "SOD", "CLA", "POT", "CAL", "ZN2")
 try:
     from openmmforcefields.generators import SystemGenerator
 except ImportError:
@@ -389,10 +398,20 @@ class StructureManager:
         # structures alike) is numerically safe. (Clear the TrackedList in
         # place; assigning a plain list breaks ParmEd's change-tracking.)
         complex_structure.urey_bradleys.clear()
-        # Create copies to avoid mutating original
-        # Use generic Structure class to avoid AmberParm pointer update issues during stripping
-        receptor = complex_structure.copy(cls=pmd.Structure)
-        ligand = complex_structure.copy(cls=pmd.Structure)
+        # Create copies to avoid mutating original. An Amber topology is split
+        # as its own class (a full copy keeps the prmtop data that its strip()
+        # rebuilds): a generic Structure copy of a CHARMM ChamberParm loses the
+        # CHARMM 1-4 Lennard-Jones parameters (epsilon_14 = 0) and the
+        # pair-specific LJ table, so receptor and ligand would not match the
+        # complex (+217 kcal/mol in the van der Waals term of a CHARMM36
+        # protein-ligand complex given without receptor/ligand topologies).
+        # For AmberParm both copies give identical energies.
+        if isinstance(complex_structure, pmd.amber.AmberParm):
+            receptor = copy.deepcopy(complex_structure)
+            ligand = copy.deepcopy(complex_structure)
+        else:
+            receptor = complex_structure.copy(cls=pmd.Structure)
+            ligand = complex_structure.copy(cls=pmd.Structure)
 
         if ligand_indices is not None:
             ligand_index_set = set(int(i) for i in ligand_indices)
@@ -421,10 +440,7 @@ class StructureManager:
         # the LCPO surface-area force downstream. Includes both naming
         # conventions so this mask works for every currently-supported
         # topology origin.
-        solvent_mask = (":WAT,HOH,H2O,SOL,TIP3,TIP,SPC,"
-                         "NA,CL,K,MG,ZN,CA,"
-                         "Na+,Cl-,K+,Mg2+,Ca2+,Zn2+,"
-                         "SOD,CLA,POT,CAL,ZN2")
+        solvent_mask = ":" + ",".join(SOLVENT_ION_RESNAMES)
         receptor.strip(solvent_mask)
         ligand.strip(solvent_mask)
 
