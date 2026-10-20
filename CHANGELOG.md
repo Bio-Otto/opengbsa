@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The parallel CPU decomposition path left out the per-residue non-polar term.** With `decomposition_platform: CPU` and more than one worker (`advanced_settings.n_jobs`), `per_residue_detailed.csv` had no `nonpolar_solvation` column, so per-residue solvation was the polar term alone; the serial path (one worker, or a GPU decomposition platform) was correct. Both paths now report the same non-polar term. Whole-complex binding energies were never affected. Regression test: `test/unit/test_decomposition_nonpolar_paths.py`.
+
 ## [0.0.17] - 2026-10-20
 
 ### Added

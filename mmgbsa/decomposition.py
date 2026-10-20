@@ -474,7 +474,13 @@ class PerResidueDecomposition:
                      solvation_contributions = self._approximate_solvation_decomposition(
                         systems, positions, residue_map, ligand_indices
                      )
-                     
+                     # Per-residue non-polar (surface-area) term, as in the serial path
+                     # (_decompose_single_frame); without it the parallel path reported
+                     # polar-only solvation.
+                     nonpolar_solvation_contributions = self._sa_decomposition(
+                        frame, systems, residue_map, ligand_indices
+                     )
+
                      # Calculate Complex Solvation if needed
                      complex_solv = {}
                      if self.report_raw_energies:
@@ -498,6 +504,7 @@ class PerResidueDecomposition:
                              'vdw': vdw,
                              'electrostatic': ele,
                              'solvation': sol,
+                             'nonpolar_solvation': nonpolar_solvation_contributions.get(res_id, 0.0),
                              'total': vdw + ele + sol
                          }
                          
