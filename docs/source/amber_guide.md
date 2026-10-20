@@ -32,7 +32,7 @@ input:
 analysis_settings:
   gb_model: OBC2 # Recommended for AMBER
   sa_model: LCPO # Default since 0.0.15 (matches MMPBSA.py)
-  amber_compatible: true # MMPBSA.py's 25 A Born-radius cutoff and solvent dielectric
+  amber_compatible: true # MMPBSA.py's 25 A Born-radius cutoff, solvent dielectric and LCPO atom typing
   salt_concentration: 0.150
   protein_forcefield: amber
   ligand_forcefield: openff # Not used for native AMBER but required by schema

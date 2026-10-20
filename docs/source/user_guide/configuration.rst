@@ -109,6 +109,22 @@ Controls the physics model and sampling protocols.
     ``ACE`` is OpenMM's default. The two compute different areas and give
     different non-polar terms, increasingly so at large interfaces.
 
+``lcpo_typing``
+~~~~~~~~~~~~~~~
+*   **Type**: ``element`` or ``amber``
+*   **Default**: ``element`` (with ``amber_compatible``: ``amber``)
+*   **Description**: How the LCPO parameters of each atom are chosen.
+    ``element`` follows OpenMM: by element and bonding. ``amber`` follows Amber
+    MMPBSA.py (``sander``'s ``gbsa=1``): by element and then by the *name* of the
+    atom type, with sp2-carbon parameters for any other element. The two agree
+    for Amber force-field types and differ for others: a CHARMM carboxylate
+    oxygen (``OC``) receives hydroxyl parameters, a CHARMM lysine nitrogen
+    (``NH3``) sp2-nitrogen parameters, and a GAFF chlorine (``cl``) sp2-carbon
+    parameters. The non-polar term then differs from MMPBSA.py's by up to a few
+    tenths of a kcal/mol. With a topology file, ``amber`` uses its atom-type
+    names; in Coordinate Mode it uses the Amber atom-type classes of the force
+    field, which ``tleap`` would write.
+
 ``rgbmax``
 ~~~~~~~~~~
 *   **Type**: Float or ``null``
@@ -126,8 +142,8 @@ Controls the physics model and sampling protocols.
 ~~~~~~~~~~~~~~~~~~~~
 *   **Type**: Boolean
 *   **Default**: ``false``
-*   **Description**: Reproduce Amber MMPBSA.py's GB conventions: ``LCPO``,
-    ``rgbmax: 25`` and MMPBSA.py's solvent dielectric, which depends on the
+*   **Description**: Reproduce Amber MMPBSA.py's GB conventions: ``LCPO``
+    with ``lcpo_typing: amber``, ``rgbmax: 25`` and MMPBSA.py's solvent dielectric, which depends on the
     program it uses internally (80.0 with ``sander`` for CHARMM/chamber
     topologies, 78.3 with its NAB program otherwise). Use it to compare with
     MMPBSA.py results; settings given explicitly still win. Off by default,

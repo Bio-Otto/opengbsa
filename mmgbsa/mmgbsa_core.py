@@ -108,6 +108,9 @@ try:
 except ImportError:
     HTMLReportGenerator = None
 
+from mmgbsa.lcpo_amber import (amber_lcpo_params, type_names_from_forcefield,
+                                type_names_from_structure)
+
 # Try to import LCPO parameters and helper
 try:
     from openmm.app.internal.lcpo import getLCPOParamsTopology
@@ -678,6 +681,9 @@ class GBSAForceManager:
         # (resolve_mmpbsa_dielectric) unless one was set explicitly.
         self.dielectric_from_preset = False
         self._preset_dielectric_resolved = False
+        # LCPO parameter assignment: 'element' (OpenMM: element and bonding) or
+        # 'amber' (MMPBSA.py: by atom-type name; see mmgbsa/lcpo_amber.py).
+        self.lcpo_typing = 'element'
         self.physics_assumptions = []
         self._logged_radius_fallback = False
         
@@ -707,7 +713,7 @@ class GBSAForceManager:
             'Fe': 1.0, 'Cu': 1.0, 'Mn': 1.0
         }
 
-    def refine_gbsa_forces(self, system, topology):
+    def refine_gbsa_forces(self, system, topology, lcpo_type_names=None):
         """
         Refine GBSA forces in a system that was already created with implicit solvent.
         1. Identifies the GB force.
@@ -724,6 +730,10 @@ class GBSAForceManager:
              omm_topology = topology.topology
         else:
              omm_topology = topology
+        # Atom-type names for Amber LCPO typing: given by the caller (Coordinate Mode,
+        # from the force field) or read from a ParmEd Structure (the topology file).
+        if lcpo_type_names is None and self.lcpo_typing == 'amber':
+             lcpo_type_names = type_names_from_structure(topology)
 
         # 1. Identify Existing GB Force
         gb_force_index = -1
@@ -910,7 +920,7 @@ class GBSAForceManager:
             self._apply_rgbmax(gb_force)
 
         # 3. Add Separate Surface Area Force
-        sa_force = self._setup_surface_area_force(system, omm_topology)
+        sa_force = self._setup_surface_area_force(system, omm_topology, lcpo_type_names)
         sa_force.setForceGroup(4) # Explicitly set to Group 4 to separate from VDW
         system.addForce(sa_force)
         
@@ -1179,10 +1189,10 @@ class GBSAForceManager:
         symbol = atom.element.symbol if hasattr(atom, 'element') and atom.element else 'C'
         return default_scales.get(symbol, 0.8)
 
-    def _setup_surface_area_force(self, system, topology):
+    def _setup_surface_area_force(self, system, topology, lcpo_type_names=None):
         """Setup Surface Area Force explicitly"""
         if self.sa_model == 'LCPO':
-             return self._setup_lcpo_force(system, topology)
+             return self._setup_lcpo_force(system, topology, lcpo_type_names)
         else:
              return self._create_ace_sa_force(system, topology)
 
@@ -1220,7 +1230,7 @@ class GBSAForceManager:
         print(f"✓ Added enhanced surface area force (GBSAOBC-ACE-SA) to system")
         return sa_force
 
-    def _setup_lcpo_force(self, system, topology):
+    def _setup_lcpo_force(self, system, topology, lcpo_type_names=None):
         """Setup LCPO (Linear Combinations of Pairwise Overlaps) Surface Area Force"""
         print("✓ Setting up LCPO Surface Area Force...")
         
@@ -1235,9 +1245,21 @@ class GBSAForceManager:
         except AttributeError:
              pass
         
+        probe_radius_nm = 1.4 * 0.1
+        if self.lcpo_typing == 'amber':
+             if lcpo_type_names is not None:
+                  # MMPBSA.py's assignment by atom-type name (radius in A, P4 in 1/A^2)
+                  for r, p1, p2, p3, p4 in amber_lcpo_params(topology, lcpo_type_names):
+                       lcpo_force.addParticle((r * 0.1 + probe_radius_nm) if r > 0 else 0.0,
+                                              p1, p2, p3, p4 * 100.0)
+                  log.info(f"LCPO parameters assigned by atom-type name, as in Amber MMPBSA.py "
+                           f"({lcpo_force.getNumParticles()} particles).")
+                  lcpo_force.setForceGroup(4)
+                  return lcpo_force
+             log.warning("lcpo_typing='amber' requested, but this input carries no atom-type "
+                         "names; assigning LCPO parameters by element and bonding instead.")
         print("ℹ️  Calculating LCPO parameters from topology...")
         params_list = getLCPOParamsTopology(topology)
-        probe_radius_nm = 1.4 * 0.1
         
         for params in params_list:
              r = params[0]
@@ -1546,7 +1568,7 @@ class GBSACalculator(GBSAForceManager):
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
              visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None, nonbonded_cutoff=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
-             gb_radii_set='auto', amber_compatible=False, rgbmax=None):
+             gb_radii_set='auto', amber_compatible=False, rgbmax=None, lcpo_typing=None):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1646,6 +1668,9 @@ class GBSACalculator(GBSAForceManager):
         if rgbmax is None and self.amber_compatible:
             rgbmax = 25.0
         self.rgbmax = rgbmax
+        if lcpo_typing is None:
+            lcpo_typing = 'amber' if self.amber_compatible else 'element'
+        self.lcpo_typing = lcpo_typing
         self._dielectric_from_preset = solvent_dielectric is None and self.amber_compatible
         self.dielectric_from_preset = self._dielectric_from_preset     # for the inherited refine path
         self._preset_dielectric_resolved = False
@@ -1678,8 +1703,9 @@ class GBSACalculator(GBSAForceManager):
         self.gbsa_manager.gb_radii_set = self.gb_radii_set
         self.gbsa_manager.rgbmax = self.rgbmax
         self.gbsa_manager.dielectric_from_preset = self._dielectric_from_preset
+        self.gbsa_manager.lcpo_typing = self.lcpo_typing
         if self.amber_compatible or self.rgbmax is not None:
-            log.info(f"GB conventions: sa_model={self.sa_model}, rgbmax="
+            log.info(f"GB conventions: sa_model={self.sa_model} (LCPO typing: {self.lcpo_typing}), rgbmax="
                      f"{'none' if self.rgbmax is None else f'{self.rgbmax:g} A'}, solvent dielectric "
                      f"{'from the topology (MMPBSA.py: 80.0 CHARMM/chamber, 78.3 otherwise)' if self._dielectric_from_preset else self.solvent_dielectric}.")
         
@@ -3113,7 +3139,9 @@ class GBSACalculator(GBSAForceManager):
                 fallback_kwargs = {k: v for k, v in nonperiodic_kwargs.items() if not k.startswith('implicitSolvent')}
                 system = ff.createSystem(modeller.topology, **general_kwargs, **fallback_kwargs)
             if add_gbsa:
-                system = self.refine_gbsa_forces(system, modeller.topology)
+                names = (type_names_from_forcefield(ff, modeller.topology)
+                         if self.lcpo_typing == 'amber' else None)
+                system = self.refine_gbsa_forces(system, modeller.topology, names)
             modeller.topology.setPeriodicBoxVectors(None)
             log.success(f"System created ({system.getNumParticles()} particles)")
             return system, modeller.topology, modeller.positions
@@ -3181,8 +3209,13 @@ class GBSACalculator(GBSAForceManager):
                 raise e
         
         if add_gbsa:
-            # Refine the generated forces (Separate SA, etc.)
-            system = self.refine_gbsa_forces(system, modeller.topology)
+            # Refine the generated forces (Separate SA, etc.); Amber LCPO typing reads the
+            # atom-type classes the generator's force field assigned (what tleap writes)
+            names = None
+            if self.lcpo_typing == 'amber':
+                gen = locals().get('fallback_generator') or system_generator
+                names = type_names_from_forcefield(getattr(gen, 'forcefield', None), modeller.topology)
+            system = self.refine_gbsa_forces(system, modeller.topology, names)
         
         # Ensure non-periodic
         modeller.topology.setPeriodicBoxVectors(None)

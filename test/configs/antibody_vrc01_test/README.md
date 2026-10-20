@@ -104,9 +104,10 @@ Measured from `wt.pdb`/`wt.psf`, not assumed:
 | Frames | 4,601 |
 | Box | 12.8 nm cubic, truncated solvation shell (solute extent ~9.3 nm) |
 
-The complex stays bound throughout: minimum antigen–antibody heavy-atom distance
-is 1.78 Å and flat across frames 0, 2300 and 4600, so the ensemble describes a
-bound state rather than an association event.
+The complex stays bound throughout: the minimum antigen–antibody heavy-atom
+distance stays between 2.4 and 2.8 Å (median 2.6 Å, every 100th frame of the
+4,601), so the ensemble describes a bound state rather than an association event.
+(An earlier version of this note gave 1.78 Å, which included hydrogens.)
 
 CHARMM parameters are not shipped with the deposit. `params/` holds the standard
 CHARMM36m protein and water/ion sets (copied from `../namd_charmm_test/`); all
