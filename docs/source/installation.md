@@ -22,7 +22,7 @@ conda activate opengbsa
 ```
 
 Packages are built and tested for Linux (x86-64) and macOS (Apple Silicon).
-No AmberTools, sander or APBS installation is needed.
+All energies are computed with OpenMM, so no AmberTools installation is needed.
 
 ---
 

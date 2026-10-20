@@ -102,7 +102,7 @@ output_settings:
 ## ⚠️ Notes for GROMACS Users
 
 *   If your `.top` file includes other `.itp` files, **all referenced `.itp` files MUST be present in the same folder.**
-*   Prefer using `.tpr` files as input — the runner will automatically strip solvent and select protein + ligand atoms.
+*   `.tpr` files are convenient — the runner strips solvent and selects protein + ligand atoms automatically. For CHARMM force fields, however, use the `.top`: OpenGBSA's `.tpr` reader does not apply CHARMM36's pair-specific Lennard-Jones corrections (NBFIX), and warns when it reads such a `.tpr`.
 *   The trajectory (`.xtc`) atom count must match the topology. If you get an "Atom count mismatch", ensure waters/ions are handled consistently.
 
 ---

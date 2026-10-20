@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **`amber_compatible` now also sets `lcpo_typing: amber`.** This removes the remaining non-polar difference from MMPBSA.py: on the same frames, VRC01 (CHARMM) −0.185 → +0.002 kcal/mol in the binding enthalpy, with the non-polar term at +0.0001; 1GCQ (Coordinate Mode) unchanged at +0.001. Default settings are unchanged.
 
+### Fixed
+- **The `.tpr` NBFIX warning and documentation described the limitation wrongly.** A GROMACS `.tpr` does store CHARMM36's pair-specific Lennard-Jones terms (in its full atom-type-pair matrix); it is OpenGBSA's `.tpr` reader (TprParser, one parameter set per atom type) that does not apply them. The 0.0.14 entry below said a `.tpr` "cannot carry" them. The warning, README and installation guide now say this correctly; the recommendation for CHARMM systems (read the `.top`) is unchanged.
+
 ## [0.0.16] - 2026-10-19
 
 ### Changed
