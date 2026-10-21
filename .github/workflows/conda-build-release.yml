@@ -101,7 +101,9 @@ jobs:
           "${ENV_PREFIX}/bin/python" --version
 
           echo "=== Actual build ==="
-          "${ENV_PREFIX}/bin/conda-build" conda-recipe \
+          # The base .condarc selects the libmamba solver, which the conda
+          # inside buildenv does not have; use the classic solver for the build.
+          CONDA_SOLVER=classic "${ENV_PREFIX}/bin/conda-build" conda-recipe \
               -c conda-forge \
               --output-folder "$(pwd)/build_output" \
               --no-test \

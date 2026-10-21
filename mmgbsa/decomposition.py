@@ -589,6 +589,10 @@ class PerResidueDecomposition:
                             # Needs check. I'll assume standard keys.
                             frame_data[f'{res_name}{res_number}_{chain_id}_electrostatic'] = energies.get('electrostatic', energies.get('elec', 0.0))
                             frame_data[f'{res_name}{res_number}_{chain_id}_solvation'] = energies['solvation']
+                            # Per-residue non-polar (surface-area) term of this frame; the
+                            # per-frame 'total' stays vdW + electrostatic + polar, as in
+                            # per_residue_detailed.csv.
+                            frame_data[f'{res_name}{res_number}_{chain_id}_nonpolar_solvation'] = energies.get('nonpolar_solvation', 0.0)
                             frame_data[f'{res_name}{res_number}_{chain_id}_total'] = energies['total']
                         
                         frame_by_frame_data.append(frame_data)
