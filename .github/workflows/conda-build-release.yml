@@ -62,9 +62,11 @@ jobs:
           pip uninstall conda-content-trust -y || true
           # Isolated env with the exact target Python so conda-build inherits
           # the correct Python version without touching the base env.
+          # conda-libmamba-solver: the base .condarc selects the libmamba
+          # solver, and conda-build's own conda in buildenv fails without it.
           conda create -y -n buildenv \
             -c conda-forge \
-            "python=${{ matrix.python-version }}" conda-build anaconda-client
+            "python=${{ matrix.python-version }}" conda-build conda-libmamba-solver anaconda-client
           conda run -n buildenv python --version
 
       - name: Build conda package
