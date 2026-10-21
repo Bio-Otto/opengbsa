@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.18] - 2026-10-22
+
+### Added
+- **`frame_by_frame_decomposition.csv` now also has each residue's non-polar term per frame** (`<residue>_nonpolar_solvation`) on the serial decomposition path, so per-frame contributions can be summed exactly as the per-residue totals that include the non-polar term. The per-frame `_total` column is unchanged (van der Waals + electrostatic + polar, as in `per_residue_detailed.csv`).
+
 ### Fixed
 - **The parallel CPU decomposition path left out the per-residue non-polar term.** With `decomposition_platform: CPU` and more than one worker (`advanced_settings.n_jobs`), `per_residue_detailed.csv` had no `nonpolar_solvation` column, so per-residue solvation was the polar term alone; the serial path (one worker, or a GPU decomposition platform) was correct. Both paths now report the same non-polar term. Whole-complex binding energies were never affected. Regression test: `test/unit/test_decomposition_paths.py`.
 - **Per-residue decomposition of CHARMM systems with CHARMM-named ions.** The decomposition stripped solvent and ions from the trajectory with Amber/GROMACS residue names only, so CHARMM `SOD`/`CLA` ions stayed and every frame had more atoms than the system: the serial path failed on every frame (no per-residue output) and the parallel path fell back to its distance-heuristic polar term. It now strips the same residue names as the system builder (one shared list, `SOLVENT_ION_RESNAMES`). With a selection-defined ligand (`ligand_selection`, e.g. a protein chain), the receptor used for the per-residue GB self-energy correction is now every atom outside the selection; it was every residue not named like a guessed ligand residue (a CHARMM `HSD` on the CTLA4 test system), and the correction was skipped. Regression test on the CTLA4/NAMD fixture in `test/unit/test_decomposition_paths.py`.

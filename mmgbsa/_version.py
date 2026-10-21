@@ -1,4 +1,4 @@
-__version__ = "0.0.17"
+__version__ = "0.0.18"
 __author__ = "H. Ibrahim Özdemir"
 __email__ = "halil.ibrahim.oozdemir@gmail.com"
 __link__ = "https://github.com/bio-otto/opengbsa"

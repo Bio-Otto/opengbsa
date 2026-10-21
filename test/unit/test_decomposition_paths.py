@@ -77,6 +77,12 @@ def test_parallel_and_serial_paths_report_the_same_nonpolar_term(tmp_path):
     assert len(common) == len(serial)
     pd.testing.assert_series_equal(parallel.loc[common, "nonpolar_solvation"],
                                    serial.loc[common, "nonpolar_solvation"], atol=1e-6, check_names=False)
+    # The serial path also writes the non-polar term frame by frame, and its frame mean
+    # is the per-residue value.
+    frames = pd.read_csv(next((tmp_path / "serial").rglob("frame_by_frame_decomposition.csv")))
+    for rid, value in serial.nonpolar_solvation.items():
+        name, num, chain = rid.split("_")
+        assert frames[f"{name}{num}_{chain}_nonpolar_solvation"].mean() == pytest.approx(value, abs=1e-6)
 
 
 @pytest.mark.skipif(not _present(CT_FILES), reason="CHARMM/NAMD test fixture not present")
