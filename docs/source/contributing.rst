@@ -16,7 +16,7 @@ Install from source in editable mode as described in :doc:`installation`
     cd opengbsa
     # create and activate the development environment (installation, section 6)
     pip install --no-deps -e .
-    python -m pytest test/unit -q
+    python -m pytest test/unit
 
 The tests that need MD trajectories are skipped until the test data are
 downloaded with ``opengbsa --fetch-test-data`` (:doc:`testing`). Continuous

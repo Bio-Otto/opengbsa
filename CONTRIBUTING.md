@@ -12,7 +12,7 @@ Bug reports, questions and pull requests are welcome.
 git clone https://github.com/Bio-Otto/opengbsa.git
 cd opengbsa
 pip install --no-deps -e .        # in an environment with the dependencies
-python -m pytest test/unit -q
+python -m pytest test/unit
 ```
 
 * Add a regression test under `test/unit/` for every fix and feature; tests

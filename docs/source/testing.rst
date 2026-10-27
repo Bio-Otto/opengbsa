@@ -74,9 +74,9 @@ pytest to the environment:
 The repository contains the topologies of the test systems but not their
 trajectories. Without them, the 13 tests that need a trajectory are skipped. On
 a Linux machine with a CUDA GPU the run ends with ``117 passed, 13 skipped``.
-Without a GPU the tests of the GPU platforms are skipped as well; continuous
-integration, which has no GPU, reports ``115 passed, 15 skipped`` on Linux and
-``114 passed, 16 skipped`` on macOS. No test should fail. The skipped tests and
+Without a GPU the test of the CUDA platform is skipped as well; continuous
+integration, which has no GPU, reports ``116 passed, 14 skipped`` on Linux and
+on macOS. No test should fail. The skipped tests and
 their reasons are listed at the end of the run. To run them as well, download
 the test trajectories (10 GB, Zenodo record
 `10.5281/zenodo.22139199 <https://doi.org/10.5281/zenodo.22139199>`_) from the
