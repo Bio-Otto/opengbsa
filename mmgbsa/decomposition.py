@@ -631,14 +631,14 @@ class PerResidueDecomposition:
 
     def _write_hotspot_pymol(self, averaged_results):
         """Write hotspots.pdb and view_binding.pml into the output folder: the
-        receptor coloured by each residue's contribution to the binding enthalpy
-        (van der Waals, electrostatic, polar and non-polar terms)."""
+        receptor coloured by each residue's contribution, the `total` of
+        per_residue_detailed.csv and of the plots (van der Waals, electrostatic
+        and polar terms)."""
         inputs = getattr(self, '_hotspot_inputs', None)
         if not inputs or not self.output_dir:
             return None
         try:
-            values = {res_id: e.get('total_mean', 0.0) + e.get('nonpolar_solvation_mean', 0.0)
-                      for res_id, e in averaged_results.items()}
+            values = {res_id: e.get('total_mean', 0.0) for res_id, e in averaged_results.items()}
             path = write_hotspot_pymol(inputs['topology'], inputs['positions'], values,
                                        inputs['residue_map'], inputs['ligand_indices'],
                                        self.output_dir)
@@ -1732,10 +1732,7 @@ class PerResidueDecomposition:
             plt.close()
             
             print(f"  Plots saved to {plot_path}")
-            
-            # Generate advanced visualization if available
-            self._generate_advanced_visualization(analysis_results)
-            
+
         except Exception as e:
             print(f"  WARNING: Plot generation failed: {e}")
 
@@ -1824,87 +1821,6 @@ class PerResidueDecomposition:
         except Exception as e:
             print(f"  WARNING: Heatmap generation failed: {e}")
     
-    def _generate_advanced_visualization(self, analysis_results):
-        """
-        Generate advanced visualization with ProLIF integration
-        """
-        try:
-            # Try to import advanced visualization
-            # Try to import advanced visualization
-            try:
-                from mmgbsa.visualization import AdvancedVisualization
-            except ImportError:
-                # Fallback purely for local testing / dev environment
-                from visualization import AdvancedVisualization
-            
-            print("  Generating advanced visualization with ProLIF integration...")
-            
-            # Keep advanced visualization artifacts inside analysis outputs.
-            base_output_dir = getattr(self, 'report_dir', None) or getattr(self, 'output_dir', None)
-            if base_output_dir:
-                adv_viz_dir = os.path.join(base_output_dir, "advanced_decomposition_viz")
-            else:
-                adv_viz_dir = "advanced_decomposition_viz"
-
-            # Initialize advanced visualization
-            adv_viz = AdvancedVisualization(adv_viz_dir)
-            
-            # Load MM/GBSA results
-            mmgbsa_results = {
-                'per_residue': analysis_results['dataframe'],
-                'mean_binding_energy': analysis_results['total_contribution'],
-                'hot_spots': analysis_results['hot_spots']
-            }
-            adv_viz.load_mmgbsa_results(mmgbsa_results)
-            
-            # Try to analyze interactions if files are available
-            try:
-                # These would be the actual file paths from the analysis
-                complex_pdb = "test/complex.pdb"  # This should be the actual path
-                ligand_mol = "test/ligand.sdf"    # This should be the actual path
-                trajectory_file = "test/complex.xtc"  # This should be the actual path
-                
-                if os.path.exists(complex_pdb) and os.path.exists(ligand_mol):
-                    print("  Analyzing protein-ligand interactions with ProLIF...")
-                    
-                    # Analyze interactions
-                    interaction_results = adv_viz.analyze_protein_ligand_interactions(
-                        complex_pdb=complex_pdb,
-                        ligand_mol=ligand_mol,
-                        trajectory_file=trajectory_file if os.path.exists(trajectory_file) else None,
-                        frame_indices=list(range(0, 50, 5))  # Every 5th frame
-                    )
-                    
-                    if interaction_results:
-                        # Compare with MM/GBSA results
-                        comparison_results = adv_viz.compare_interactions_with_mmgbsa()
-                        
-                        if comparison_results:
-                            print("  Interaction analysis and comparison completed")
-                            
-                            # Generate comprehensive plots
-                            adv_viz.generate_comprehensive_plots("MM/GBSA Analysis")
-                            
-                            # Save results
-                            adv_viz.save_results()
-                            
-                            print(f"  Advanced visualization saved to: {adv_viz.output_dir}")
-                        else:
-                            print("  WARNING: Comparison analysis failed")
-                    else:
-                        print("  WARNING: Interaction analysis failed")
-                else:
-                    print("  WARNING: Required files not found for interaction analysis")
-                    
-            except Exception as e:
-                print(f"  WARNING: Advanced visualization failed: {e}")
-                print("  This is expected if ProLIF or required files are not available")
-            
-        except ImportError:
-            print("  WARNING: Advanced visualization module not available")
-        except Exception as e:
-            print(f"  WARNING: Advanced visualization failed: {e}")
-    
     def _print_decomposition_summary(self, results):
         """
         Print comprehensive summary of decomposition results
@@ -1922,61 +1838,21 @@ class PerResidueDecomposition:
         print(f"Residues:      {analysis['n_residues']}")
         print(f"Frames:        {results['n_decomp_frames']}")
 
-        # Self-consistency check: the per-residue decomposition sum is
-        # compared against the independently-computed total binding energy.
-        # A material gap here does not, by itself, indicate a bug -- there
-        # are two known, deliberate, structural reasons a gap is EXPECTED:
-        #
-        # (1) vdW and electrostatic are HALVED (Gohlke-Kollman 50/50, see
-        # `_calculate_pairwise_interactions_standalone`), matching Amber
-        # MMPBSA.py idecomp's own attribution convention -- but this means
-        # the residue sum only ever recovers the PROTEIN side's half of
-        # every protein-ligand cross-term, never the ligand's own half
-        # (there is no ligand entry in `residue_map` to receive it). Summing
-        # ALL protein residues therefore reproduces only ~half of
-        # delta_vdw/delta_elec, not the whole-system total -- by design,
-        # not a bug.
-        #
-        # (2) the per-residue sum has no nonpolar surface-area (SA) term at
-        # all (see the class docstring), so the total binding energy's own
-        # mean SA contribution (`delta_sa`, if available) is subtracted out
-        # before comparing. Solvation itself also has no bucket for the
-        # ligand's OWN GB self-energy change upon binding (real and
-        # physical, but structurally impossible to attribute to a protein
-        # residue) even with the protein-side complex-vs-receptor correction
-        # available (see `_gb_solvation_decomposition`'s docstring for its
-        # own known residual limitation on residues in close ligand contact).
-        #
-        # Given (1) and (2) together, a substantial gap (tens of kcal/mol,
-        # not single-digit) is the EXPECTED outcome, not a regression signal
-        # -- this check's tolerance is kept low mainly to catch gross
-        # failures (residues missing from `residue_map`, a force not
-        # accounted for, a frame-count mismatch), not to validate exact
-        # numerical agreement, which is not architecturally expected here.
-        gap_tolerance_kcal = 3.0
+        # The sum over receptor residues is reported, not tested against the
+        # binding enthalpy. They differ by design: vdW and electrostatic pair
+        # terms are halved between receptor residue and ligand (Gohlke-Kollman,
+        # as in Amber MMPBSA.py idecomp; see
+        # `_calculate_pairwise_interactions_standalone`), the ligand's half and
+        # its own GB self-energy change have no receptor residue to go to, and
+        # the non-polar term is listed separately.
         total_binding = mmgbsa.get('mean_binding_energy')
         residue_sum = analysis.get('total_contribution')
-        mean_delta_sa = 0.0
-        sa_note = ""
-        df_for_sa = mmgbsa.get('dataframe')
-        if df_for_sa is not None and 'delta_sa' in getattr(df_for_sa, 'columns', []):
-            mean_delta_sa = float(df_for_sa['delta_sa'].mean())
-            sa_note = f" (of which the omitted SA/nonpolar term accounts for {mean_delta_sa:.2f} kcal/mol)"
         if total_binding is not None and residue_sum is not None:
-            consistency_gap = abs((total_binding - mean_delta_sa) - residue_sum)
-            if consistency_gap > gap_tolerance_kcal:
-                print(f"WARNING: Residue-sum vs. total binding energy (SA-term-adjusted) differ by "
-                      f"{consistency_gap:.2f} kcal/mol (tolerance: {gap_tolerance_kcal} kcal/mol){sa_note}. "
-                      f"The per-residue decomposition may be missing atoms/residues, using a "
-                      f"different frame set than the baseline MM/GBSA run, or the GB force "
-                      f"could not be identified and fell back to the unphysical distance "
-                      f"heuristic (check for a 'falling back to the unphysical distance-heuristic "
-                      f"approximation' warning above). Do not treat the per-residue breakdown as "
-                      f"reliable until this gap is understood.")
-            else:
-                print(f"✓ Consistency check passed: residue sum matches total binding energy "
-                      f"(after accounting for the omitted SA term{sa_note}) "
-                      f"within {gap_tolerance_kcal} kcal/mol (gap: {consistency_gap:.3f} kcal/mol).")
+            print(f"Sum of the receptor-residue contributions: {residue_sum:.2f} kcal/mol "
+                  f"(binding enthalpy {total_binding:.2f} kcal/mol). The two are not expected "
+                  f"to agree: as in Amber's idecomp, each receptor-ligand pair term is split "
+                  f"equally between the receptor residue and the ligand, and the ligand's share "
+                  f"and the non-polar term are not listed per receptor residue.")
         print()
         
         print("TOP 10 BINDING HOT SPOTS:")

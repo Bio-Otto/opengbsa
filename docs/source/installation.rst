@@ -92,7 +92,8 @@ editable mode into an environment with the same dependencies as the package:
     git checkout v\ |release|
     conda create -n opengbsa-dev -c conda-forge python=3.10 "openmm>=8.5.1,<8.6" \\
         mdtraj openff-toolkit openmmforcefields prolif rdkit mdanalysis parmed \\
-        "numpy<2" scipy pandas matplotlib seaborn pyyaml plotly pathlib2 pooch pytest
+        "numpy<2" scipy pandas matplotlib seaborn pyyaml plotly pathlib2 pooch \\
+        "setuptools<81" pytest
     conda activate opengbsa-dev
     pip install --no-deps -e .
     opengbsa --version

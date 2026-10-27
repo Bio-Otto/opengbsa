@@ -29,7 +29,8 @@ if [ -d "raw/1_MD/baicalein" ]; then
 else
     if [ ! -f "$ARCHIVE" ]; then
         echo "Downloading 1_MD.zip (~9.1 GB -- this will take a while)..."
-        curl -L -o "$ARCHIVE" "https://zenodo.org/records/17926575/files/1_MD.zip?download=1"
+        curl -fL --retry 3 --retry-delay 5 -o "$ARCHIVE" "https://zenodo.org/records/17926575/files/1_MD.zip?download=1" \
+        || { rm -f "$ARCHIVE"; echo "Download failed; run this script again." >&2; exit 1; }
     fi
     echo "Extracting baicalein/ only..."
     unzip -o "$ARCHIVE" -d raw \

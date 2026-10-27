@@ -40,12 +40,29 @@ opengbsa compound7a_config.yaml
 
 ## Expected result
 
-Full-trajectory (last 300 of 30000 frames) results, from this project's
-independent Amber MMPBSA.py reference vs. OpenGBSA -- see
-`OXA-MD/Publishing/3CLpro_validation/README.md` for the complete 7-ligand
-comparison table and per-residue decomposition analysis. Baicalein
-specifically: same sign, same order of magnitude, consistent with the
-other six ligands.
+The last 300 of 30000 frames of each trajectory, OBC2, frame means ± SD in
+kcal/mol. "Amber" is Amber MMPBSA.py on the same frames.
+
+| Ligand | Amber MMPBSA.py | OpenGBSA | Difference | OpenGBSA, `amber_compatible: true` |
+|---|---|---|---|---|
+| baicalein | -23.89 ± 3.77 | -23.87 ± 3.79 | 0.02 | -23.888 |
+| compound7a | -22.14 ± 2.46 | -22.03 ± 2.47 | 0.10 | -22.137 |
+| compound7b | -30.70 ± 3.91 | -30.64 ± 3.94 | 0.06 | -30.699 |
+| compound7c | -40.89 ± 4.78 | -40.92 ± 4.81 | -0.03 | -40.886 |
+| compound7d | -37.88 ± 2.90 | -37.84 ± 2.91 | 0.04 | -37.879 |
+| compound7e | -27.47 ± 3.04 | -27.28 ± 3.05 | 0.20 | -27.472 |
+| compound7f | -46.40 ± 4.31 | -46.46 ± 4.33 | -0.07 | -46.399 |
+
+Van der Waals, electrostatic and non-polar terms agree to within 0.001
+kcal/mol. The small differences are in the polar term: Amber MMPBSA.py
+computes effective Born radii only from atoms within 25 Å (`rgbmax`), OpenMM
+from every atom pair. With `amber_compatible: true` OpenGBSA applies the same
+cutoff and reproduces MMPBSA.py to within 0.001 kcal/mol.
+
+`python test/configs/check_validation.py 3clpro_baicalein` (from the repository root)
+runs baicalein and compares it with these values; `--amber-compatible`
+compares with MMPBSA.py.
+The cases `3clpro_compound7a` to `3clpro_compound7f` run the other ligands.
 
 ## What this example demonstrates
 
@@ -54,15 +71,13 @@ other six ligands.
   standard small-molecule protein-ligand complex.
 - Selecting a specific frame window (`frame_start`/`frame_end`) out of a
   much longer trajectory (30000 total frames, last 300 used).
-- A subtlety in this specific dataset worth knowing if reusing it: its own
-  `command_MMGBA.txt` passes `complex_solv.prmtop` (the solvated, 62451-atom
-  topology) as Amber MMPBSA.py's `-sp` flag, which is wrong for the
-  `dry_MD_*.trj` trajectories actually provided (already solvent-stripped,
-  matching `complex.prmtop`'s 4712 atoms) -- this silently produces NaN
-  bond/1-4 energies if not caught. This project's own configs and Amber
-  reference use `complex.prmtop` correctly; not an OpenGBSA issue, just a
-  documentation gap in the original dataset.
 
-Full methodological write-up (including the one packaging-format bug found
-in OpenGBSA during this validation): see this repo's sibling analysis
-directory, `OXA-MD/Publishing/3CLpro_validation/README.md`.
+One point to know when reusing this dataset with Amber: its own
+`command_MMGBA.txt` passes `complex_solv.prmtop`, the solvated topology of
+62451 atoms, as the `-sp` argument of MMPBSA.py. The `dry_MD_*.trj`
+trajectories are already stripped of solvent and match `complex.prmtop`
+(4712 atoms), so MMPBSA.py needs `complex.prmtop` there. The configurations
+here and the Amber reference use it.
+
+The tutorial page of this example is
+https://opengbsa.readthedocs.io/en/latest/tutorial/protein_ligand_3clpro.html.

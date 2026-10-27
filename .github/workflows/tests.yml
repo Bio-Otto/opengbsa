@@ -43,6 +43,9 @@ jobs:
             pyyaml>=6.0
             plotly>=5.0.0
             pathlib2
+            parmed
+            pooch
+            setuptools<81
             pytest
           init-shell: bash
 

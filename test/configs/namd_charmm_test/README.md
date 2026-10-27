@@ -1,6 +1,6 @@
 # PPI (NAMD/CHARMM) validation: CTLA4-peptide complex
 
-A CTLA4-derived peptide bound to its protein partner, demonstrating
+A CTLA4-derived peptide bound to its target protein, demonstrating
 OpenGBSA's **native NAMD/CHARMM Mode**: a `.psf` topology + `.pdb`
 coordinates + CHARMM36 parameter files, loaded directly with no topology
 reconstruction (unlike the GROMACS-sourced PPI/DNA datasets in
@@ -31,35 +31,35 @@ confirms the pipeline runs end-to-end without error.
 
 | | ΔH_bind (kcal/mol) |
 |---|---|
-| Amber MMPBSA.py (independent reference, same 300 frames imaged with cpptraj `autoimage`) | -32.57 ± 11.43 |
-| OpenGBSA 0.0.9+ (300 frames, built-in re-imaging) | -35.98 ± 12.11 |
-| **Difference** | **3.41 kcal/mol** (electrostatics agree to 0.003; mostly the non-polar ACE vs LCPO convention) |
+| Amber MMPBSA.py (300 frames imaged with cpptraj `autoimage`) | -32.57 ± 11.41 |
+| OpenGBSA (300 frames, built-in re-imaging) | -32.06 ± 11.49 |
+| OpenGBSA, `amber_compatible: true` | -32.57 ± 11.41 |
 
-**Earlier values were wrong (corrected 2026-10-18).** The previously listed
-Amber -17.93 ± 18.52 and OpenGBSA -19.71 ± 20.46 were both computed on raw,
-un-imaged frames: the Amber reference solvent-stripped the `.dcd` without
-imaging, and OpenGBSA <= 0.0.8 fell back to raw coordinates because mdtraj's
-`image_molecules()` finds no anchor in this few-molecule system. In 120 of the
-300 frames the peptide sat across the periodic boundary from the receptor, so
-the two tools agreed on largely unbound frames. OpenGBSA 0.0.9+ re-images
-correctly (0 no-contact frames) and gives the same result as cpptraj-imaged
-input (-35.979 vs -35.978).
+Frame means ± SD. Van der Waals and electrostatic terms agree to within 0.003
+kcal/mol. At default settings the polar term differs by +0.60 kcal/mol, from
+the 25 Å Born-radius cutoff of Amber MMPBSA.py (`rgbmax`), and the non-polar
+term by -0.08 kcal/mol, because Amber assigns the LCPO parameters of some
+CHARMM atom types differently. With `amber_compatible: true` OpenGBSA applies
+the same cutoff and Amber's atom typing and agrees with MMPBSA.py to within
+0.004 kcal/mol.
 
-Full methodological write-up (including six OpenGBSA bugs found and fixed
-during this validation -- all in the native CHARMM/NAMD loading path): see
-this repo's sibling analysis directory,
-`OXA-MD/Publishing/namd_format_validation/README.md`.
+The peptide crosses the periodic boundary in many frames of the raw
+trajectory. OpenGBSA re-images the frames itself and gives the same result as
+frames imaged beforehand with cpptraj.
+
+`python test/configs/check_validation.py ctla4` (from the repository root)
+runs the case and compares it with these values; `--amber-compatible`
+compares with MMPBSA.py.
 
 ## What this example demonstrates
 
 - Native Mode for CHARMM/NAMD input: `complex_pdb` pointing at a `.psf`,
   `solvated_topology` at the matching `.pdb`, and
   `forcefield_settings.charmm_params`/`charmm_coordinates` for the CHARMM36
-  parameter/stream files -- no OpenMM `ForceField`/Coordinate-Mode
-  parameterization involved.
+  parameter/stream files, with no OpenMM `ForceField` parameterization.
 - `binding_mode: ppi` with `chainid`-based receptor/ligand splitting for a
   peptide-protein complex (the peptide as `ligand_selection`, not a
   small-molecule `ligand_resname`).
 
-Full methodological write-up: see this repo's sibling analysis directory,
-`OXA-MD/Publishing/namd_format_validation/README.md`.
+The tutorial page of this example is
+https://opengbsa.readthedocs.io/en/latest/tutorial/namd_charmm.html.

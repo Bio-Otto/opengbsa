@@ -39,28 +39,33 @@ For a fast smoke test (3 frames instead of 300), use
 
 | | ΔH_bind (kcal/mol) |
 |---|---|
-| Amber MMPBSA.py (independent reference, 300 frames) | -23.49 ± 8.91 |
-| OpenGBSA (300 frames) | -16.58 ± 8.97 |
-| **Difference** | **6.91 kcal/mol** |
+| Amber MMPBSA.py (300 frames) | -23.49 ± 8.91 |
+| OpenGBSA (300 frames) | -16.58 ± 8.95 |
+| OpenGBSA, `amber_compatible: true` | -23.50 ± 8.91 |
 
-Same sign, same order of magnitude, nearly identical standard deviation --
-consistent with genuine frame-to-frame conformational variance in a
-still-approaching (not fully equilibrated) SuMD trajectory. Full
-methodological write-up (including two OpenGBSA bugs found and fixed
-during this validation, both related to nucleic-acid ligand detection):
-see this repo's sibling analysis directory,
-`OXA-MD/Publishing/rna_protein_validation/README.md`.
+OBC2, frame means ± SD. Van der Waals and non-polar terms agree to within
+0.001 kcal/mol and electrostatics to within 0.03 kcal/mol. The 6.9 kcal/mol
+difference at default settings is in the polar term: Amber MMPBSA.py computes
+effective Born radii only from atoms within 25 Å (`rgbmax`), OpenMM from every
+atom pair, and the effect is large for the highly charged RNA. Re-running
+Amber's polar term without the cutoff leaves 0.04 kcal/mol. With
+`amber_compatible: true` OpenGBSA applies the same cutoff and reproduces
+MMPBSA.py to within 0.004 kcal/mol.
+
+`python test/configs/check_validation.py 3dd2` (from the repository root)
+runs the case and compares it with these values; `--amber-compatible`
+compares with MMPBSA.py.
 
 ## What this example demonstrates
 
 - Native Mode with an explicit `receptor_topology`/`ligand_topology` pair
   (rather than `binding_mode: ppi` chain splitting) for a non-small-molecule
-  ligand -- here, an RNA chain.
+  ligand, here an RNA chain.
 - Amber's residue-template force fields natively support RNA residue names
   (`A`/`U`/`G`/`C` plus terminal variants) with no extra configuration.
 - Splitting a single complex `.prmtop` into receptor/ligand topologies via
   ParmEd's `Structure.strip()` (an Amber-mask atom range), including a
   metadata fixup (`RADIUS_SET`) that `strip()` otherwise loses.
 
-Full methodological write-up: see this repo's sibling analysis directory,
-`OXA-MD/Publishing/rna_protein_validation/README.md`.
+The tutorial page of this example is
+https://opengbsa.readthedocs.io/en/latest/tutorial/rna_protein.html.

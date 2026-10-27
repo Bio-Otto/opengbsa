@@ -185,6 +185,12 @@ class ConfigManager:
 
         # Options that select a code path: an unknown value would otherwise be ignored
         # or fail only later in the run
+        pff = (self.config.get('forcefield_settings') or {}).get('protein_forcefield')
+        allowed_pff = ['amber', 'amber14', 'amber14-all', 'amber14-all.xml', 'charmm',
+                       'charmm_gromacs', 'auto']
+        if pff is not None and str(pff).strip().lower() not in allowed_pff:
+            self.validation_errors.append(f"Invalid protein_forcefield '{pff}'. Must be one of: "
+                                          f"['amber', 'amber14', 'charmm', 'charmm_gromacs']")
         for param, allowed in (('frame_selection', ['sequential', 'equidistant', 'random']),
                                ('entropy_method', ['none', 'interaction', 'c2', 'quasiharmonic',
                                                    'normal_mode', 'nmode']),
@@ -236,10 +242,13 @@ class ConfigManager:
             if frame_end <= frame_start:
                 self.validation_errors.append("frame_end must be greater than frame_start")
         
-        # Decomposition frames validation
+        # Decomposition frames validation (only when a decomposition runs)
         max_frames = settings.get('max_frames')
         decomp_frames = settings.get('decomp_frames')
-        if decomp_frames is not None and max_frames is not None:
+        decomposition_on = (settings.get('run_per_residue_decomposition') or
+                            settings.get('per_residue_decomposition') or
+                            (self.config.get('advanced_settings') or {}).get('run_per_residue_decomposition'))
+        if decomposition_on and decomp_frames is not None and max_frames is not None:
             if decomp_frames > max_frames:
                 self.validation_errors.append("decomp_frames cannot be greater than max_frames")
         
@@ -463,20 +472,28 @@ analysis_settings:
   decomp_frames: 10            # frames used; must not exceed max_frames
   report_raw_energies: false   # also write complex/receptor/ligand energies
   plot_top_residues: 10        # residues shown in the hot-spot plots
+  # A second, faster decomposition inside the main calculation (fast or full),
+  # mainly for development.
+  energy_decomposition: false
+  decomposition_method: full
 
   # --- entropy (-TdS) ---
+  # run_entropy_analysis switches the estimate on; entropy_method chooses it:
   # interaction (interaction entropy) or c2 (second-order cumulant), both from
-  # the fluctuation of the gas-phase interaction energy; reported with its
-  # standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol).
+  # the fluctuation of the gas-phase interaction energy and reported with its
+  # standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol);
   # quasiharmonic: ligand quasi-harmonic entropy (qha_analyze_complex: true
-  # adds receptor and complex to give a binding entropy).
+  # adds receptor and complex to give a binding entropy); normal_mode:
+  # normal-mode entropy of the ligand alone (needs ligand_mol), not added to dG.
   run_entropy_analysis: false
   entropy_method: interaction
   qha_analyze_complex: false
+  nmode_cutoff_frequency: 10.0 # normal_mode: modes below this (cm-1) are left out
 
   # --- execution ---
   max_workers: null            # CPU worker processes; null = min(cores - 1, 4)
   print_interval: 10           # progress line every N frames
+  use_cache: true              # reuse parameterised systems within a run
 
 # ---------------------------------------------------------------- force field
 forcefield_settings:

@@ -120,7 +120,7 @@ def test_charmm_solvent_strip_removes_namd_ion_names():
     assert "CLA" not in remaining_resnames
 
 
-def test_charmm_run_end_to_end_produces_physical_energy():
+def test_charmm_run_end_to_end_produces_physical_energy(tmp_path):
     """Full GBSACalculator.run() on a real NAMD .psf/.dcd/CHARMM36m input,
     in binding_mode='ppi' (chainid-based split, since the "ligand" here is a
     17-residue cyclic peptide chain, not a single small-molecule residue).
@@ -156,7 +156,7 @@ def test_charmm_run_end_to_end_produces_physical_energy():
     results = calculator.run(
         ligand_mol=None, complex_pdb=PSF_PATH, xtc_file=DCD_PATH, ligand_pdb=None,
         max_frames=4, ligand_selection="chainid 0", receptor_selection="chainid 1",
-        solvated_topology=PDB_PATH, original_complex_pdb=PSF_PATH,
+        solvated_topology=PDB_PATH, original_complex_pdb=PSF_PATH, output_dir=str(tmp_path),
     )
     assert results is not None
     mean_binding = results["mean_binding_energy"]

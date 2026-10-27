@@ -27,6 +27,10 @@ and the entropy estimate.
     ├── per_residue_heatmap.png                         top residues frame by frame
     ├── interactive_report.html                         all results in one web page
     ├── hotspots.pdb, view_binding.pml                  PyMOL view coloured by contribution
+    │   (with the optional package PandaMap)
+    ├── pandamap_interactions.png                       2D map of the ligand's contacts
+    ├── structure_3d.html                               3D view of the binding site, shown in the report
+    ├── cache/                                          parameterised systems reused within the run
     └── temp_*.pdb                                      intermediate structures
 
 The binding enthalpy of every frame
@@ -101,7 +105,7 @@ over the decomposed frames and its standard deviation (``_std`` columns):
    * - Column
      - Meaning
    * - ``residue_id``
-     - ``NAME_NUMBER_CHAIN``, for example ``PHE_111_0`` (chain as index).
+     - ``NAME_NUMBER_CHAIN``, for example ``PHE_78_0`` (chain as index).
    * - ``vdw``, ``electrostatic``
      - Gas-phase interaction of the residue with the ligand.
    * - ``solvation``
@@ -113,8 +117,12 @@ over the decomposed frames and its standard deviation (``_std`` columns):
    * - ``n_frames``
      - Number of decomposed frames.
 
-The contribution of a residue to the binding enthalpy is
-``total + nonpolar_solvation``. Negative values favour binding.
+``total`` is the value shown in the plots and the PyMOL view; adding
+``nonpolar_solvation`` gives the residue's full share including the surface
+term. Negative values favour binding. The sum over the receptor residues is not
+expected to equal the binding enthalpy: as in Amber's per-residue
+decomposition, each receptor-ligand pair term is split equally between the
+receptor residue and the ligand, and the ligand's share is not listed.
 ``frame_by_frame_decomposition.csv`` gives the same terms for every frame, in
 columns named ``<NAME><NUMBER>_<CHAIN>_<term>``.
 ``binding_hot_spots.csv`` lists the residues with the largest contributions,

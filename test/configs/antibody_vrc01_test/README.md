@@ -28,33 +28,35 @@ Budget roughly 45 min per system per arm on an 8-core CPU.
 
 ## Expected result
 
-| Variant | Amber MMPBSA.py | OpenGBSA | Difference | Exp. ΔG |
-|---|---|---|---|---|
-| wt | −52.46 ± 6.78 | −49.29 ± 6.81 | 3.17 | −10.51 |
-| G54A | −60.70 ± 6.65 | −57.56 ± 6.79 | 3.14 | −11.78 |
-| D99A | −59.17 ± 7.63 | −55.96 ± 7.70 | 3.21 | −10.45 |
-| N100AA | −64.28 ± 6.95 | −62.04 ± 7.21 | 2.24 | −9.40 |
-| W100BA | −40.90 ± 6.77 | −39.09 ± 7.33 | 1.81 | −6.09 |
+| Variant | Amber MMPBSA.py | OpenGBSA | Difference | OpenGBSA, `amber_compatible: true` | Exp. ΔG |
+|---|---|---|---|---|---|
+| wt | −52.46 ± 6.78 | −36.82 ± 6.88 | 15.64 | −52.46 ± 6.78 | −10.51 |
+| G54A | −60.70 ± 6.65 | −44.91 ± 6.74 | 15.79 | −60.70 ± 6.65 | −11.78 |
+| D99A | −59.17 ± 7.63 | −43.60 ± 7.70 | 15.57 | −59.16 ± 7.62 | −10.45 |
+| N100AA | −64.28 ± 6.95 | −48.60 ± 6.99 | 15.68 | −64.28 ± 6.95 | −9.40 |
+| W100BA | −40.90 ± 6.77 | −25.43 ± 6.84 | 15.48 | −40.90 ± 6.77 | −6.09 |
 
-All values kcal/mol, 300 frames (4301–4601), OBC2 / `igb=5`, 0.15 M salt.
-**Pearson r = 0.998**, RMSD 2.78, MAE 2.71 over a 23.4 kcal/mol spread.
+All values kcal/mol, 300 frames (4301–4601), OBC2 / `igb=5`, 0.15 M salt,
+frame means ± SD.
 
-The discrepancy is a **constant offset**, not random error: OpenGBSA is less
-negative in every variant by 2.71 ± 0.65, and removing that single offset drops
-the RMSD to **0.58 kcal/mol** (regression slope 0.966). Per-component means:
-electrostatic **+0.01**, van der Waals −2.73, polar GB +15.81, non-polar SA
-−10.37. The electrostatic term agreeing to 0.01 on a quantity of magnitude
-184–245 is what establishes that atom ordering and the receptor/ligand split are
-correct. GB and SA differ for known reasons and largely cancel. The polar
-offset is MMPBSA.py's Born-radius cutoff: MMPBSA.py computes effective Born radii
-only over atom pairs within 25 Å (`rgbmax`, fixed), OpenGBSA (OpenMM) over all
-pairs; re-running Amber's wild type on 10 frames without the cutoff moves its
-ΔE_GB by +15.82, the whole offset. The non-polar offset is the surface model:
-these configs use OpenGBSA's default ACE, Amber uses LCPO.
+Van der Waals and electrostatic terms agree to within 0.006 kcal/mol. The
+difference at default settings is almost all in the polar term (+15.7 to
++16.0 kcal/mol): Amber MMPBSA.py computes effective Born radii only from atoms
+within 25 Å (`rgbmax`), OpenMM from every atom pair, and an antibody-antigen
+complex has many pairs beyond 25 Å. Re-running Amber's polar term without the
+cutoff leaves 0.02 kcal/mol. The non-polar term differs by −0.17 to −0.24
+kcal/mol because Amber assigns the LCPO parameters of some CHARMM atom types
+differently. With `amber_compatible: true` OpenGBSA applies the same cutoff
+and Amber's atom typing and agrees with MMPBSA.py to within 0.005 kcal/mol.
+
+`python test/configs/check_validation.py vrc01_wt` (from the repository root)
+runs the wild type and compares it with these values; `--amber-compatible`
+compares with MMPBSA.py, and `--platform CUDA` runs it on a GPU. The cases
+`vrc01_g54a`, `vrc01_d99a`, `vrc01_n100aa` and `vrc01_w100ba` run the
+mutants.
 
 Experimental ΔG is from Table 1 of the source paper (RSC3/VRC01 column), shown
-for context. Both tools correlate with it at r ≈ 0.73–0.77, which is **not**
-significant at n = 5 (needs |r| > 0.878) — no predictive claim is made.
+for context. With five variants no correlation with experiment is claimed.
 
 ## Four things about this dataset that will bite you
 
@@ -107,7 +109,6 @@ Measured from `wt.pdb`/`wt.psf`, not assumed:
 The complex stays bound throughout: the minimum antigen–antibody heavy-atom
 distance stays between 2.4 and 2.8 Å (median 2.6 Å, every 100th frame of the
 4,601), so the ensemble describes a bound state rather than an association event.
-(An earlier version of this note gave 1.78 Å, which included hydrogens.)
 
 CHARMM parameters are not shipped with the deposit. `params/` holds the standard
 CHARMM36m protein and water/ion sets (copied from `../namd_charmm_test/`); all
@@ -115,8 +116,6 @@ CHARMM36m protein and water/ion sets (copied from `../namd_charmm_test/`); all
 
 ## Note on parallelism
 
-`analysis_settings.parallel_processing` is **ignored** by the current release —
-`use_parallel_frames` in `mmgbsa_core.py` tests only the platform, so CPU runs
-always fan out. `max_workers` is the real control, and these configs set it to 4.
-Serial and parallel paths were verified to give identical results (10 frames,
-1 vs 4 workers, both −47.72 ± 5.19 kcal/mol), so this affects run time only.
+On the CPU the frames are evaluated by parallel worker processes;
+`max_workers` sets their number, and these configurations set it to 4. Serial
+and parallel evaluation give the same result.

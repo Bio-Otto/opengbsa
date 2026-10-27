@@ -156,11 +156,15 @@ def list_test_data_command():
     from .fetch_test_data import list_datasets
 
     print("Available test/validation datasets:\n")
-    for name, description, n_files, ready in list_datasets():
-        status = "ready" if ready else "NOT YET PUBLISHED (no checksums recorded)"
+    for name, description, n_files, ready, size_gb, downloaded in list_datasets():
+        if not ready:
+            status = "not yet published (no checksums recorded)"
+        else:
+            status = "downloaded" if downloaded else "not downloaded"
         print(f"  {name} [{status}]")
         print(f"    {description}")
-        print(f"    {n_files} file(s)")
+        size = f", {size_gb:.1f} GB" if size_gb else ""
+        print(f"    {n_files} file(s){size}")
         print()
     print("Fetch with: opengbsa --fetch-test-data [--only name1,name2]")
     return 0

@@ -58,8 +58,9 @@ From the root of the repository:
 
 The log names each step. The first lines show the platform that was chosen,
 for example ``Running on OpenMM platform: CUDA``. On an NVIDIA RTX 2080 SUPER
-the whole run takes about 4.5 minutes, most of it in the per-residue
-decomposition. Without a GPU it runs on the CPU and takes longer.
+the whole run takes 4 to 6 minutes, most of it in the per-residue
+decomposition, and longer when other programs keep the CPU busy. Without a GPU
+it runs on the CPU and takes longer.
 
 4. The result
 -------------
@@ -80,6 +81,14 @@ of the mean is 0.65 kcal/mol. The entropy estimates are flagged as unreliable
 because the interaction energy fluctuates too much. :doc:`theory/entropy_methods`
 explains why. Small differences in the last digit between GPU and CPU runs are
 normal.
+
+The log also prints the sum of the receptor-residue contributions of the
+per-residue decomposition, -8.50 kcal/mol here. It is not expected to equal the
+binding enthalpy. As in Amber's per-residue decomposition, each van der Waals
+and electrostatic term between a receptor residue and the ligand is split
+equally between the two, so half of it belongs to the ligand. The ligand's own
+change in polar solvation and the non-polar term are not assigned to receptor
+residues either (:doc:`user_guide/outputs`).
 
 All files are written to ``quickstart_results/analysis_<date>_<time>/``
 (:doc:`user_guide/outputs` describes each one). The most useful ones are:
@@ -112,7 +121,7 @@ All files are written to ``quickstart_results/analysis_<date>_<time>/``
    most to binding (top left), their van der Waals, electrostatic and
    solvation terms (top right), the distribution over all residues (bottom
    left) and van der Waals against electrostatic contributions (bottom right).
-   PHE111 and ALA126 contribute most.
+   PHE78 and ALA93 contribute most. Residues are numbered as in the topology.
 
 .. figure:: _static/figures/quickstart_pymol.png
    :width: 80%

@@ -235,7 +235,8 @@ class MMGBSARunner:
             charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
             solvent_dielectric=analysis_settings.get('solvent_dielectric', None),   # 78.5, or MMPBSA.py's with amber_compatible
-            entropy_method=analysis_settings.get('entropy_method', 'none'),
+            entropy_method=(analysis_settings.get('entropy_method', 'interaction')
+                            if analysis_settings.get('run_entropy_analysis', False) else 'none'),
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
             sa_model=analysis_settings.get('sa_model', None),                       # LCPO
             nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
