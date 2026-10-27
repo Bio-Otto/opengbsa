@@ -21,7 +21,8 @@ fetch() {
         return
     fi
     echo "Downloading ${name}..."
-    curl -L -o "raw/${name}" "${BASE}/${name}?download=1"
+    curl -fL --retry 3 --retry-delay 5 -o "raw/${name}" "${BASE}/${name}?download=1" \
+        || { rm -f "raw/${name}"; echo "Download failed; run this script again." >&2; exit 1; }
 }
 
 fetch "3dd2.prmtop"

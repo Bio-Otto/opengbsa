@@ -24,14 +24,14 @@ command, what it should print and how long it takes.
      - |unit_tests| tests of the code paths
    * - 3. Quickstart
      - none
-     - 5 min (GPU)
+     - 4-6 min (GPU)
      - a full calculation with all outputs
    * - 4. Validation cases
      - 25 MB to 9 GB per case
      - minutes to hours
      - agreement with recorded results and with Amber MMPBSA.py
 
-.. |unit_tests| replace:: 129
+.. |unit_tests| replace:: 130
 
 Step 1: install and check
 -------------------------
@@ -45,6 +45,18 @@ Install the conda package as described in :doc:`installation`, then:
     opengbsa --check-deps            # ends with "All dependencies are available!"
     python -m openmm.testInstallation  # lists the platforms that work
 
+``testInstallation`` may print lines such as ``1 warning generated.`` while it
+compiles the OpenCL kernels. They are compiler messages, not errors. The
+platforms that work are listed at the end, with the differences between their
+forces, which should be small (about 1e-6 or less).
+
+PyMOL is optional. It opens the hot-spot view that the per-residue
+decomposition writes (:doc:`user_guide/visualization`):
+
+.. code-block:: bash
+
+    conda install -n opengbsa -c conda-forge pymol-open-source
+
 Step 2: unit tests
 ------------------
 
@@ -57,16 +69,16 @@ pytest to the environment:
     cd opengbsa
     git checkout v\ |release|
     conda install -n opengbsa -c conda-forge pytest
-    python -m pytest test/unit -q
+    python -m pytest test/unit
 
 The repository contains the topologies of the test systems but not their
 trajectories. Without them, the 13 tests that need a trajectory are skipped. On
-a Linux machine with a CUDA GPU the run ends with ``116 passed, 13 skipped``.
-Without a GPU the tests of the GPU platforms are skipped as well; continuous
-integration, which has no GPU, reports ``114 passed, 15 skipped`` on Linux and
-``113 passed, 16 skipped`` on macOS. No test should fail. The skipped tests and
-their reasons are listed with ``python -m pytest test/unit -q -rs``. To run them as well,
-download the test trajectories (10 GB, Zenodo record
+a Linux machine with a CUDA GPU the run ends with ``117 passed, 13 skipped``.
+Without a GPU the test of the CUDA platform is skipped as well; continuous
+integration, which has no GPU, reports ``116 passed, 14 skipped`` on Linux and
+on macOS. No test should fail. The skipped tests and
+their reasons are listed at the end of the run. To run them as well, download
+the test trajectories (10 GB, Zenodo record
 `10.5281/zenodo.22139199 <https://doi.org/10.5281/zenodo.22139199>`_) from the
 root of the repository and run the tests again:
 
@@ -74,16 +86,18 @@ root of the repository and run the tests again:
 
     opengbsa --list-test-data
     opengbsa --fetch-test-data --only core-fixtures
-    python -m pytest test/unit -q        # 128 passed, 1 skipped
+    python -m pytest test/unit           # 129 passed, 1 skipped
 
 The one remaining test reads an OpenMM System built from the 3dd2 validation
 case. It runs after the data of that case are downloaded (Step 4, 44 MB), and
-then all 129 tests pass.
+then all 130 tests pass.
 
 The data are cached in ``~/.cache/opengbsa`` and linked into ``test/data/``.
 A dropped connection is retried up to five times. If the download still
 stops, run the same command again: archives that were completed are kept and
-checked, not downloaded again.
+checked, not downloaded again. ``opengbsa --list-test-data`` shows the size of
+the data and whether they are already downloaded.
+
 The tests cover, among others:
 
 * the five GB models and their radii, against Amber-written topologies;
@@ -176,7 +190,7 @@ its default settings with the case's configuration. "MMPBSA.py" is Amber
 MMPBSA.py on the same frames, the reference for a run with
 ``amber_compatible: true``.
 
-**Run a case.** The smallest case, 3dd2, takes about a minute on a GPU:
+**Run a case.** The smallest case is 3dd2:
 
 .. code-block:: bash
 
@@ -187,21 +201,38 @@ MMPBSA.py on the same frames, the reference for a run with
     python test/configs/check_validation.py 3dd2
     python test/configs/check_validation.py 3dd2 --amber-compatible
 
+The expected values were computed on a CUDA GPU, so the script runs every case
+on CUDA. Without a usable CUDA GPU, OpenGBSA falls back to OpenCL or the CPU
+by itself and says so in the log; ``--platform OpenCL`` or ``--platform CPU``
+chooses a platform directly. On a GPU each 3dd2 check takes about 30 seconds,
+on the CPU about 10 minutes. The script uses the ``opengbsa`` of the Python
+environment it runs in; ``--opengbsa PATH`` names another one.
+
 The two checks print, for example:
 
 .. code-block:: text
 
-    OpenGBSA validation cases, default settings (opengbsa):
-      3dd2: dH =   -16.575   expected   -16.575   difference +0.000 kcal/mol   PASS
+    OpenGBSA validation cases, default settings, platform CUDA (.../envs/opengbsa/bin/opengbsa):
+      3dd2: dH =   -16.575   expected   -16.575   difference -0.000 kcal/mol   PASS
     1 of 1 cases passed
-    OpenGBSA validation cases, amber_compatible (opengbsa):
-      3dd2: dH =   -23.493   Amber MMPBSA.py   -23.493   difference +0.000 kcal/mol   PASS
+    OpenGBSA validation cases, amber_compatible, platform CUDA (.../envs/opengbsa/bin/opengbsa):
+      3dd2: dH =   -23.497   Amber MMPBSA.py   -23.493   difference -0.004 kcal/mol   PASS
     1 of 1 cases passed
 
-A case passes when the difference is within 0.02 kcal/mol. If the data of a
-case are missing, the script prints the commands that prepare them.
-``python test/configs/check_validation.py all`` runs every case whose data are
-present.
+A case passes when the difference is within 0.02 kcal/mol. Two cases have a
+wider tolerance, and the script prints the reason with the result. The VRC01
+complexes, with 8,800 atoms the largest, use 0.03 kcal/mol: on the CPU
+platform they come out about 0.02 kcal/mol above the values computed on the
+GPU. irf11 uses 0.05 kcal/mol for its difference from MMPBSA.py. OpenMM's Coulomb constant (332.064 kcal Å/mol/e²) is 3.5e-5 larger
+than Amber's (332.052). On this protein-DNA complex the electrostatic term
+(-7,225 kcal/mol) changes by -0.25 kcal/mol and the polar term (+7,220
+kcal/mol) by +0.22 kcal/mol. The two largely cancel and leave -0.024 kcal/mol.
+
+If the data of a case are missing, the script prints the commands that prepare
+them. A case that fails keeps its output folder with the log and all result
+files, and the script prints its path; ``--keep`` keeps the output of every
+case. ``python test/configs/check_validation.py all`` runs every case whose
+data are present.
 
 **Why the two settings differ.** At its default settings OpenGBSA computes each
 atom's Born radius from every atom pair. Amber MMPBSA.py includes only atoms

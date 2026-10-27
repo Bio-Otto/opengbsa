@@ -238,12 +238,12 @@ Entropy
      - Meaning
    * - ``run_entropy_analysis``
      - ``false``
-     - Estimate the entropy term :math:`-T\Delta S` and report
-       :math:`\Delta G = \Delta H - T\Delta S`. Setting ``entropy_method``
-       also turns the estimate on.
+     - Switches the entropy estimate on: :math:`-T\Delta S` and
+       :math:`\Delta G = \Delta H - T\Delta S` are reported.
    * - ``entropy_method``
      - ``interaction``
-     - ``interaction`` (interaction entropy) or ``c2`` (its second-order
+     - The estimate used when ``run_entropy_analysis`` is ``true``.
+       ``interaction`` (interaction entropy) or ``c2`` (its second-order
        cumulant), both from the fluctuation of the interaction energy and
        reported with its standard deviation and reliability.
        ``quasiharmonic``: quasi-harmonic entropy of the ligand
@@ -291,9 +291,13 @@ forcefield_settings
      - Meaning
    * - ``protein_forcefield``
      - ``amber``
-     - Coordinate Mode only. ``amber``: Amber ff14SB. ``amber14``: OpenMM's
-       ``amber14-all`` (proteins, DNA, RNA). ``charmm`` or ``charmm_gromacs``:
-       CHARMM36.
+     - Coordinate Mode only. ``amber``: Amber ff14SB with TIP3P.
+       ``amber14``: OpenMM's ``amber14-all.xml`` (proteins, DNA, RNA) with
+       TIP3P-FB; ``amber14-all`` and ``amber14-all.xml`` are accepted as the
+       same choice. ``charmm``: OpenMM's CHARMM36. ``charmm_gromacs``: the CHARMM36
+       port for GROMACS, bundled with OpenGBSA. Both include carboxylated
+       lysine (KCX), which the Amber force fields lack. ``auto`` is
+       ``amber``. Any other value is a configuration error.
    * - ``charmm_params``
      - none
      - ``.psf`` input: the CHARMM parameter files (``.prm``, ``.str``,
@@ -376,6 +380,6 @@ when a required file is missing, when ``gb_model``, ``gb_radii_set``,
 ``sa_model``, ``lcpo_typing``, ``binding_mode``, ``frame_selection``,
 ``entropy_method`` or ``decomposition_method`` has an unknown value, when
 ``temperature``, ``salt_concentration`` or ``max_frames`` is out of range, when
-``frame_end`` is not after ``frame_start``, or when ``decomp_frames`` exceeds
-``max_frames``. Unknown options in other sections are ignored, so check the
+``frame_end`` is not after ``frame_start``, or when a per-residue decomposition
+is requested with ``decomp_frames`` larger than ``max_frames``. Unknown options in other sections are ignored, so check the
 spelling of an option that seems to have no effect.

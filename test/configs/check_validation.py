@@ -6,6 +6,7 @@ the expected values in expected_results.yaml.
     python test/configs/check_validation.py --list
     python test/configs/check_validation.py 3dd2
     python test/configs/check_validation.py 3dd2 --amber-compatible
+    python test/configs/check_validation.py 3dd2 --platform CUDA
     python test/configs/check_validation.py all
 
 Each case runs `opengbsa <config>` in its own folder (the configurations use
@@ -14,6 +15,9 @@ paths relative to it), after its data were downloaded with that folder's
 with the value recorded for this configuration. With --amber-compatible the
 run uses amber_compatible: true and is compared with Amber MMPBSA.py on the
 same frames. A case passes when the difference is within the tolerance.
+The expected values were computed on a CUDA GPU, so the cases run on CUDA
+unless --platform names another platform (OpenCL or CPU). Without a usable
+CUDA GPU, OpenGBSA falls back to the next platform by itself.
 """
 import argparse
 import shutil
@@ -42,7 +46,7 @@ def inputs_present(folder, config):
     return missing
 
 
-def run_case(name, case, amber_compatible, opengbsa, keep):
+def run_case(name, case, amber_compatible, opengbsa, keep, platform=None):
     folder = HERE / case["folder"]
     with open(folder / case["config"]) as fh:
         config = yaml.safe_load(fh)
@@ -53,10 +57,15 @@ def run_case(name, case, amber_compatible, opengbsa, keep):
         return None
 
     config["analysis_settings"]["amber_compatible"] = bool(amber_compatible)
+    if platform:
+        config.setdefault("platform_settings", {})
+        config["platform_settings"] = dict(config["platform_settings"] or {},
+                                           preferred_platform=platform)
     out = Path(tempfile.mkdtemp(prefix=f"opengbsa_check_{name}_"))
     run_config = folder / f".check_{name}.yaml"   # in the case folder: its paths are relative
     with open(run_config, "w") as fh:
         yaml.safe_dump(config, fh, sort_keys=False)
+    ok = False
     try:
         log = out / "run.log"
         with open(log, "w") as fh:
@@ -69,25 +78,30 @@ def run_case(name, case, amber_compatible, opengbsa, keep):
         with open(summaries[-1]) as fh:
             mmgbsa = yaml.safe_load(fh)["mmgbsa"]
         value = float(mmgbsa["mean_binding_energy"])
+
+        if amber_compatible:
+            reference, label = case.get("mmpbsa"), "Amber MMPBSA.py"
+        else:
+            reference, label = case["opengbsa_defaults"], "expected"
+        if reference is None:
+            print(f"  {name}: dH = {value:.3f} kcal/mol (no reference value)")
+            ok = True
+            return ok
+        diff = value - reference
+        ok = abs(diff) <= case.get("tolerance", 0.02)
+        print(f"  {name}: dH = {value:9.3f}   {label} {reference:9.3f}   "
+              f"difference {diff:+.3f} kcal/mol   {'PASS' if ok else 'FAIL'}")
+        note = case.get("note_amber_compatible") if amber_compatible else None
+        for text in (case.get("note"), note):
+            if text:
+                print(f"      note: {text}")
+        return ok
     finally:
         run_config.unlink(missing_ok=True)
-        if not keep:
+        if keep or not ok:   # a failed case keeps its output and log
+            print(f"      output: {out}")
+        else:
             shutil.rmtree(out, ignore_errors=True)
-
-    if amber_compatible:
-        reference, label = case.get("mmpbsa"), "Amber MMPBSA.py"
-    else:
-        reference, label = case["opengbsa_defaults"], "expected"
-    if reference is None:
-        print(f"  {name}: dH = {value:.3f} kcal/mol (no reference value)")
-        return True
-    diff = value - reference
-    ok = abs(diff) <= case.get("tolerance", 0.02)
-    print(f"  {name}: dH = {value:9.3f}   {label} {reference:9.3f}   "
-          f"difference {diff:+.3f} kcal/mol   {'PASS' if ok else 'FAIL'}")
-    if amber_compatible and case.get("note"):
-        print(f"      note: {case['note']}")
-    return ok
 
 
 def main():
@@ -97,15 +111,26 @@ def main():
     parser.add_argument("--list", action="store_true", help="list the cases and exit")
     parser.add_argument("--amber-compatible", action="store_true",
                         help="run with amber_compatible: true and compare with Amber MMPBSA.py")
-    parser.add_argument("--opengbsa", default=shutil.which("opengbsa") or "opengbsa",
-                        help="the opengbsa executable (default: the one on PATH)")
+    same_env = Path(sys.executable).with_name("opengbsa")
+    parser.add_argument("--opengbsa", default=str(same_env) if same_env.exists()
+                        else shutil.which("opengbsa") or "opengbsa",
+                        help="the opengbsa executable (default: the one next to this Python, "
+                             "else the one on PATH)")
+    parser.add_argument("--platform", choices=["CPU", "CUDA", "OpenCL"], default="CUDA",
+                        help="OpenMM platform (default CUDA, on which the expected values were "
+                             "computed; without a CUDA GPU the run falls back to the next platform)")
     parser.add_argument("--keep", action="store_true", help="keep the output folders")
     args = parser.parse_args()
 
     if args.list or not args.cases:
-        print(f"{'case':16s} {'folder':22s} {'frames':>6s}  {'download':>9s}  description")
+        print(f"{'case':18s} {'frames':>6s} {'download':>9s} {'expected':>9s} {'MMPBSA.py':>9s}  description")
         for name, case in cases.items():
-            print(f"{name:16s} {case['folder']:22s} {case['frames']:6d}  {case['download']:>9s}  {case['description']}")
+            mm = case.get("mmpbsa")
+            print(f"{name:18s} {case['frames']:6d} {case['download']:>9s} {case['opengbsa_defaults']:9.3f} "
+                  f"{(f'{mm:9.3f}' if mm is not None else '        -')}  {case['description']}")
+        print("\nexpected: OpenGBSA at default settings; MMPBSA.py: Amber MMPBSA.py on the same frames,\n"
+              "the reference with --amber-compatible (kcal/mol). *: one 9.1 GB archive holds all seven\n"
+              "3CLpro ligands. Prepare a case's data in its folder (test/configs/<folder>/README.md).")
         return 0
 
     names = list(cases) if args.cases == ["all"] else args.cases
@@ -114,8 +139,9 @@ def main():
         print(f"Unknown case(s): {unknown}. See --list.")
         return 2
     setting = "amber_compatible" if args.amber_compatible else "default settings"
-    print(f"OpenGBSA validation cases, {setting} ({args.opengbsa}):")
-    results = [run_case(n, cases[n], args.amber_compatible, args.opengbsa, args.keep) for n in names]
+    print(f"OpenGBSA validation cases, {setting}, platform {args.platform} ({args.opengbsa}):")
+    results = [run_case(n, cases[n], args.amber_compatible, args.opengbsa, args.keep, args.platform)
+               for n in names]
     ran = [r for r in results if r is not None]
     print(f"{sum(ran)} of {len(ran)} cases passed" + (f"; {len(results) - len(ran)} skipped (no data)"
                                                    if len(ran) < len(results) else ""))

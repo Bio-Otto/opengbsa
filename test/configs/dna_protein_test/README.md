@@ -38,35 +38,39 @@ python3 prepare_system.py --build-amber-reference
 
 | | ΔH_bind (kcal/mol) |
 |---|---|
-| Dataset's own gmx_MMPBSA reference (10 frames, `raw/gmx_MMPBSA_wt-IRF11.dat`) | -127.23 ± 6.00 |
-| Independent Amber reference (101 frames, this repo's own build) | -109.09 ± 26.17 |
-| OpenGBSA 0.0.13 (101 frames) | -103.85 ± 26.36 |
+| gmx_MMPBSA result shipped with the dataset (10 frames, `raw/gmx_MMPBSA_wt-IRF11.dat`) | -127.23 ± 6.00 |
+| Amber MMPBSA.py (101 frames) | -109.62 ± 26.20 |
+| OpenGBSA (101 frames) | -103.85 ± 26.36 |
+| OpenGBSA, `amber_compatible: true` | -109.65 ± 26.20 |
 
-The 5.2 kcal/mol OpenGBSA-vs-Amber difference is almost all in the polar term
-(ΔEGB +6.0 of about 7200 kcal/mol): Amber MMPBSA.py computes effective Born
-radii only within 25 Å (`rgbmax`, fixed by MMPBSA.py), OpenMM over every pair.
-Re-running Amber's polar term without the cutoff leaves 0.58 kcal/mol (van der
-Waals 0.002, electrostatics 0.25, LCPO non-polar 0.54).
+OBC2, frame means ± SD. The 5.8 kcal/mol difference between OpenGBSA at
+default settings and Amber is almost all in the polar term (+6.0 of about
++7,220 kcal/mol): Amber MMPBSA.py computes effective Born radii only from
+atoms within 25 Å (`rgbmax`), OpenMM from every atom pair. With
+`amber_compatible: true` OpenGBSA applies the same cutoff and agrees with
+MMPBSA.py to -0.024 kcal/mol. That remainder comes from the Coulomb constant,
+which is 3.5e-5 larger in OpenMM than in Amber: the electrostatic term
+(-7,225 kcal/mol) differs by -0.25 kcal/mol, the polar term by +0.22 kcal/mol,
+and the two largely cancel. The gmx_MMPBSA value of the dataset covers only 10
+frames and other settings, so it is listed for reference only.
 
-Up to OpenGBSA 0.0.12 the difference was 36.7 kcal/mol, from two sources:
-Coordinate Mode gave every atom one GB radius per element (every hydrogen
-1.2 Å) instead of the mbondi2 set (fixed in 0.0.13; 22.5 kcal/mol here), and the
-earlier Amber reference reported a non-polar term (-21.22) that a re-run of the
-same recipe does not reproduce (-12.44). The Amber reference above is that
-re-run; its inputs, outputs and script are in the paper's data deposit
-(`coordinate_mode_references/`).
+`python test/configs/check_validation.py irf11` (from the repository root)
+runs the case and compares it with these values; `--amber-compatible`
+compares with MMPBSA.py. The Amber reference is rebuilt with
+`python3 prepare_system.py --build-amber-reference`; its inputs and outputs
+are also in the data deposit of the OpenGBSA paper.
 
 ## What this example demonstrates
 
 - `binding_mode: ppi` applied to a protein-nucleic-acid complex, using
   `chainid`-based splitting rather than a small-molecule `ligand_resname`.
-- Amber's residue-template force fields (`amber14-all.xml`) natively
-  support DNA residue names (`DA`/`DC`/`DG`/`DT` plus `5`/`3` terminal
-  variants) with no extra configuration.
+- OpenMM's `amber14-all` force field natively supports DNA residue names
+  (`DA`/`DC`/`DG`/`DT` plus `5`/`3` terminal variants) with no extra
+  configuration.
 - Handling a dataset delivered as a single multi-model PDB trajectory
   (rather than a separate coordinate + trajectory file pair).
 - Histidine protonation-state relabeling (HIS -> HID/HIE/HIP), needed
   because Amber-family force fields have no generic "HIS" template.
 
-Full methodological write-up: see this repo's sibling analysis directory,
-`OXA-MD/Publishing/dna_protein_validation/README.md`.
+The tutorial page of this example is
+https://opengbsa.readthedocs.io/en/latest/tutorial/dna_protein.html.

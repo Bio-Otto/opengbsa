@@ -17,7 +17,8 @@ if [ -d "raw/Zenodo_CTLA4_Peptide" ]; then
 else
     if [ ! -f "$ARCHIVE" ]; then
         echo "Downloading Zenodo_CTLA4_Peptide.zip (~321 MB)..."
-        curl -L -o "$ARCHIVE" "https://zenodo.org/records/7186684/files/Zenodo_CTLA4_Peptide.zip?download=1"
+        curl -fL --retry 3 --retry-delay 5 -o "$ARCHIVE" "https://zenodo.org/records/7186684/files/Zenodo_CTLA4_Peptide.zip?download=1" \
+        || { rm -f "$ARCHIVE"; echo "Download failed; run this script again." >&2; exit 1; }
     fi
     echo "Extracting only the files this example needs..."
     unzip -o "$ARCHIVE" -d raw \

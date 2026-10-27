@@ -69,8 +69,8 @@ PyMOL view of the hot spots
 
 The per-residue decomposition also writes ``hotspots.pdb`` and
 ``view_binding.pml``. Each receptor atom of ``hotspots.pdb`` carries the
-contribution of its residue (``total + nonpolar_solvation`` of
-``per_residue_detailed.csv``) as B-factor, and the segment identifier marks
+contribution of its residue (the ``total`` column of
+``per_residue_detailed.csv``, the value of the plots) as B-factor, and the segment identifier marks
 receptor (``REC``) and ligand (``LIG``) atoms. The residues keep the numbers
 of the decomposition tables. Open the view from the results folder:
 

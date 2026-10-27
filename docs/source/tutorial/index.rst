@@ -54,8 +54,11 @@ compares the result with the expected value (:doc:`../testing`).
      - Native
      - 5.3 GB
 
-The protein-RNA example is the quickest to try: 44 MB and about a minute on a
-GPU.
+The protein-RNA example is the quickest to try: a 44 MB download, and
+``check_validation.py 3dd2`` takes about 30 seconds on a GPU. The
+configurations name the platform for a direct ``opengbsa <config>.yaml`` run;
+several name the CPU, on which a run of 300 frames takes minutes to an hour.
+``check_validation.py`` runs every case on CUDA (:doc:`../testing`).
 
 .. toctree::
    :hidden:

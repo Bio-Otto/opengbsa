@@ -2,7 +2,8 @@
 # check_validation.py. opengbsa_defaults: OpenGBSA at its default settings with the
 # configuration in this folder. mmpbsa: Amber MMPBSA.py on the same frames, the
 # reference for a run with amber_compatible: true. Values from the OpenGBSA paper's
-# validation (Additional file 1, Tables S1 and S3).
+# validation (Additional file 1, Tables S1 and S3), computed on a CUDA GPU.
+# check_validation.py therefore runs on CUDA unless told otherwise.
 # download: size of that folder's fetch_data.sh download (*: one archive for all
 # seven 3CLpro ligands; the VRC01 size is per variant). prepare: the commands that
 # download and prepare the inputs, run in the case folder.
@@ -28,7 +29,7 @@ irf11:
   opengbsa_defaults: -103.845
   mmpbsa: -109.623
   tolerance: 0.05
-  note: OpenMM's and Amber's Coulomb constants differ by 4 parts per million; on the -7,225 kcal/mol electrostatic term of this complex that gives the expected -0.024 kcal/mol
+  note_amber_compatible: OpenMM's Coulomb constant is 3.5e-5 larger than Amber's; on this complex the electrostatic term (-7,225 kcal/mol) moves by -0.25 and the polar term (+7,220 kcal/mol) by +0.22, which leaves -0.024 kcal/mol
 
 ctla4:
   folder: namd_charmm_test
@@ -149,7 +150,8 @@ vrc01_wt:
   download: 1.05 GB
   opengbsa_defaults: -36.820
   mmpbsa: -52.461
-  tolerance: 0.02
+  tolerance: 0.03
+  note: the expected values come from the CUDA platform; on the CPU platform this 8,800-atom complex gives about +0.02 kcal/mol
 
 vrc01_d99a:
   folder: antibody_vrc01_test
@@ -160,7 +162,8 @@ vrc01_d99a:
   download: 1.05 GB
   opengbsa_defaults: -43.599
   mmpbsa: -59.167
-  tolerance: 0.02
+  tolerance: 0.03
+  note: the expected values come from the CUDA platform; on the CPU platform this 8,800-atom complex gives about +0.02 kcal/mol
 
 vrc01_g54a:
   folder: antibody_vrc01_test
@@ -171,7 +174,8 @@ vrc01_g54a:
   download: 1.05 GB
   opengbsa_defaults: -44.912
   mmpbsa: -60.699
-  tolerance: 0.02
+  tolerance: 0.03
+  note: the expected values come from the CUDA platform; on the CPU platform this 8,800-atom complex gives about +0.02 kcal/mol
 
 vrc01_n100aa:
   folder: antibody_vrc01_test
@@ -182,7 +186,8 @@ vrc01_n100aa:
   download: 1.05 GB
   opengbsa_defaults: -48.600
   mmpbsa: -64.280
-  tolerance: 0.02
+  tolerance: 0.03
+  note: the expected values come from the CUDA platform; on the CPU platform this 8,800-atom complex gives about +0.02 kcal/mol
 
 vrc01_w100ba:
   folder: antibody_vrc01_test
@@ -193,4 +198,5 @@ vrc01_w100ba:
   download: 1.05 GB
   opengbsa_defaults: -25.427
   mmpbsa: -40.903
-  tolerance: 0.02
+  tolerance: 0.03
+  note: the expected values come from the CUDA platform; on the CPU platform this 8,800-atom complex gives about +0.02 kcal/mol

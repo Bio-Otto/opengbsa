@@ -1672,7 +1672,11 @@ class GBSACalculator(GBSAForceManager):
         self.use_cache = use_cache
         self.parallel_processing = parallel_processing
         self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
-        self.protein_forcefield = protein_forcefield
+        # 'amber14-all' and the file name 'amber14-all.xml' mean the amber14 set;
+        # 'auto' means the default
+        pff = str(protein_forcefield or 'amber').strip().lower()
+        pff = {'amber14-all': 'amber14', 'amber14-all.xml': 'amber14', 'auto': 'amber'}.get(pff, pff)
+        self.protein_forcefield = pff
         # Support user-defined ligand forcefield (openff, gaff)
         self.ligand_forcefield = 'openff' 
         self.charge_method = charge_method
@@ -2315,7 +2319,8 @@ class GBSACalculator(GBSAForceManager):
             
             # Run PandaMap (suppress printed output if needed)
             mapper = HybridProtLigMapper(str(patched_pdb), ligand_resname=ligand_resname)
-            mapper.run_analysis()
+            # PandaMap writes its 2D map to the current directory unless told otherwise
+            mapper.run_analysis(output_file=str(Path(output_dir) / "pandamap_interactions.png"))
             
             pandamap_html = output_dir / "structure_3d.html"
             create_pandamap_3d_viz(mapper, output_file=str(pandamap_html))
@@ -3451,7 +3456,7 @@ class GBSACalculator(GBSAForceManager):
                 if getattr(self, 'strict_platform', False):
                     raise RuntimeError(msg + " Set platform_settings.strict_platform: false "
                                        "to allow the fallback.")
-                log.warning(f"PLATFORM FALLBACK: {msg} Energies are unaffected, but timings are "
+                log.warning(f"PLATFORM FALLBACK: {msg} Energies agree to within the numerical precision of the platforms, but timings are "
                             f"not those of '{fallbacks[0][0]}'. Set platform_settings.strict_platform: "
                             f"true to stop instead.")
             print(f"Running on OpenMM platform: {used}")

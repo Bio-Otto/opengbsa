@@ -43,7 +43,7 @@ for s in "${SYSTEMS[@]}"; do
         fi
         echo "Downloading $f ..."
         # --continue-at - resumes a partial file; the .dcd files are ~1 GB each
-        curl -L --continue-at - --retry 3 --retry-delay 5 \
+        curl -fL --continue-at - --retry 3 --retry-delay 5 \
              -o "$f" "${BASE}/${f}?download=1"
     done
 done

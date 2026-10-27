@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.21] - 2026-10-27
+
+Fixes from an independent walk-through of the documentation, from installation to the validation cases.
+
+### Fixed
+- **OpenFF force fields could not be loaded from the conda package.** `openmmforcefields` and the OpenFF force-field packages import `pkg_resources`, which setuptools 81 and later no longer provide, and a new environment received setuptools 84. Coordinate Mode with a small-molecule ligand (`ligand_mol`) was affected. The package now requires `setuptools <81`; so do the test workflow and the documented development environment.
+- **`run_entropy_analysis: false` did not switch the entropy estimate off.** The calculator received `entropy_method` regardless, so a configuration written by `--create-config` (`entropy_method: interaction`, `run_entropy_analysis: false`) reported `-TΔS` and ΔG. `entropy_method` now chooses the estimate only when `run_entropy_analysis` is true. Binding enthalpies are unchanged.
+- **`protein_forcefield: amber14-all` or `amber14-all.xml`**, as the 1GCQ, 2OOB and IRF11 configurations name it, is accepted as the `amber14` choice (OpenMM's `amber14-all.xml`); before, an unrecognised value fell through to the default. Any other unknown value is reported by the configuration check.
+- `decomp_frames` is checked against `max_frames` only when a per-residue decomposition runs.
+- `--create-complete-config` writes the remaining options the analysis reads (`energy_decomposition`, `decomposition_method`, `nmode_cutoff_frequency`, `use_cache`) and explains how `run_entropy_analysis` and `entropy_method` work together.
+- The PyMOL hot-spot view colours each residue by the `total` column of `per_residue_detailed.csv`, the value of the plots and tables; it added the non-polar term.
+- The per-residue decomposition no longer warns that the sum over receptor residues differs from the binding enthalpy. They differ by design, because each receptor-ligand pair term is split equally between the receptor residue and the ligand, as in Amber's idecomp; the sum is now printed as information. A warning from an unused interaction-analysis placeholder, which looked for files under `test/`, is gone.
+- PandaMap's 2D interaction map is written to the results folder (`pandamap_interactions.png`), not the current directory.
+- `--list-test-data` shows the size of each dataset and whether it is downloaded; "ready" meant only that checksums were published.
+- The platform-fallback message no longer says energies are "unaffected": they agree to within the numerical precision of the platforms.
+
+### Changed
+- **`test/configs/check_validation.py`** runs the cases on CUDA by default, the platform on which the expected values were computed, and falls back to the next platform without a GPU; `--platform` chooses another one. A failed case keeps its output folder and log (they were deleted), and cases with a wider tolerance print the reason. The VRC01 cases allow 0.03 kcal/mol, because on the CPU platform these 8,800-atom complexes come out about 0.02 kcal/mol above the GPU values. `--list` prints the expected and MMPBSA.py values.
+- The `fetch_data.sh` scripts of the validation cases stop on an HTTP error instead of saving the error page as data, and retry a dropped connection.
+- The README files of the validation cases give the published values and the commands that reproduce them.
+- Documentation: test commands that print the counts, the setuptools pin, platform choice and timings of the validation checks, the accepted force-field names, the output files, and the PyMOL installation.
+
 ## [0.0.20] - 2026-10-27
 
 ### Added

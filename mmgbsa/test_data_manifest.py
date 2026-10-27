@@ -30,6 +30,7 @@ TEST_DATA_RECORDS = [
     {
         "name": "core-fixtures",
         "doi": "10.5281/zenodo.22139199",
+        "size_gb": 10.0,   # total of the archives on Zenodo
         "description": (
             "Core unit-test fixtures used by test/unit/: representative "
             "protein-ligand systems per native input format/loading path "

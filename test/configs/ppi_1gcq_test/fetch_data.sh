@@ -26,7 +26,8 @@ for system in 1GCQ 2OOB; do
     fi
     if [ ! -f "$archive" ]; then
         echo "Downloading ${system}.tar.gz (~1.4 GB)..."
-        curl -L -o "$archive" "${DOI_BASE}/${system}.tar.gz?download=1"
+        curl -fL --retry 3 --retry-delay 5 -o "$archive" "${DOI_BASE}/${system}.tar.gz?download=1" \
+        || { rm -f "$archive"; echo "Download failed; run this script again." >&2; exit 1; }
     fi
     echo "Extracting ${system}.tar.gz..."
     mkdir -p "raw/${system}"

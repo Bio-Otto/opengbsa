@@ -262,9 +262,21 @@ def test_validate_decomp_frames_greater_than_max_frames_is_rejected(tmp_path, ex
     cfg = make_valid_config(tmp_path, complex_pdb, trajectory)
     cfg["analysis_settings"]["max_frames"] = 10
     cfg["analysis_settings"]["decomp_frames"] = 20
+    cfg["analysis_settings"]["run_per_residue_decomposition"] = True
     mgr.config = cfg
     assert mgr.validate_config() is False
     assert any("decomp_frames" in e for e in mgr.get_validation_errors())
+
+
+def test_validate_decomp_frames_ignored_without_decomposition(tmp_path, existing_files):
+    complex_pdb, trajectory = existing_files
+    mgr = ConfigManager()
+    cfg = make_valid_config(tmp_path, complex_pdb, trajectory)
+    cfg["analysis_settings"]["max_frames"] = 5
+    cfg["analysis_settings"]["decomp_frames"] = 10
+    cfg["analysis_settings"]["run_per_residue_decomposition"] = False
+    mgr.config = cfg
+    assert mgr.validate_config() is True, mgr.get_validation_errors()
 
 
 def test_validate_random_frame_selection_requires_seed(tmp_path, existing_files):

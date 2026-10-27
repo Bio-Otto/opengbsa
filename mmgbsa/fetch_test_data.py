@@ -60,20 +60,33 @@ def _build_pooch(record):
     )
 
 
+def _cache_dir(record):
+    import pooch
+    return Path(pooch.os_cache("opengbsa")) / record["name"]
+
+
 def list_datasets():
     """
-    Returns a list of (name, description, n_files, all_hashes_present) for
-    every dataset declared in the manifest -- used by the CLI's
-    `--list-test-data` to show what's available without downloading anything.
+    Returns a list of (name, description, n_files, all_hashes_present,
+    size_gb, downloaded) for every dataset declared in the manifest -- used by
+    the CLI's `--list-test-data` to show what's available without downloading
+    anything. `downloaded` is True when every archive is in the local cache.
     """
     results = []
     for record in _get_manifest():
         all_present = all(info["sha256"] for info in record["files"].values())
+        try:
+            cache = _cache_dir(record)
+            downloaded = all((cache / fname).exists() for fname in record["files"])
+        except ImportError:
+            downloaded = False
         results.append((
             record["name"],
             record["description"],
             len(record["files"]),
             all_present,
+            record.get("size_gb"),
+            downloaded,
         ))
     return results
 
