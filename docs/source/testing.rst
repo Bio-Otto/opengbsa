@@ -60,9 +60,12 @@ pytest to the environment:
     python -m pytest test/unit -q
 
 The repository contains the topologies of the test systems but not their
-trajectories. Without them, the 13 tests that need a trajectory are skipped and
-the run ends with ``116 passed, 13 skipped``. The skipped tests and their reasons
-are listed with ``python -m pytest test/unit -q -rs``. To run them as well,
+trajectories. Without them, the 13 tests that need a trajectory are skipped. On
+a Linux machine with a CUDA GPU the run ends with ``116 passed, 13 skipped``.
+Without a GPU the tests of the GPU platforms are skipped as well; continuous
+integration, which has no GPU, reports ``114 passed, 15 skipped`` on Linux and
+``113 passed, 16 skipped`` on macOS. No test should fail. The skipped tests and
+their reasons are listed with ``python -m pytest test/unit -q -rs``. To run them as well,
 download the test trajectories (10 GB, Zenodo record
 `10.5281/zenodo.22139199 <https://doi.org/10.5281/zenodo.22139199>`_) from the
 root of the repository and run the tests again:

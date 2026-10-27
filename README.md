@@ -78,7 +78,7 @@ Every option is described in the
 
 ```bash
 conda install -c conda-forge pytest
-python -m pytest test/unit -q                          # 116 passed, 13 skipped without test data
+python -m pytest test/unit -q                          # about 115 passed, the rest skipped without test data
 opengbsa --fetch-test-data --only core-fixtures        # 10 GB of test trajectories
 python test/configs/check_validation.py --list         # third-party validation cases
 ```
