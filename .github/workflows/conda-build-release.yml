@@ -62,9 +62,12 @@ jobs:
           pip uninstall conda-content-trust -y || true
           # Isolated env with the exact target Python so conda-build inherits
           # the correct Python version without touching the base env.
+          # conda-build >= 26 runs on conda 26, whose classic solver cannot
+          # resolve the virtual packages (__unix, __glibc, ...); install the
+          # libmamba solver that the base .condarc selects alongside it.
           conda create -y -n buildenv \
             -c conda-forge \
-            "python=${{ matrix.python-version }}" conda-build anaconda-client
+            "python=${{ matrix.python-version }}" "conda-build>=26" conda-libmamba-solver anaconda-client
           conda run -n buildenv python --version
 
       - name: Build conda package
@@ -101,9 +104,7 @@ jobs:
           "${ENV_PREFIX}/bin/python" --version
 
           echo "=== Actual build ==="
-          # The base .condarc selects the libmamba solver, which the conda
-          # inside buildenv does not have; use the classic solver for the build.
-          CONDA_SOLVER=classic "${ENV_PREFIX}/bin/conda-build" conda-recipe \
+          "${ENV_PREFIX}/bin/conda-build" conda-recipe \
               -c conda-forge \
               --output-folder "$(pwd)/build_output" \
               --no-test \
