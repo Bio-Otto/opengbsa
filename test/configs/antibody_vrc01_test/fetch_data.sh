@@ -50,4 +50,19 @@ done
 
 echo
 echo "Done. Five systems in raw/ ($(du -sh . | cut -f1))."
-echo "Next: opengbsa ../vrc01_wt_config.yaml"
+
+# The .psf files need the CHARMM36m protein and water/ion parameter files, which
+# the VRC01 record does not include. The CTLA4-peptide record of
+# ../namd_charmm_test/ ships the same two files.
+cd ..
+CTLA4=../namd_charmm_test/raw/Zenodo_CTLA4_Peptide
+if [ ! -s params/par_all36m_prot.prm ] || [ ! -s params/toppar_water_ions_prot.str ]; then
+    if [ ! -s "$CTLA4/par_all36m_prot.prm" ]; then
+        echo "Fetching the CHARMM36m parameter files with ../namd_charmm_test/fetch_data.sh ..."
+        ../namd_charmm_test/fetch_data.sh
+    fi
+    mkdir -p params
+    cp "$CTLA4/par_all36m_prot.prm" "$CTLA4/toppar_water_ions_prot.str" params/
+    echo "CHARMM36m parameters copied to params/."
+fi
+echo "Next (from this folder): opengbsa vrc01_wt_config.yaml"

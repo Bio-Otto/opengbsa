@@ -28,6 +28,7 @@ import mdtraj as md
 import parmed
 from .mmgbsa_core import GBSACalculator, SOLVENT_ION_RESNAMES
 from .trajectory import reimage_molecules
+from .pymol_viz import write_hotspot_pymol
 
 from .logger import ToolLogger
 
@@ -197,6 +198,7 @@ class PerResidueDecomposition:
             
             self._print_decomposition_summary(complete_results)
             self._save_decomposition_results(complete_results)
+            self._write_hotspot_pymol(decomp_results)
             
             return complete_results
         
@@ -393,6 +395,11 @@ class PerResidueDecomposition:
             )
             
             log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
+            # structure for the PyMOL hot-spot script: the middle decomposed frame, in the
+            # atom order of the evaluated complex
+            self._hotspot_inputs = dict(topology=complex_topology, residue_map=residue_map,
+                                        ligand_indices=ligand_indices,
+                                        positions=decomp_traj.xyz[len(decomp_traj) // 2])
             if len(ligand_indices) == 0:
                  log.error(f"CRITICAL: No ligand atoms found for resname '{ligand_resname}'. Energies will be zero.")
                  # Provide debugging dump
@@ -620,6 +627,25 @@ class PerResidueDecomposition:
 
         except Exception as e:
             log.error(f"Decomposition failed: {e}")
+            return None
+
+    def _write_hotspot_pymol(self, averaged_results):
+        """Write hotspots.pdb and view_binding.pml into the output folder: the
+        receptor coloured by each residue's contribution to the binding enthalpy
+        (van der Waals, electrostatic, polar and non-polar terms)."""
+        inputs = getattr(self, '_hotspot_inputs', None)
+        if not inputs or not self.output_dir:
+            return None
+        try:
+            values = {res_id: e.get('total_mean', 0.0) + e.get('nonpolar_solvation_mean', 0.0)
+                      for res_id, e in averaged_results.items()}
+            path = write_hotspot_pymol(inputs['topology'], inputs['positions'], values,
+                                       inputs['residue_map'], inputs['ligand_indices'],
+                                       self.output_dir)
+            log.success(f"PyMOL hot-spot script written: {path} (run 'pymol {path.name}' in that folder)")
+            return path
+        except Exception as e:
+            log.warning(f"PyMOL hot-spot script not written: {e}")
             return None
 
     def _build_residue_mapping(self, topology, ligand_resname, ligand_selection=None, receptor_selection=None, reference_topology=None):

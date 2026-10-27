@@ -377,6 +377,24 @@ class MMGBSARunner:
                 log.error(f"GROMACS auto-conversion failed: {e}")
                 # We continue, likely to fail later, but error log is imperative.
         
+        # OPENMM SYSTEM (.xml + .pdb of the same name): convert to an Amber topology,
+        # which then runs in Native Mode like any .prmtop
+        if complex_pdb and str(complex_pdb).endswith('.xml'):
+            from pathlib import Path   # Path is local to this method (imported in branches above)
+            from .conversion import OpenMMSystemPreprocessor
+            pdb_file = OpenMMSystemPreprocessor.find_pdb(complex_pdb)
+            log.info(f"Detected a serialised OpenMM System; converting it with {pdb_file.name} "
+                     f"to an Amber topology...")
+            input_files['complex_pdb'] = OpenMMSystemPreprocessor.convert_to_amber(
+                complex_pdb, pdb_file, Path(self.output_dir) / "openmm_system",
+                gb_model=analysis_settings.get('gb_model', 'OBC2'),
+                radii_set=analysis_settings.get('gb_radii_set', 'auto'))
+            complex_pdb = input_files['complex_pdb']
+            if not input_files.get('solvated_topology'):
+                # the PDB keeps the residue numbering of the system for the trajectory
+                input_files['solvated_topology'] = str(pdb_file)
+            log.success(f"OpenMM System converted: {input_files['complex_pdb']}")
+
         # Get frame selection parameters for reporting
         frame_params = {
             'max_frames': analysis_settings.get('max_frames', 50),
@@ -400,6 +418,7 @@ class MMGBSARunner:
             frame_end=frame_params.get('frame_end'),
             frame_stride=frame_params.get('frame_stride'),
             frame_selection=frame_params.get('frame_selection', 'sequential'),
+            random_seed=analysis_settings.get('random_seed', 42),
             qha_analyze_complex=analysis_settings.get('qha_analyze_complex', False),
             output_dir=output_dir,
             ligand_selection=resolved_ligand_sel,

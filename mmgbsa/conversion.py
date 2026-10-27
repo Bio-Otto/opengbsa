@@ -239,3 +239,103 @@ class GromacsPreprocessor:
                     
             except Exception as e:
                 log.warning(f"Could not check torsions for {f_path.name}: {e}")
+
+
+class OpenMMSystemPreprocessor:
+    """
+    Converts a serialised OpenMM System (.xml) with a PDB file of the same
+    atoms into an Amber .prmtop, so that it enters Native Mode like an Amber
+    topology. The force-field parameters come from the System; the PDB gives
+    the atom and residue names, the bonds and the coordinates. GB radii are not
+    part of a System and are assigned for the GB model, as for GROMACS input.
+    """
+
+    # Forces that carry the force field and that ParmEd converts.
+    CONVERTED = ('HarmonicBondForce', 'HarmonicAngleForce', 'PeriodicTorsionForce',
+                 'NonbondedForce', 'CMAPTorsionForce')
+    # Forces of the simulation setup that MM/GBSA does not use.
+    DROPPED = ('CMMotionRemover', 'MonteCarloBarostat', 'MonteCarloAnisotropicBarostat',
+               'MonteCarloMembraneBarostat', 'AndersenThermostat', 'GBSAOBCForce',
+               'CustomGBForce')
+
+    @staticmethod
+    def find_pdb(xml_file):
+        """The PDB that describes the atoms of `xml_file`: same name, .pdb suffix."""
+        pdb = Path(xml_file).with_suffix('.pdb')
+        if not pdb.exists():
+            raise FileNotFoundError(
+                f"An OpenMM System {Path(xml_file).name} needs a PDB file of the same atoms "
+                f"with the same name, {pdb.name}, for the atom names, residues and bonds.")
+        return pdb
+
+    @staticmethod
+    def convert_to_amber(xml_file, pdb_file, output_dir, gb_model='OBC2', radii_set='auto'):
+        """Write <output_dir>/<stem>_from_openmm.prmtop and return its path.
+
+        `radii_set` 'auto' assigns the set that `gb_model` was parameterised with
+        (mbondi for HCT and GBn, mbondi2 for OBC1 and OBC2, mbondi3 for GBn2).
+        """
+        import openmm
+        from openmm import app
+
+        xml_file, pdb_file = Path(xml_file), Path(pdb_file)
+        with open(xml_file) as fh:
+            system = openmm.XmlSerializer.deserialize(fh.read())
+        pdb = app.PDBFile(str(pdb_file))
+        if pdb.topology.getNumAtoms() != system.getNumParticles():
+            raise ValueError(f"{pdb_file.name} has {pdb.topology.getNumAtoms()} atoms but the "
+                             f"System in {xml_file.name} has {system.getNumParticles()} particles.")
+
+        for index in reversed(range(system.getNumForces())):
+            name = type(system.getForce(index)).__name__
+            if name in OpenMMSystemPreprocessor.DROPPED:
+                system.removeForce(index)
+            elif name not in OpenMMSystemPreprocessor.CONVERTED:
+                raise ValueError(
+                    f"{xml_file.name} contains a {name}, which cannot be converted to an Amber "
+                    f"topology without changing the energy (for example the pair-specific "
+                    f"Lennard-Jones terms of CHARMM). Give the original topology instead "
+                    f"(.prmtop, .top or .psf).")
+
+        # The bond graph must be the System's own. A PDB carries bonds from residue
+        # templates and may join consecutive residues the System does not bond (a
+        # protein and a nucleic acid in one chain, for example), and ParmEd checks
+        # the 1-2, 1-3 and 1-4 exceptions of the NonbondedForce against the bonds.
+        pairs = set()
+        for force in system.getForces():
+            if isinstance(force, openmm.HarmonicBondForce):
+                for i in range(force.getNumBonds()):
+                    a, b, *_ = force.getBondParameters(i)
+                    pairs.add(tuple(sorted((a, b))))
+        for i in range(system.getNumConstraints()):
+            a, b, _ = system.getConstraintParameters(i)
+            pairs.add(tuple(sorted((a, b))))
+        topology = app.Topology()
+        topology.setPeriodicBoxVectors(pdb.topology.getPeriodicBoxVectors())
+        atoms = []
+        for chain in pdb.topology.chains():
+            new_chain = topology.addChain(chain.id)
+            for residue in chain.residues():
+                new_residue = topology.addResidue(residue.name, new_chain, residue.id,
+                                                  residue.insertionCode)
+                for atom in residue.atoms():
+                    atoms.append(topology.addAtom(atom.name, atom.element, new_residue, atom.id))
+        for a, b in sorted(pairs):
+            topology.addBond(atoms[a], atoms[b])
+
+        structure = pmd.openmm.load_topology(topology, system, xyz=pdb.positions)
+        if structure.unknown_functional:
+            raise ValueError(f"ParmEd could not express the System in {xml_file.name} as an Amber "
+                             f"topology. Give the original topology instead (.prmtop, .top or .psf).")
+        if not radii_set or radii_set == 'auto':
+            radii_set = GromacsPreprocessor._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
+        from parmed.tools import changeRadii
+        changeRadii(structure, radii_set).execute()
+        log.info(f"Applied '{radii_set}' GB radii set to the converted OpenMM System "
+                 f"(gb_model='{gb_model}').")
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        out = output_dir / f"{xml_file.stem}_from_openmm.prmtop"
+        structure.save(str(out), overwrite=True)
+        return str(out)

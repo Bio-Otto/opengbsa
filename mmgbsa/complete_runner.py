@@ -275,8 +275,7 @@ class CompleteMMGBSARunner:
         calculator = self._setup_mmgbsa_calculator()
         
         if not OPENMM_AVAILABLE:
-            # Run in test mode
-            return self._run_test_analysis()
+            raise RuntimeError("OpenMM is not available; no MM/GBSA energies can be computed.")
         
         # Step 4: Run MM/GBSA analysis
         print("\nSTEP 4: MM/GBSA Analysis")
@@ -356,42 +355,6 @@ class CompleteMMGBSARunner:
         print(f"Final binding energy: {mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f} kcal/mol")
         
         return self.results
-    
-    def _run_test_analysis(self):
-        """Run test analysis when OpenMM is not available"""
-        print("Running test analysis (OpenMM not available)")
-        
-        # Simulate analysis steps
-        analysis_settings = self.config['analysis_settings']
-        
-        mock_results = {
-            'mmgbsa': {
-                'mean_binding_energy': -8.45,
-                'std_error': 1.23,
-                'std_dev': 2.34,
-                'n_frames': analysis_settings.get('max_frames', 50),
-                'gb_model': analysis_settings.get('gb_model', 'OBC2'),
-                'output_file': str(self.output_dir / 'data' / 'mock_results.csv')
-            }
-        }
-        
-        if analysis_settings.get('run_entropy_analysis', False):
-            mock_results['entropy'] = {
-                'status': 'completed',
-                'method': 'normal_mode_analysis',
-                'classical_entropy': 15.67,
-                'quantum_entropy': 12.34
-            }
-        
-        if analysis_settings.get('run_per_residue_decomposition', False):
-            mock_results['decomposition'] = {
-                'status': 'completed',
-                'n_residues': 45,
-                'hot_spots': ['ARG123', 'GLU456', 'LYS789']
-            }
-        
-        self.results = mock_results
-        return mock_results
     
     def _run_entropy_analysis(self, calculator, input_files):
         """Run entropy analysis using normal mode analysis"""

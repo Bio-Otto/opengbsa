@@ -22,6 +22,15 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def data_root():
+    """The folder whose test/data/ receives the fetched datasets: the source
+    checkout when OpenGBSA runs from one, otherwise the current directory (the
+    root of a cloned repository, next to a conda-installed package)."""
+    if (REPO_ROOT / "test" / "unit").is_dir():
+        return REPO_ROOT
+    return Path.cwd()
+
+
 def _get_manifest():
     from .test_data_manifest import TEST_DATA_RECORDS
     return TEST_DATA_RECORDS
@@ -159,7 +168,7 @@ def fetch_all(only=None, force=False):
                         f"single named directory per archive."
                     )
                 extracted_root = untar_dir / next(iter(top_level_dirs))
-                link_target = REPO_ROOT / info["extract_to"] / extracted_root.name
+                link_target = data_root() / info["extract_to"] / extracted_root.name
                 link_target.parent.mkdir(parents=True, exist_ok=True)
                 if link_target.is_symlink() or link_target.exists():
                     if link_target.is_symlink():

@@ -74,6 +74,7 @@ Complete Advanced MM/GBSA Calculator with GBSA Force Implementation
 Fixed version that properly handles force exceptions to avoid OpenMM errors
 """
 import os
+import random
 import pickle
 import time
 import multiprocessing as mp
@@ -3417,8 +3418,19 @@ class GBSACalculator(GBSAForceManager):
                 plat = openmm.Platform.getPlatformByName(name)
                 test_system = openmm.System()
                 test_system.addParticle(1.0)
+                if name in ('CUDA', 'OpenCL'):
+                    # OpenMM caches compiled GPU kernels by source in a shared temporary
+                    # directory, so a probe made only of common kernels can pass on code
+                    # another environment compiled, even when this environment's CUDA
+                    # runtime builds code the driver cannot load. A force whose kernel
+                    # source is unique to this probe has to be compiled here.
+                    probe = openmm.CustomExternalForce(f"{1 + random.random():.17g}*x")
+                    probe.addParticle(0, [])
+                    test_system.addForce(probe)
                 test_integrator = openmm.VerletIntegrator(0.001 * unit.picoseconds)
                 _ctx = openmm.Context(test_system, test_integrator, plat, props)
+                _ctx.setPositions([openmm.Vec3(0.0, 0.0, 0.0)] * unit.nanometers)
+                _ctx.getState(getEnergy=True)
                 del _ctx
                 del test_integrator
                 return plat

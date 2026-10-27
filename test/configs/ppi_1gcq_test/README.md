@@ -22,8 +22,8 @@ cd test/configs/ppi_1gcq_test
 ./fetch_data.sh                              # downloads ~2.8 GB total (both systems)
 python3 prepare_system.py --system 1gcq
 python3 prepare_system.py --system 2oob
-opengbsa run 1gcq_config.yaml
-opengbsa run 2oob_config.yaml
+opengbsa 1gcq_config.yaml
+opengbsa 2oob_config.yaml
 ```
 
 For a fast smoke test (3 frames instead of 300), use `1gcq_config_test.yaml`
