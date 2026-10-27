@@ -79,12 +79,14 @@ def run_case(name, case, amber_compatible, opengbsa, keep):
     else:
         reference, label = case["opengbsa_defaults"], "expected"
     if reference is None:
-        print(f"  {name}: dH = {value:.3f} kcal/mol ({case.get('note', 'no reference value')})")
+        print(f"  {name}: dH = {value:.3f} kcal/mol (no reference value)")
         return True
     diff = value - reference
     ok = abs(diff) <= case.get("tolerance", 0.02)
     print(f"  {name}: dH = {value:9.3f}   {label} {reference:9.3f}   "
           f"difference {diff:+.3f} kcal/mol   {'PASS' if ok else 'FAIL'}")
+    if amber_compatible and case.get("note"):
+        print(f"      note: {case['note']}")
     return ok
 
 

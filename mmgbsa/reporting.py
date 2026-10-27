@@ -768,7 +768,9 @@ class HTMLReportGenerator:
     def _generate_advanced_3dmol(self, pandamap_html_path, *args):
         """Embed PandaMap HTML output."""
         if not pandamap_html_path or not os.path.exists(pandamap_html_path):
-            return "// No PandaMap", "<div class='alert alert-warning'>PandaMap 3D report not found.</div>"
+            return "// No PandaMap", ("<div class='alert alert-warning'>The 3D interaction view needs the "
+                                     "optional package PandaMap (<code>pip install pandamap</code>). "
+                                     "Every other part of this report is complete.</div>")
         if not str(pandamap_html_path).lower().endswith(".html"):
             return "// No PandaMap", "<div class='alert alert-warning'>PandaMap output is not an HTML file; 3D panel disabled.</div>"
 

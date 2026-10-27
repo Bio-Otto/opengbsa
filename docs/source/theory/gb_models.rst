@@ -1,58 +1,97 @@
-Generalized Born Models
+Generalized Born models
 =======================
 
-The choice of Generalized Born (GB) model determines how the effective Born radii are calculated and how the polar solvation energy is estimated. OpenGBSA provides access to several standard GB models implemented in OpenMM.
+A Generalized Born (GB) model gives the polar part of the solvation free
+energy. Each atom has an effective Born radius that measures how deeply it is
+buried in the solute; the GB energy then combines the charges, the distances
+and the Born radii. The models differ in how they compute the Born radii.
+OpenGBSA provides the five GB models of Amber, set with
+``analysis_settings.gb_model``:
 
-Model Descriptions
-------------------
+.. list-table::
+   :header-rows: 1
+   :widths: 12 14 16 58
 
-OBC1 (Onufriev-Bashford-Case I)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-A fundamental improvement over the original GB model, the OBC models rescale the effective Born radii to better match Poisson-Boltzmann results.
+   * - ``gb_model``
+     - Amber ``igb``
+     - Radii set
+     - Reference
+   * - ``HCT``
+     - 1
+     - ``mbondi``
+     - Hawkins GD, Cramer CJ, Truhlar DG (1995) *Chem Phys Lett* 246:122-129
+   * - ``OBC1``
+     - 2
+     - ``mbondi2``
+     - Onufriev A, Bashford D, Case DA (2000) *J Phys Chem B* 104:3712-3720
+   * - ``OBC2``
+     - 5
+     - ``mbondi2``
+     - Onufriev A, Bashford D, Case DA (2004) *Proteins* 55:383-394
+   * - ``GBn``
+     - 7
+     - ``mbondi`` (``bondi`` in Amber)
+     - Mongan J, Simmerling C, McCammon JA, Case DA, Onufriev A (2007)
+       *J Chem Theory Comput* 3:156-169
+   * - ``GBn2``
+     - 8
+     - ``mbondi3``
+     - Nguyen H, Roe DR, Simmerling C (2013) *J Chem Theory Comput*
+       9:2020-2034
 
-*   **Key Feature**: Rescales Born radii to account for interstitial dielectrics.
-*   **Citation**: Onufriev, A., Bashford, D., & Case, D. A. (2000). Modification of the generalized Born model suitable for macromolecules. *The Journal of Physical Chemistry B*, 104(6), 1541-1548.
-*   **OpenMM Tag**: ``OBC1``
+**HCT** sums pairwise descreening contributions and tends to underestimate the
+Born radii of buried atoms. **OBC1** and **OBC2** rescale the HCT integral to
+correct this, with two published parameter sets; OBC2 is the default of
+OpenGBSA and the most widely used model in MM/GBSA. **GBn** adds a correction
+for the small regions between atoms ("necks") that are too narrow for water,
+and **GBn2** refines it with new parameters fitted for proteins. All five
+models were compared with Amber MMPBSA.py on the same frames
+(:doc:`../testing`).
 
-OBC2 (Onufriev-Bashford-Case II)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-**Recommended Default**. An optimization of OBC1 with different scaling parameters (:math:`\alpha, \beta, \gamma`). It is widely regarded as one of the most accurate analytical GB models for protein-ligand binding affinities.
+Atomic radii
+------------
 
-*   **Key Feature**: Optimized parameters (:math:`\alpha=1.0, \beta=0.8, \gamma=4.85`) that reduce errors for larger proteins compared to OBC1.
-*   **Citation**: Onufriev, A., Bashford, D., & Case, D. A. (2004). Exploring protein native states and large-scale conformational changes with a modified generalized born model. *Proteins: Structure, Function, and Bioinformatics*, 55(2), 383-394.
-*   **OpenMM Tag**: ``OBC2``
+Each model was parameterised with its own set of intrinsic atomic radii, listed
+above. OpenGBSA chooses them as follows (``gb_radii_set: auto``):
 
-GBn (GB-Neck)
-~~~~~~~~~~~~~
-Addressed a specific deficiency in earlier generic GB models regarding the "neck" region between two heteroatoms.
+* An Amber ``.prmtop`` keeps the radii it contains, as Amber MMPBSA.py does.
+  OpenGBSA warns when they differ from the set the model expects.
+* GROMACS, CHARMM/NAMD, OpenMM and PDB input carry no GB radii. OpenGBSA
+  assigns the model's set from each atom's element and the atom it is bonded
+  to, by the rules of Amber's ``tleap``.
+* GBn and GBn2 are defined only for radii between 1 and 2 Å. Radii outside
+  this range are replaced by the model's own set, with a warning.
 
-*   **Key Feature**: Improved hydration free energies for molecular shapes with crevices or "necks".
-*   **Citation**: Mongan, J., Simmerling, C., & McCammon, J. A. (2007). Generalized Born model with a simple, robust molecular volume correction. *Journal of Chemical Theory and Computation*, 3(1), 156-169.
-*   **OpenMM Tag**: ``GBn``
+``gb_radii_set`` forces one set (``mbondi``, ``mbondi2``, ``mbondi3`` or
+``bondi``) for every input.
 
-GBn2
-~~~~
-A further refinement of the GBn model, parameterized with a larger dataset.
+The Born-radius cutoff
+----------------------
 
-*   **Citation**: Nguyen, H., Roe, D. R., & Simmerling, C. (2013). Improved generalized Born solvent model parameters for protein simulations. *Journal of Chemical Theory and Computation*, 9(4), 2020-2034.
-*   **OpenMM Tag**: ``GBn2``
+An atom's Born radius depends on all other atoms of the molecule. OpenGBSA
+computes it from every atom pair by default. Amber includes only the atoms
+within 25 Å (``rgbmax``). ``rgbmax`` sets such a cutoff in OpenGBSA, and
+``amber_compatible: true`` sets 25 Å. The effect of the cutoff is explained in
+:doc:`mmgbsa_theory`.
 
-HCT (Hawkins-Cramer-Truhlar)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-One of the earliest pairwise descreening approximations. It is computationally efficient but often considered less accurate than OBC models for complex biomolecular systems.
+Salt
+----
 
-*   **Citation**: Hawkins, G. D., Cramer, C. J., & Truhlar, D. G. (1995). Pairwise solute descreening of solute charges from a dielectric medium. *Chemical Physics Letters*, 246(1-2), 122-129.
-*   **OpenMM Tag**: ``HCT``
-
-Salt Screening
---------------
-
-The presence of mobile ions in the solvent is modeled using Debye-Hückel screening. The screening effect reduces the range of electrostatic interactions.
-
-The screening parameter :math:`\kappa` (inverse Debye length) is calculated from the salt concentration :math:`C` (in Molar):
+Mobile ions screen the electrostatic interactions. With
+``salt_concentration`` :math:`I` (in M) the GB energy includes the
+Debye-Hückel screening of Srinivasan et al. (1999), as in Amber:
 
 .. math::
 
-   \kappa \approx 0.304 \sqrt{C} \quad \text{(at 298 K for monovalent salt)}
+   \kappa = 0.73 \times 50.33355 \sqrt{\frac{I}{\varepsilon_\mathrm{solvent} T}}\ \text{Å}^{-1}
 
-In OpenGBSA, this is controlled by the ``salt_concentration`` parameter in the configuration file.
+At 0.15 M, :math:`\varepsilon_\mathrm{solvent} = 78.5` and 300 K this gives
+:math:`\kappa = 0.093` Å⁻¹. ``salt_concentration: 0`` switches screening off.
+
+Dielectric constants
+--------------------
+
+The solute dielectric is 1.0 and the solvent dielectric 78.5 by default
+(``solute_dielectric``, ``solvent_dielectric``). With ``amber_compatible``
+the solvent dielectric of MMPBSA.py is used: 80.0 when it evaluates the energy
+with ``sander`` (CHARMM and chamber topologies) and 78.3 when it uses NAB.

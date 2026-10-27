@@ -221,7 +221,8 @@ def check_dependencies() -> Dict[str, bool]:
         'yaml': False,
         'rdkit': False,
         'MDAnalysis': False,
-        'h5py': False,
+        'parmed': False,
+        'pooch': False,
         'openff-toolkit': False,
         'openmmforcefields': False
     }
@@ -282,8 +283,14 @@ def check_dependencies() -> Dict[str, bool]:
         pass
     
     try:
-        import h5py
-        dependencies['h5py'] = True
+        import parmed
+        dependencies['parmed'] = True
+    except ImportError:
+        pass
+
+    try:
+        import pooch   # downloads the test data (--fetch-test-data)
+        dependencies['pooch'] = True
     except ImportError:
         pass
     

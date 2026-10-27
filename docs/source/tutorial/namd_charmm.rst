@@ -59,6 +59,30 @@ What to notice in the config
   ``binding_mode: ppi`` work for a peptide or protein "ligand" -- the same
   mechanism used in the two Coordinate Mode PPI examples.
 
-Full write-up (including the independent Amber reference comparison and
-six OpenGBSA bugs found and fixed while validating this path): see
-``test/configs/namd_charmm_test/README.md`` in the repository.
+Expected result
+---------------
+
+From the root of the repository, ``check_validation.py`` runs the
+configuration and compares the mean binding enthalpy (kcal/mol) with the
+recorded value; ``--amber-compatible`` runs it with ``amber_compatible: true``
+and compares with Amber MMPBSA.py on the same frames:
+
+.. code-block:: bash
+
+    python test/configs/check_validation.py ctla4
+    python test/configs/check_validation.py ctla4 --amber-compatible
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Case
+     - OpenGBSA, default settings
+     - MMPBSA.py (``amber_compatible``)
+   * - ``ctla4``
+     - -32.056
+     - -32.571
+
+The difference between the two settings is the Born-radius cutoff of
+MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+details: ``test/configs/namd_charmm_test/README.md``.

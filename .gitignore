@@ -260,3 +260,6 @@ test/configs/*/params/
 # Transient configs written by the manuscript speed benchmark
 # (~/Desktop/OpenGBSA_Article/analysis/run_speed_benchmark.sh)
 .bench_*.yaml
+
+# check_validation.py writes its run configuration next to the case
+test/configs/*/.check_*.yaml

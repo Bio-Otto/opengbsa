@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.20] - 2026-10-27
+
+### Added
+- **OpenMM System input.** A serialised `System` (`.xml`) with a `.pdb` of the same atoms and name next to it can be given as `complex_pdb`. It is converted with ParmEd to an Amber topology and runs in Native Mode; GB radii are assigned for the GB model (or `gb_radii_set`). Forces that cannot be expressed in an Amber topology, such as a `CustomNonbondedForce` (CHARMM NBFIX built in OpenMM), stop the run with a message. On the 3dd2 protein-RNA case the converted System reproduces the original `.prmtop` to 7e-12 kcal/mol in every energy term over 10 frames when both use the same radii set. Tests: `test/unit/test_openmm_xml_input.py`.
+- **PyMOL hot-spot view on every per-residue decomposition.** `hotspots.pdb` carries each receptor residue's contribution to the binding enthalpy as B-factor, with segment identifiers `REC`/`LIG`, in the atom order of the evaluated complex and with the residue numbers of the decomposition tables; `view_binding.pml` colours and labels the hot spots. Test: `test/unit/test_hotspot_pymol.py`.
+- **`test/configs/check_validation.py`** runs a third-party validation case and compares its mean binding enthalpy with `test/configs/expected_results.yaml`, at default settings or with `--amber-compatible` against Amber MMPBSA.py.
+- **Self-contained quickstart** (`examples/quickstart/`): 50 frames of 6T1H with ligand 1151 that run without downloading data.
+- **Documentation for reviewers and users:** installation and testing guides with expected output, a reference of every configuration option, input formats and modes, outputs, plots, diagrams, and six tutorials with expected results.
+
+### Changed
+- `--complete` is deprecated and ignored; every run uses the standard pipeline. The former runner ignored several settings and returned placeholder numbers when OpenMM could not be imported.
+- `--create-config` and `--create-complete-config` write only options the analysis reads, with their real defaults and a comment on each.
+- The CLI help shows the `opengbsa` command (it showed `mmgbsa`).
+- `--check-deps` checks ParmEd and pooch instead of h5py; the conda package depends on ParmEd and pooch explicitly.
+
+### Fixed
+- **A GPU platform test could pass on kernels compiled by another environment.** OpenMM caches compiled GPU kernels by source in a shared temporary directory, so with two environments of different CUDA runtimes the platform test passed while the run itself failed with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. The test now compiles and evaluates a kernel whose source is unique to it, so an unusable CUDA runtime falls back to the next platform. Test in `test/unit/test_platform_fallback.py`.
+- **Configuration validation:** an integer `temperature` or `salt_concentration` (for example `300`) is accepted; an omitted `gb_model` defaults to OBC2 as in the rest of the code; a section left empty in YAML no longer crashes the run; unknown values of `frame_selection`, `entropy_method` and `decomposition_method` are reported before the run. Tests: `test/unit/test_config_validation.py`.
+- `random_seed` now reaches the main calculation (it was used only by the decomposition).
+- `--fetch-test-data` links the data into `test/data/` of the repository in use, also when OpenGBSA is installed as a conda package, and adds the downloaded files to folders that already hold the repository's topologies.
+- The 3D view of the HTML report works when the ligand is defined by receptor and ligand topologies; without the optional PandaMap package the report says how to install it.
+- The VRC01 validation case provides its CHARMM36m parameter files; the 1GCQ/2OOB README used a non-existent `opengbsa run` command.
+
 ## [0.0.19] - 2026-10-27
 
 ### Added

@@ -27,7 +27,8 @@ irf11:
   download: 25 MB
   opengbsa_defaults: -103.845
   mmpbsa: -109.623
-  tolerance: 0.02
+  tolerance: 0.05
+  note: OpenMM's and Amber's Coulomb constants differ by 4 parts per million; on the -7,225 kcal/mol electrostatic term of this complex that gives the expected -0.024 kcal/mol
 
 ctla4:
   folder: namd_charmm_test
@@ -36,9 +37,8 @@ ctla4:
   description: protein-peptide, NAMD/CHARMM .psf (Native Mode)
   frames: 300
   download: 321 MB
-  opengbsa_defaults: null   # filled from this configuration's own run (see note)
-  mmpbsa: null
-  note: the Amber reference used frames imaged once with cpptraj; this configuration lets OpenGBSA re-image the raw trajectory
+  opengbsa_defaults: -32.056
+  mmpbsa: -32.571
   tolerance: 0.02
 
 1gcq:

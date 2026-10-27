@@ -1,37 +1,53 @@
-User Guide
+User guide
 ==========
 
-Welcome to the OpenGBSA User Guide. This section provides detailed instructions on how to use OpenGBSA effectively, from basic configuration to advanced analysis interpretation.
+The user guide explains how to set up, run and read an OpenGBSA calculation.
 
 .. grid:: 2
 
-    .. grid-item-card::  🛠️  Configuration
+    .. grid-item-card::  CLI and CDI
+        :link: interfaces
+        :link-type: doc
+
+        The ``opengbsa`` command and the configuration file, and how they work
+        together.
+
+    .. grid-item-card::  Input formats and modes
+        :link: input_formats
+        :link-type: doc
+
+        Amber, GROMACS, CHARMM/NAMD, OpenMM and PDB input; Native and
+        Coordinate Mode; choosing receptor and ligand.
+
+    .. grid-item-card::  Configuration reference
         :link: configuration
         :link-type: doc
 
-        Master the YAML configuration file. Learn about all available options for input files, solver settings, and outputs.
+        Every option, with its default and its meaning.
 
-    .. grid-item-card::  🏃  Running Analysis
+    .. grid-item-card::  Running an analysis
         :link: running_analysis
         :link-type: doc
 
-        Learn the CLI commands, parallel processing options, and how to monitor your analysis.
+        Platforms, GPUs, CPU workers, run time and logs.
 
-    .. grid-item-card::  📊  Outputs & Results
+    .. grid-item-card::  Output files
         :link: outputs
         :link-type: doc
 
-        Understand the output files: CSVs, plots, and the interactive HTML report.
+        Every file a run writes and every column of the tables.
 
-    .. grid-item-card::  👀  Visualization
+    .. grid-item-card::  Plots, report and 3D views
         :link: visualization
         :link-type: doc
 
-        Learn how to interact with the 3D structure viewer and interpret the generated plots.
+        How to read the plots, the interactive report and the PyMOL view.
 
 .. toctree::
    :hidden:
 
+   interfaces
+   input_formats
    configuration
    running_analysis
    outputs

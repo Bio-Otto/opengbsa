@@ -1,173 +1,101 @@
-# OpenGBSA: Advanced MM/GBSA Analysis Tool
+# OpenGBSA
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
-![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)
-![OpenMM](https://img.shields.io/badge/OpenMM-8.0+-green.svg)
+![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)
+![OpenMM 8.5](https://img.shields.io/badge/OpenMM-8.5-green.svg)
+[![Documentation](https://img.shields.io/badge/docs-readthedocs-blue.svg)](https://opengbsa.readthedocs.io/)
 
-OpenGBSA is a comprehensive and automated tool for **Binding Free Energy**, **Energy Decomposition**, and **Entropy** calculations for protein-ligand complexes derived from molecular dynamics simulations.
+OpenGBSA computes MM/GBSA binding enthalpies from molecular dynamics
+trajectories. All energies are computed with OpenMM, on CPUs or on GPUs
+through CUDA or OpenCL. It reads Amber, GROMACS, CHARMM/NAMD and OpenMM input
+as well as plain PDB files, and it needs no AmberTools installation.
 
-It supports **GROMACS** (`.tpr`, `.top`, `.gro`), **Amber** (`.prmtop`), and **raw PDB + trajectory** inputs.
+**Documentation:** <https://opengbsa.readthedocs.io/>
 
----
+## Features
 
-## 🚀 Features
+* **Two interfaces:** a command-line interface (CLI) for templates, checks and
+  test data, and a configuration-driven interface (CDI): one YAML file defines
+  a whole calculation.
+* **Input:** Amber `.prmtop`, GROMACS `.top`/`.tpr`, CHARMM/NAMD `.psf`,
+  OpenMM `.xml`, or a PDB file of the complex.
+* **Solvation:** the five GB models of Amber (HCT, OBC1, OBC2, GBn, GBn2) with
+  salt screening, and LCPO or ACE for the non-polar term.
+* **Amber-compatible mode:** `amber_compatible: true` reproduces Amber
+  MMPBSA.py on the same frames.
+* **Per-residue decomposition** with plots, an interactive HTML report and a
+  PyMOL script that colours the hot spots.
+* **Entropy estimates:** interaction entropy and C2 with reliability limits,
+  quasi-harmonic and normal-mode analysis.
 
-*   **Multiple Input Formats:** GROMACS `.tpr`/`.top`, Amber `.prmtop`, and raw PDB files
-*   **Multiple GB Models:** OBC1, OBC2, HCT, GBn, GBn2
-*   **Multiple Surface Area Models:**
-    *   **ACE (Analytical Continuum Electrostatics):** Fast default model
-    *   **LCPO (Linear Combinations of Pairwise Overlaps):** More accurate, physics-based
-*   **Per-Residue Energy Decomposition:** Parallel CPU multi-process decomposition
-*   **Entropy Calculations:** Interaction entropy, quasiharmonic analysis, and normal mode analysis
-*   **Dimer Mode:** Protein-protein-ligand binding analysis with separate subunit definitions
-*   **GPU Acceleration:** CUDA and OpenCL platform support for fast energy evaluation
-*   **Interactive HTML Report:** Full decomposition heatmaps, 3D structure viewer, and energy plots
-*   **Flexible YAML Configuration:** Complete control via a single config file
-*   **Comprehensive Test Suite:** 48 automated test configurations covering all features
-
----
-
-## 🛠️ Installation
-
-The recommended installation method is using `conda` (or `mamba`):
+## Installation
 
 ```bash
-# Create a new environment
-conda create -n opengbsa python=3.10
+conda create -n opengbsa -c bio-otto -c conda-forge python=3.10 opengbsa
 conda activate opengbsa
-
-# Install core dependencies
-conda install -c conda-forge openmm mdtraj rdkit parmed
-pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
-
-# Install the package (stable OpenMM >=8.5.1 from conda-forge)
-conda install -c bio-otto -c conda-forge opengbsa=0.0.19
-# GPU (CUDA): match the CUDA runtime to your driver's CUDA version (nvidia-smi,
-# top right), e.g. for a driver that supports CUDA 12.9:
-#   conda install -c conda-forge "cuda-version=12.9"
-# A newer runtime than the driver supports makes OpenMM fall back to the CPU;
-# set platform_settings.strict_platform: true to make that an error.
+opengbsa --check-deps
 ```
 
----
+Packages exist for Linux x86-64 and macOS on Apple Silicon. For GPUs, match
+the CUDA runtime to the driver (`conda install -c conda-forge "cuda-version=12.9"`
+for a driver that supports CUDA 12.9); see the
+[installation guide](https://opengbsa.readthedocs.io/en/latest/installation.html).
 
-## 📖 Quick Start
-
-### 1. Prepare Configuration File
-
-Copy the master config as a starting point:
+## Quickstart
 
 ```bash
-cp config_master.yaml my_analysis.yaml
-# Edit my_analysis.yaml with your input file paths and settings
+git clone https://github.com/Bio-Otto/opengbsa.git
+cd opengbsa
+opengbsa examples/quickstart/quickstart.yaml
 ```
 
-### 2. Run Analysis
+This evaluates 50 frames of a beta-lactamase-inhibitor complex that ships with
+the repository. Expected: `Mean binding energy (Enthalpy): -24.99 ± 4.60
+kcal/mol`. For your own system, start from a template:
 
 ```bash
-# Using the CLI entry point
-opengbsa my_analysis.yaml
-
-# Or reference the CLI module directly
-python -m mmgbsa.cli my_analysis.yaml
+opengbsa --create-config             # short template: mmgbsa_config.yaml
+opengbsa --create-complete-config    # every option with its default
+opengbsa mmgbsa_config.yaml
 ```
 
-### 3. Minimal Config Example
+A minimal configuration:
 
 ```yaml
 input_files:
-  complex_pdb: path/to/complex.pdb       # or .tpr, .prmtop
-  ligand_mol: path/to/ligand.sdf
-  trajectory: path/to/traj.xtc
-
+  complex_pdb: complex.prmtop     # or .top, .tpr, .psf, .xml, or a .pdb (Coordinate Mode)
+  trajectory: production.nc
 analysis_settings:
-  temperature: 300.0
   gb_model: OBC2
-  salt_concentration: 0.15
   max_frames: 100
   run_per_residue_decomposition: true
-  decomp_frames: 20
-  parallel_processing: true
-
-platform_settings:
-  preferred_platform: CUDA          # or OpenCL, CPU
-  decomposition_platform: CPU       # CPU multiprocessing for decomposition
-
-output_settings:
-  output_directory: results/my_analysis
 ```
 
----
+Every option is described in the
+[configuration reference](https://opengbsa.readthedocs.io/en/latest/user_guide/configuration.html).
 
-## ⚠️ Notes for GROMACS Users
-
-*   If your `.top` file includes other `.itp` files, **all referenced `.itp` files MUST be present in the same folder.**
-*   `.tpr` files are convenient — the runner strips solvent and selects protein + ligand atoms automatically. For CHARMM force fields, however, use the `.top`: OpenGBSA's `.tpr` reader does not apply CHARMM36's pair-specific Lennard-Jones corrections (NBFIX), and warns when it reads such a `.tpr`.
-*   The trajectory (`.xtc`) atom count must match the topology. If you get an "Atom count mismatch", ensure waters/ions are handled consistently.
-
----
-
-## 📊 Output Files
-
-In your output directory you will find:
-
-| File | Description |
-|---|---|
-| `interactive_report.html` | Full report: energy plots, 3D viewer, decomposition heatmap |
-| `fixed_enhanced_mmgbsa_results_obc2.csv` | Per-frame binding energies |
-| `per_residue_detailed.csv` | Per-residue energy contributions |
-| `binding_hot_spots.csv` | Top residue hot spots |
-| `energy_analysis.png` | Rolling average and convergence plot |
-| `per_residue_decomposition.png` | Residue contribution heatmap |
-| `final_report.txt` | Plain-text summary of results |
-
----
-
-## 🧪 Running Tests
+## Testing and validation
 
 ```bash
-# Run the automated unit test suite
-python -m pytest test/unit -v
+conda install -c conda-forge pytest
+python -m pytest test/unit -q                          # 116 passed, 13 skipped without test data
+opengbsa --fetch-test-data --only core-fixtures        # 10 GB of test trajectories
+python test/configs/check_validation.py --list         # third-party validation cases
 ```
 
-Self-contained, independently-verified end-to-end validation cases (real
-protein-ligand, protein-protein, and nucleic-acid systems, each checked
-against an independent Amber MMPBSA.py reference) live under `test/configs/`
--- see each subdirectory's `README.md` for how to fetch its data and run it.
+Six third-party validation cases in `test/configs/` cover protein-ligand,
+protein-peptide, protein-protein, protein-RNA, protein-DNA and antibody-antigen
+complexes and compare with recorded results and with Amber MMPBSA.py. The
+[testing guide](https://opengbsa.readthedocs.io/en/latest/testing.html) walks
+through every step with the expected output.
 
----
+## Citing OpenGBSA
 
-## 🔧 Common Errors
+Please cite OpenGBSA with the metadata in [`CITATION.cff`](CITATION.cff) (also
+available through GitHub's "Cite this repository" button). Every release is
+archived on Zenodo.
 
-| Error Message | Cause | Solution |
-|---|---|---|
-| `Invalid file path` | Config points to a non-existent file | Check all paths in your YAML config |
-| `Atom count mismatch` | Topology and trajectory atom counts differ | Use a `.tpr` file or a pre-stripped PDB |
-| `Ligand residues not found` | Ligand residue name not recognized | Set `ligand_resname: LIG` (or the correct name) in `input_files` |
-| `decomp_frames > max_frames` | Config validation error | Ensure `decomp_frames` ≤ `max_frames` |
-| `Invalid parameter value: temperature` | Integer instead of float | Use `300.0` not `300` |
+## Licence
 
----
-
-## 🧬 Surface Area Models
-
-| Model | Speed | Accuracy | Use Case |
-|-------|-------|----------|----------|
-| ACE   | Fast  | Good     | Rapid screening, large datasets |
-| LCPO  | Moderate | Better | Publication-quality, final analysis |
-
----
-
-## 📞 Support
-
-See `config_master.yaml` for a fully annotated config with all available options.
-Full documentation, including a step-by-step Tutorial covering five worked
-validation examples, is on ReadTheDocs: **[opengbsa.readthedocs.io](https://opengbsa.readthedocs.io/)**.
-
----
-
-## 📄 Citing OpenGBSA
-
-If you use OpenGBSA in your research, please cite it -- see
-[`CITATION.cff`](CITATION.cff) for citation metadata (also usable via
-GitHub's "Cite this repository" button).
+MIT. The optional GROMACS `.tpr` reader TprParser is GPL-3.0; see
+[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

@@ -1,181 +1,381 @@
-Configuration Reference
+Configuration reference
 =======================
 
-The OpenGBSA configuration is a standard YAML file. This reference guide details every parameter, its units, default values, and scientific context.
+This page lists every option of the configuration file, with its default and
+its meaning. ``opengbsa --create-complete-config`` writes the same options into
+a commented file. An option that is left out takes the default shown here.
+Only ``input_files`` and ``analysis_settings`` are required.
 
-Input Files
+.. contents:: Sections
+   :local:
+   :depth: 1
+
+input_files
 -----------
 
-Defines the topology and trajectory data for the system.
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``complex_pdb``
+     - required
+     - The system. A topology for Native Mode (``.prmtop``, ``.top``,
+       ``.tpr``, ``.psf``, or an OpenMM ``.xml`` with a ``.pdb`` of the same
+       name) or a structure for Coordinate Mode (``.pdb``, ``.gro``). See
+       :doc:`input_formats`.
+   * - ``trajectory``
+     - required
+     - The MD trajectory, any format MDTraj reads (``.xtc``, ``.trr``,
+       ``.dcd``, ``.nc``, ``.mdcrd``/``.trj``, multi-model ``.pdb``).
+   * - ``solvated_topology``
+     - none
+     - Topology of the atoms in the trajectory when it still contains water
+       and ions (``.gro``, ``.pdb`` or solvated ``.prmtop``). For ``.psf``
+       input it also gives the coordinates.
+   * - ``receptor_topology``
+     - none
+     - Amber topology of the receptor. With ``ligand_topology`` it defines
+       receptor and ligand by atom count.
+   * - ``ligand_topology``
+     - none
+     - Amber topology of the ligand.
+   * - ``ligand_mol``
+     - none
+     - Coordinate Mode: the small-molecule ligand as ``.sdf`` (or ``.mol2``)
+       with bond orders and partial charges, parameterised with OpenFF.
+   * - ``ligand_pdb``
+     - none
+     - Optional ligand-only ``.pdb``, used only to check that its residue
+       names occur in the complex.
+   * - ``ligand_resname``
+     - none
+     - Residue name shown in the ligand box of the interactive 3D viewer. It
+       does not choose the ligand; use ``ligand_selection`` for that.
+
+Every other key in this section is taken as a file path that must exist.
+
+output_settings
+---------------
 
 .. list-table::
-   :widths: 20 15 65
    :header-rows: 1
+   :widths: 24 18 58
 
-   * - Parameter
-     - Type
-     - Description
-   * - ``complex_pdb``
-     - File Path
-     - **Required**. The reference structure. Can be a PDB file or an AMBER ``.prmtop`` file. If using a trajectory, this file provides the topology.
-   * - ``trajectory``
-     - File Path
-     - **Required**. The MD trajectory containing snapshots to analyze. Supports ``.xtc``, ``.dcd``, ``.netcdf``.
-   * - ``ligand_mol``
-     - File Path
-     - **Conditional**. Path to the ligand file (SDF or Mol2). Required if using a PDB ``complex_pdb`` to correctly parameterize the ligand.
-   * - ``receptor_topology``
-     - File Path
-     - **Optional**. Specific topology for the receptor (e.g., ``receptor.prmtop``). Used in Amber-native mode.
-   * - ``ligand_topology``
-     - File Path
-     - **Optional**. Specific topology for the ligand (e.g., ``ligand.prmtop``). Used in Amber-native mode.
+   * - Option
+     - Default
+     - Meaning
+   * - ``output_directory``
+     - ``mmgbsa_results``
+     - Each run writes ``<output_directory>/analysis_<date>_<time>/``. The
+       command-line option ``--output-dir DIR`` overrides it.
 
-Analysis Settings
+analysis_settings
 -----------------
 
-Controls the physics model and sampling protocols.
-
-``gb_model``
-~~~~~~~~~~~~
-*   **Type**: String
-*   **Options**: ``OBC1``, ``OBC2``, ``GBn``, ``GBn2``, ``HCT``
-*   **Default**: ``OBC2``
-*   **Description**: Selects the Generalized Born model for polar solvation. ``OBC2`` is generally recommended for protein-ligand systems due to its optimized rescaling parameters. See :doc:`../theory/gb_models` for details.
-
-``gb_radii_set``
-~~~~~~~~~~~~~~~~
-*   **Type**: String
-*   **Options**: ``auto``, ``mbondi``, ``mbondi2``, ``mbondi3``, ``bondi``
-*   **Default**: ``auto``
-*   **Description**: Intrinsic GB radii. With ``auto``, an Amber ``.prmtop`` keeps the radii it was built with, as Amber MMPBSA.py does, and a warning names the set usually paired with ``gb_model`` if it differs. GROMACS, CHARMM/NAMD and coordinate-mode inputs carry no GB radii and get the set matching ``gb_model`` (HCT: ``mbondi``; OBC1/OBC2: ``mbondi2``; GBn: ``bondi``; GBn2: ``mbondi3``). For GBn/GBn2, a topology whose radii lie outside the 1–2 Å range of OpenMM's neck table also gets the model's set. Naming a set applies it to every structure.
-
-``salt_concentration``
-~~~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Float
-*   **Units**: Molar (M)
-*   **Default**: ``0.15`` (Physiological salt)
-*   **Description**: Defines the ionic strength of the solvent. This value is used to calculate the Debye screening length (:math:`\kappa`) which attenuates electrostatic interactions.
-
-``entropy_method``
-~~~~~~~~~~~~~~~~~~
-*   **Type**: String
-*   **Options**: ``none``, ``interaction``, ``c2``, ``quasiharmonic``, ``normal_mode``
-*   **Default**: ``none``
-*   **Description**: Specifies the method to estimate the entropic penalty (:math:`-T\Delta S`). 
-    *   ``interaction``: Interaction entropy (IE) from the fluctuation of the gas-phase interaction energy. Fast; reliable only when its standard deviation is at most 3.6 kcal/mol.
-    *   ``c2``: Second-order cumulant (C2) of the same energy. Fast; reliable only when its standard deviation is at most 6.0 kcal/mol.
-    *   ``normal_mode``: Slow, standard reference.
-    *   ``none``: Returns :math:`\Delta G` without entropy (often sufficient for ranking).
-
-``start_frame``, ``end_frame``, ``interval``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Integer
-*   **Description**: Controls the subset of trajectory frames to analyze.
-    *   ``start_frame``: Index of the first frame (0-based).
-    *   ``end_frame``: Index of the last frame.
-    *   ``interval``: Stride. Analyze every Nth frame. Increasing this (e.g., to 10 or 100) significantly speeds up analysis with minimal loss of statistical accuracy if the trajectory is converged.
-
-``run_per_residue_decomposition``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Boolean
-*   **Default**: ``true``
-*   **Description**: If true, decomposes the binding free energy into contributions from each receptor residue. Essential for identifying "hotspot" residues critical for binding.
-
-``nonbonded_cutoff``
-~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Float or ``null``
-*   **Units**: Angstrom
-*   **Default**: ``null`` (no cutoff -- exact ``O(N^2)`` nonbonded/GB Born-radius evaluation)
-*   **Description**: Optional distance cutoff for both the nonbonded and GB
-    calculations (OpenMM's ``CutoffNonPeriodic`` nonbonded method). Unlike
-    Amber's ``rgbmax`` (see ``rgbmax`` below) it also truncates the energy
-    terms. Leaving this unset
-    is the most accurate option and matches the values used throughout
-    this project's own validation work (see the Tutorial section), but is
-    the single most expensive part of the calculation for larger systems --
-    setting a cutoff (e.g. ``16``-``25``) trades a small amount of accuracy
-    for a significant speedup on systems with more than a few thousand
-    atoms. Changing this value changes the computed energies (it is not a
-    performance-only knob), so a config's `nonbonded_cutoff` should stay
-    fixed across any comparison you intend to make (e.g. against an Amber
-    reference computed with a specific ``rgbmax``).
-
-``sa_model``
-~~~~~~~~~~~~
-*   **Type**: ``LCPO`` or ``ACE``
-*   **Default**: ``LCPO`` (since 0.0.15; earlier versions defaulted to ``ACE``)
-*   **Description**: Non-polar (surface-area) model. ``LCPO`` uses Amber
-    MMPBSA.py's GB defaults (surface tension 0.0072 kcal/mol/Å², offset 0);
-    ``ACE`` is OpenMM's default. The two compute different areas and give
-    different non-polar terms, increasingly so at large interfaces.
-
-``lcpo_typing``
-~~~~~~~~~~~~~~~
-*   **Type**: ``element`` or ``amber``
-*   **Default**: ``element`` (with ``amber_compatible``: ``amber``)
-*   **Description**: How the LCPO parameters of each atom are chosen.
-    ``element`` follows OpenMM: by element and bonding. ``amber`` follows Amber
-    MMPBSA.py (``sander``'s ``gbsa=1``): by element and then by the *name* of the
-    atom type, with sp2-carbon parameters for any other element. The two agree
-    for Amber force-field types and differ for others: a CHARMM carboxylate
-    oxygen (``OC``) receives hydroxyl parameters, a CHARMM lysine nitrogen
-    (``NH3``) sp2-nitrogen parameters, and a GAFF chlorine (``cl``) sp2-carbon
-    parameters. The non-polar term then differs from MMPBSA.py's by up to a few
-    tenths of a kcal/mol. With a topology file, ``amber`` uses its atom-type
-    names; in Coordinate Mode it uses the Amber atom-type classes of the force
-    field, which ``tleap`` would write.
-
-``rgbmax``
-~~~~~~~~~~
-*   **Type**: Float or ``null``
-*   **Units**: Angstrom
-*   **Default**: ``null`` (every atom pair contributes to the effective Born radii)
-*   **Description**: Born-radius cutoff, as Amber's ``rgbmax``: only atoms
-    within this distance descreen an atom; an atom straddling the cutoff is
-    integrated up to it. The GB energy pairs themselves stay uncut. Amber
-    MMPBSA.py fixes ``rgbmax = 25`` and does not let the user change it, so
-    without a cutoff OpenGBSA's polar term is systematically larger than
-    MMPBSA.py's: by about 1% of ΔE_GB for protein--ligand complexes and by up
-    to 7% at antibody interfaces.
-
-``amber_compatible``
-~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Boolean
-*   **Default**: ``false``
-*   **Description**: Reproduce Amber MMPBSA.py's GB conventions: ``LCPO``
-    with ``lcpo_typing: amber``, ``rgbmax: 25`` and MMPBSA.py's solvent dielectric, which depends on the
-    program it uses internally (80.0 with ``sander`` for CHARMM/chamber
-    topologies, 78.3 with its NAB program otherwise). Use it to compare with
-    MMPBSA.py results; settings given explicitly still win. Off by default,
-    because the cutoff is an approximation whose effect grows with system size.
-
-``solvent_dielectric``
-~~~~~~~~~~~~~~~~~~~~~~
-*   **Type**: Float
-*   **Default**: 78.5 (with ``amber_compatible``: MMPBSA.py's value, see above)
-*   **Description**: Solvent dielectric constant of the GB model; it also
-    enters the Debye--Hückel screening.
-
-Platform Settings
------------------
-
-``preferred_platform``
-~~~~~~~~~~~~~~~~~~~~~~
-*   **Type**: String
-*   **Options**: ``auto``, ``CUDA``, ``OpenCL``, ``CPU``
-*   **Default**: auto-detection (CUDA, then OpenCL, then CPU)
-*   **Description**: OpenMM platform for the energy evaluation. If the requested
-    platform cannot be used (for example no GPU, or a CUDA runtime newer than the
-    installed driver supports), OpenGBSA warns, runs on the next usable platform,
-    prints ``Running on OpenMM platform: <name>``, and records
-    ``platform_requested``, ``platform_used`` and ``platform_fallback`` in
-    ``results_summary.yaml``. Energies do not depend on the platform; timings do.
-
-``strict_platform``
+Receptor and ligand
 ~~~~~~~~~~~~~~~~~~~
-*   **Type**: Boolean
-*   **Default**: ``false``
-*   **Description**: Stop with an error instead of falling back when
-    ``preferred_platform`` cannot be used. Use it for benchmarks and any run
-    whose timing matters.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``binding_mode``
+     - ``standard``
+     - ``standard``: the ligand is found automatically (see
+       :doc:`input_formats`) and the receptor is the rest. ``ppi``: receptor =
+       chain 0, ligand = chain 1. ``dimer_ligand`` behaves like ``standard``.
+   * - ``ligand_selection``
+     - none
+     - MDTraj selection of the ligand, for example ``"chainid 1"`` or
+       ``"resname LIG"``. Overrides ``binding_mode``.
+   * - ``receptor_selection``
+     - none
+     - MDTraj selection of the receptor. Overrides ``binding_mode``.
+
+Solvation model
+~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``gb_model``
+     - ``OBC2``
+     - Generalized Born model: ``HCT``, ``OBC1``, ``OBC2``, ``GBn`` or
+       ``GBn2`` (Amber ``igb`` 1, 2, 5, 7 and 8). See :doc:`../theory/gb_models`.
+   * - ``gb_radii_set``
+     - ``auto``
+     - Intrinsic GB radii. ``auto`` keeps the radii of an Amber ``.prmtop``
+       and assigns the model's own set for other input (``mbondi`` for HCT and
+       GBn, ``mbondi2`` for OBC1 and OBC2, ``mbondi3`` for GBn2). Or force one
+       of ``mbondi``, ``mbondi2``, ``mbondi3``, ``bondi``.
+   * - ``salt_concentration``
+     - ``0.15``
+     - Ionic strength in M (0 to 2) for Debye-Hückel screening of the GB term.
+   * - ``temperature``
+     - ``300.0``
+     - Temperature in K (0 to 1000), used by salt screening and the entropy
+       estimates.
+   * - ``solute_dielectric``
+     - ``1.0``
+     - Dielectric constant inside the solute.
+   * - ``solvent_dielectric``
+     - ``78.5``
+     - Dielectric constant of the solvent. With ``amber_compatible`` the value
+       of MMPBSA.py is used (80.0 for CHARMM and chamber topologies, 78.3
+       otherwise).
+   * - ``sa_model``
+     - ``LCPO``
+     - Non-polar term: ``LCPO`` (surface tension 0.0072 kcal/mol/Å², offset 0,
+       as in Amber's GB calculations) or ``ACE`` (OpenMM's analytical
+       continuum electrostatics approximation, 0.0054 kcal/mol/Å²).
+   * - ``lcpo_typing``
+     - ``element``
+     - How LCPO parameters are assigned: ``element`` (by element and bonding)
+       or ``amber`` (by atom-type name, as Amber does). They differ only for
+       non-Amber atom types.
+   * - ``rgbmax``
+     - none
+     - Born-radius cutoff in Å: only atoms within this distance enter an
+       atom's Born radius. None means every atom pair.
+   * - ``nonbonded_cutoff``
+     - none
+     - Cutoff in Å for the non-bonded and GB interactions. None (or 999 and
+       above) means no cutoff, the usual choice for MM/GBSA.
+   * - ``amber_compatible``
+     - ``false``
+     - ``true`` applies Amber MMPBSA.py's conventions at once: ``rgbmax`` 25
+       Å, MMPBSA.py's solvent dielectric and ``lcpo_typing: amber``. Use it to
+       compare with MMPBSA.py results. See :doc:`../theory/mmgbsa_theory`.
+
+Frames
+~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``frame_start``
+     - first frame
+     - Index of the first frame (counting from 0).
+   * - ``frame_end``
+     - last frame
+     - Index after the last frame (exclusive). Must be larger than
+       ``frame_start``.
+   * - ``frame_stride``
+     - ``1``
+     - Use every Nth frame of the range.
+   * - ``max_frames``
+     - ``50``
+     - Number of frames to evaluate (1 to 10,000); ``null`` for every frame
+       of the range.
+   * - ``frame_selection``
+     - ``sequential``
+     - ``sequential``: the first ``max_frames`` frames of the range after the
+       stride. ``equidistant``: ``max_frames`` frames spread evenly over the
+       range. ``random``: ``max_frames`` random frames.
+   * - ``random_seed``
+     - ``42``
+     - Seed of the ``random`` frame selection.
+   * - ``reimage_trajectory``
+     - ``true``
+     - Make every molecule whole and keep receptor and ligand in one periodic
+       image before computing energies. Switch it off only for a trajectory
+       that is already imaged and has no box.
+
+Per-residue decomposition
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 12 58
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``run_per_residue_decomposition``
+     - ``false``
+     - Decompose the binding enthalpy into the contributions of the receptor
+       residues (van der Waals, electrostatic, polar and non-polar
+       solvation), per frame and on average, with plots, the HTML report and
+       a PyMOL script.
+   * - ``decomp_frames``
+     - ``10``
+     - Number of frames for the decomposition, from the same selection; must
+       not exceed ``max_frames``.
+   * - ``report_raw_energies``
+     - ``false``
+     - Also write the complex, receptor and ligand energies of each residue.
+   * - ``plot_top_residues``
+     - ``10``
+     - Number of residues in the hot-spot plots.
+   * - ``energy_decomposition``
+     - ``false``
+     - A second, faster decomposition inside the main calculation
+       (``decomposition_method: fast`` or ``full``), mainly for development.
+
+Entropy
+~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 16 60
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``run_entropy_analysis``
+     - ``false``
+     - Estimate the entropy term :math:`-T\Delta S` and report
+       :math:`\Delta G = \Delta H - T\Delta S`. Setting ``entropy_method``
+       also turns the estimate on.
+   * - ``entropy_method``
+     - ``interaction``
+     - ``interaction`` (interaction entropy) or ``c2`` (its second-order
+       cumulant), both from the fluctuation of the interaction energy and
+       reported with its standard deviation and reliability.
+       ``quasiharmonic``: quasi-harmonic entropy of the ligand
+       (``qha_analyze_complex: true`` adds receptor and complex to give a
+       binding entropy). ``normal_mode``: normal-mode entropy of the ligand
+       alone (needs ``ligand_mol``), reported but not added to
+       :math:`\Delta G`.
+       See :doc:`../theory/entropy_methods`.
+   * - ``qha_analyze_complex``
+     - ``false``
+     - With ``quasiharmonic``: also analyse the receptor and the complex.
+   * - ``nmode_cutoff_frequency``
+     - ``10.0``
+     - With ``normal_mode``: modes below this frequency (cm⁻¹) are left out.
+
+Execution
+~~~~~~~~~
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 22 54
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``max_workers``
+     - min(cores - 1, 4)
+     - Worker processes on the CPU platform. Each evaluates its own frames.
+   * - ``print_interval``
+     - ``10``
+     - Print progress every N frames.
+   * - ``use_cache``
+     - ``true``
+     - Reuse the parameterised systems within a run.
+
+forcefield_settings
+-------------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``protein_forcefield``
+     - ``amber``
+     - Coordinate Mode only. ``amber``: Amber ff14SB. ``amber14``: OpenMM's
+       ``amber14-all`` (proteins, DNA, RNA). ``charmm`` or ``charmm_gromacs``:
+       CHARMM36.
+   * - ``charmm_params``
+     - none
+     - ``.psf`` input: the CHARMM parameter files (``.prm``, ``.str``,
+       ``.rtf``), one path or a list.
+   * - ``charmm_coordinates``
+     - none
+     - ``.psf`` input: coordinates (``.pdb``, ``.coor``, ``.crd``) when no
+       ``solvated_topology`` is given.
+
+platform_settings
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``preferred_platform``
+     - automatic
+     - ``CUDA``, ``OpenCL``, ``CPU`` or ``Reference``. Automatic tries CUDA,
+       then OpenCL, then CPU, unless the environment variable
+       ``OPENMM_DEFAULT_PLATFORM`` names one.
+   * - ``decomposition_platform``
+     - as above
+     - Platform of the per-residue decomposition. With ``CPU`` it runs on
+       several processes (``advanced_settings.n_jobs``).
+   * - ``strict_platform``
+     - ``false``
+     - ``true``: stop with an error when the requested platform cannot be
+       used, instead of falling back to the next one.
+
+GPU runs use mixed precision on the first visible device; choose the device
+with ``CUDA_VISIBLE_DEVICES``.
+
+advanced_settings
+-----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``n_jobs``
+     - ``-1``
+     - Worker processes of a per-residue decomposition on the CPU platform;
+       -1 uses every core.
+
+reporting_settings
+------------------
+
+These options shape the interactive HTML report, which the per-residue
+decomposition writes.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 14 62
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``include_all_plots``
+     - ``true``
+     - Include the time series and distribution plots.
+   * - ``export_format``
+     - ``png``
+     - Format of the plot export button (any Plotly format).
+   * - ``export_width``, ``export_height``
+     - ``4200``, ``2800``
+     - Size of exported plots in pixels.
+
+Validation
+----------
+
+``opengbsa`` checks the configuration before the run. It stops with a message
+when a required file is missing, when ``gb_model``, ``gb_radii_set``,
+``sa_model``, ``lcpo_typing``, ``binding_mode``, ``frame_selection``,
+``entropy_method`` or ``decomposition_method`` has an unknown value, when
+``temperature``, ``salt_concentration`` or ``max_frames`` is out of range, when
+``frame_end`` is not after ``frame_start``, or when ``decomp_frames`` exceeds
+``max_frames``. Unknown options in other sections are ignored, so check the
+spelling of an option that seems to have no effect.

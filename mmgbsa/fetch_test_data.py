@@ -170,13 +170,21 @@ def fetch_all(only=None, force=False):
                 extracted_root = untar_dir / next(iter(top_level_dirs))
                 link_target = data_root() / info["extract_to"] / extracted_root.name
                 link_target.parent.mkdir(parents=True, exist_ok=True)
-                if link_target.is_symlink() or link_target.exists():
-                    if link_target.is_symlink():
-                        link_target.unlink()
-                    else:
-                        log.warning(f"{link_target} already exists and is not a symlink -- "
-                                    f"leaving it as-is rather than overwriting real data.")
-                        continue
+                if link_target.is_dir() and not link_target.is_symlink():
+                    # A real folder, e.g. one whose topologies are tracked in the
+                    # repository: link only the files it does not have yet, so the
+                    # repository's own files are never replaced.
+                    added = 0
+                    for src in extracted_root.rglob("*"):
+                        dst = link_target / src.relative_to(extracted_root)
+                        if src.is_file() and not dst.exists() and not dst.is_symlink():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            dst.symlink_to(src)
+                            added += 1
+                    log.info(f"  {fname} -> {extracted_root} ({added} file(s) linked into {link_target})")
+                    continue
+                if link_target.is_symlink():
+                    link_target.unlink()
                 link_target.symlink_to(extracted_root, target_is_directory=True)
                 log.info(f"  {fname} -> {extracted_root} (linked at {link_target})")
             else:

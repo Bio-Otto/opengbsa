@@ -55,6 +55,48 @@ What to notice in the config
   trajectory, the standard way to analyze only the equilibrated tail of a
   long production run.
 
-Full write-up (including the other six ligands' results and a
-per-residue decomposition comparison): see
-``test/configs/3clpro_zenodo_test/README.md`` in the repository.
+Expected result
+---------------
+
+From the root of the repository, ``check_validation.py`` runs the
+configuration and compares the mean binding enthalpy (kcal/mol) with the
+recorded value; ``--amber-compatible`` runs it with ``amber_compatible: true``
+and compares with Amber MMPBSA.py on the same frames:
+
+.. code-block:: bash
+
+    python test/configs/check_validation.py 3clpro_baicalein 3clpro_compound7a 3clpro_compound7b 3clpro_compound7c 3clpro_compound7d 3clpro_compound7e 3clpro_compound7f
+    python test/configs/check_validation.py 3clpro_baicalein 3clpro_compound7a 3clpro_compound7b 3clpro_compound7c 3clpro_compound7d 3clpro_compound7e 3clpro_compound7f --amber-compatible
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Case
+     - OpenGBSA, default settings
+     - MMPBSA.py (``amber_compatible``)
+   * - ``3clpro_baicalein``
+     - -23.873
+     - -23.888
+   * - ``3clpro_compound7a``
+     - -22.034
+     - -22.138
+   * - ``3clpro_compound7b``
+     - -30.642
+     - -30.700
+   * - ``3clpro_compound7c``
+     - -40.916
+     - -40.886
+   * - ``3clpro_compound7d``
+     - -37.840
+     - -37.879
+   * - ``3clpro_compound7e``
+     - -27.277
+     - -27.472
+   * - ``3clpro_compound7f``
+     - -46.463
+     - -46.398
+
+The difference between the two settings is the Born-radius cutoff of
+MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+details: ``test/configs/3clpro_zenodo_test/README.md``.

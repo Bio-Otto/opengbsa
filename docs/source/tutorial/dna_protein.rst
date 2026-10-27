@@ -57,6 +57,30 @@ What to notice in the config
   generalizes to a fourth distinct receptor/ligand kind (nucleic acid
   double helix) without any further code changes.
 
-Full write-up (component-by-component analysis of the OpenGBSA-vs-Amber
-gap, and why it's a parameterization-sensitivity effect rather than a
-bug): see ``test/configs/dna_protein_test/README.md`` in the repository.
+Expected result
+---------------
+
+From the root of the repository, ``check_validation.py`` runs the
+configuration and compares the mean binding enthalpy (kcal/mol) with the
+recorded value; ``--amber-compatible`` runs it with ``amber_compatible: true``
+and compares with Amber MMPBSA.py on the same frames:
+
+.. code-block:: bash
+
+    python test/configs/check_validation.py irf11
+    python test/configs/check_validation.py irf11 --amber-compatible
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Case
+     - OpenGBSA, default settings
+     - MMPBSA.py (``amber_compatible``)
+   * - ``irf11``
+     - -103.845
+     - -109.623
+
+For this complex OpenGBSA and MMPBSA.py differ by -0.024 kcal/mol even with ``amber_compatible``: OpenMM's and Amber's Coulomb constants differ by four parts per million, and the electrostatic term of this complex is -7,225 kcal/mol. The difference between the two settings is the Born-radius cutoff of
+MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+details: ``test/configs/dna_protein_test/README.md``.

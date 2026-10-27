@@ -5,9 +5,9 @@ sys.path.insert(0, os.path.abspath('../..'))
 
 # -- Project information -----------------------------------------------------
 project = 'OpenGBSA'
-copyright = '2025, Ozbek Lab'
+copyright = '2025-2026, Ozbek Lab'
 author = 'H. Ibrahim Ozdemir'
-release = '0.0.19'
+release = '0.0.20'
 
 # -- Mock Imports ------------------------------------------------------------
 autodoc_mock_imports = [

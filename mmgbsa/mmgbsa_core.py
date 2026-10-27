@@ -4404,6 +4404,13 @@ class GBSACalculator(GBSAForceManager):
                                if i not in set(ligand_indices)]
             log.info(f"Using explicit ligand/receptor atom indices ({len(ligand_indices)} ligand, "
                      f"{len(protein_indices)} receptor) from receptor_topology's atom count.")
+            # a one-residue ligand keeps its name for the 3D view of the HTML report
+            all_atoms = list(complex_top.atoms() if callable(getattr(complex_top, 'atoms', None))
+                             else complex_top.atoms)
+            lig_set = set(ligand_indices)
+            names = {all_atoms[i].residue.name for i in lig_set if i < len(all_atoms)}
+            if len(names) == 1:
+                self.report_ligand_resname = names.pop()
         else:
             ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
             protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
@@ -5241,7 +5248,10 @@ class GBSACalculator(GBSAForceManager):
 
         # Generate Interactive HTML Report (New Method)
         if output_dir:
-            self.generate_detailed_report(results, output_dir, ligand_resname=ligand_resname, complex_pdb=complex_pdb)
+            self.generate_detailed_report(
+                results, output_dir,
+                ligand_resname=ligand_resname or getattr(self, 'report_ligand_resname', None) or 'LIG',
+                complex_pdb=complex_pdb)
 
         return results
 

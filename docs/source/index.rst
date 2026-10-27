@@ -1,11 +1,6 @@
 OpenGBSA
 ========
 
-.. image:: _static/logo.png
-   :align: center
-   :alt: OpenGBSA logo
-   :width: 480px
-
 **OpenGBSA** computes MM/GBSA binding enthalpies from molecular dynamics (MD)
 trajectories. All energies are computed with `OpenMM <https://openmm.org>`_, on
 CPUs or on GPUs through CUDA or OpenCL. OpenGBSA reads Amber, GROMACS,

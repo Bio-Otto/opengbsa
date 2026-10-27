@@ -233,7 +233,9 @@ def write_hotspot_pymol(topology, positions_nm, residue_values, residue_atoms, l
 
     scale = max(1.0, float(np.ceil(np.abs(list(residue_values.values()) or [1.0]).max())))
     script = f"""# PyMOL script written by OpenGBSA: per-residue contributions to the binding
-# enthalpy (kcal/mol), stored as B-factors in hotspots.pdb.
+# enthalpy (kcal/mol), stored as B-factors in hotspots.pdb. Each contribution is
+# van der Waals + electrostatic + polar + non-polar solvation, i.e. the columns
+# total + nonpolar_solvation of per_residue_detailed.csv.
 # Open it from this folder:  pymol {filename}
 load hotspots.pdb, complex
 hide everything
