@@ -14,6 +14,8 @@ import numpy as np
 # Configure logger
 logger = logging.getLogger(__name__)
 
+from .interaction_entropy import METHOD_LABELS, entropy_result, interaction_energies
+
 class HTMLReportGenerator:
     """
     Generates an interactive HTML report for MM/GBSA analysis results.
@@ -154,59 +156,27 @@ class HTMLReportGenerator:
     
     def _calculate_entropy_term(self, df_glob, temp=300.0):
         """
-        Calculate Entropic Contribution (-TdS) from Global Binding Energy fluctuations.
+        Calculate Entropic Contribution (-TdS) from the fluctuation of the
+        gas-phase interaction energy (mmgbsa.interaction_entropy), for frame
+        tables that come without a pipeline entropy result.
         Returns (neg_TdS_value, method_name)
         """
         try:
             reporting_settings = self.config.get('reporting_settings', {})
             method = reporting_settings.get('entropy_approximation', 'gaussian').lower()
-            
-            if method == 'none':
+            # 'gaussian' is the second-order cumulant (C2), 'exponential' the
+            # interaction entropy (IE)
+            method = {'gaussian': 'c2', 'exponential': 'interaction',
+                      'interaction_entropy': 'interaction'}.get(method, method)
+            if method not in METHOD_LABELS or df_glob is None:
                 return None, None
-            
-            if df_glob is None or 'binding_energy' not in df_glob.columns:
+            if not {'delta_vdw', 'delta_elec'}.issubset(df_glob.columns):
                 return None, None
 
-            delta_H = df_glob['binding_energy'].values
-            R = 0.001987 # kcal/mol/K
-            RT = R * temp
-            beta = 1.0 / RT
-            
-            # 1. Gaussian Approximation (Quasi-Harmonic)
-            # Reliable for short simulations, assumes normal distribution of energies.
-            # -TdS = sigma^2 / (2RT)
-            sigma = np.std(delta_H, ddof=1) # Sample std deviation
-            gaussian_val = (sigma ** 2) / (2 * RT)
-            
-            if method == 'gaussian':
-                return gaussian_val, "Gaussian Approx"
-            
-            # 2. Interaction Entropy (Exponential Average)
-            # -TdS = KT * ln < e^(beta * (E - <E>)) >
-            # More rigorous but sensitive to outliers (convergence issues).
-            elif method == 'exponential' or method == 'interaction_entropy':
-                try:
-                    delta_H_mean = np.mean(delta_H)
-                    dev = delta_H - delta_H_mean
-                    arg = beta * dev
-                    
-                    # LogSumExp for stability: log(mean(exp(x))) = log(sum(exp(x))) - log(N)
-                    # We use numpy usually.
-                    max_arg = np.max(arg)
-                    # sum(exp(arg)) = exp(max_arg) * sum(exp(arg - max_arg))
-                    # log(sum) = max_arg + log(sum(exp(arg - max_arg)))
-                    sum_exp = np.sum(np.exp(arg - max_arg))
-                    log_sum = max_arg + np.log(sum_exp)
-                    log_mean = log_sum - np.log(len(arg))
-                    
-                    ie_val = RT * log_mean
-                    return ie_val, "Interaction Entropy"
-                except Exception as e:
-                    logger.warning(f"Exponential entropy calculation failed: {e}")
-                    return gaussian_val, "Gaussian Approx (Fallback)"
-            
-            return None, None
-            
+            temp = self.config.get('analysis_settings', {}).get('temperature', temp)
+            entropy = entropy_result(interaction_energies(df_glob), method, temp)
+            return entropy['value'], entropy['label']
+
         except Exception as e:
             logger.error(f"Entropy calculation error: {e}")
             return None, None
@@ -222,7 +192,14 @@ class HTMLReportGenerator:
         delta_g = None
 
         if isinstance(global_results, dict):
-            if global_results.get('entropy_penalty') is not None:
+            if 'entropy' in global_results:
+                entropy = global_results['entropy']
+                if not entropy:
+                    # No entropy method was requested: no -TdS and no dG
+                    return None, None, None
+                neg_tds = float(entropy['value'])
+                method = entropy['label']
+            elif global_results.get('entropy_penalty') is not None:
                 try:
                     neg_tds = float(global_results.get('entropy_penalty'))
                     method = "Interaction Entropy"

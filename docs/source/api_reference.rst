@@ -34,9 +34,11 @@ Core Analysis
    
       Set the forcefield for ligand parameterization ('gaff' or 'openff').
 
-   .. method:: calculate_interaction_entropy(binding_energies, temperature=300.0)
+   .. method:: calculate_interaction_entropy(energies, temperature=300.0)
    
-      Calculate Interaction Entropy (IE) from binding energy fluctuations.
+      Calculate Interaction Entropy (IE) from the fluctuation of the per-frame
+      gas-phase interaction energy (van der Waals + electrostatic). The C2
+      estimate and the reliability limits are in :mod:`mmgbsa.interaction_entropy`.
 
 Execution Management
 --------------------

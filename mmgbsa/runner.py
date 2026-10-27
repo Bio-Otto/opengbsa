@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 # Import your existing modules
 from .mmgbsa_core import GBSACalculator
 from .entropy import run_ultra_robust_nma
+from .interaction_entropy import describe, entropy_result
 from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
 from .reporting import HTMLReportGenerator
@@ -559,25 +560,34 @@ class MMGBSARunner:
             
             log.info(f"Using entropy method: {method}")
             
-            if method == 'interaction':
-                # Calculate Interaction Entropy (IE)
-                if 'mmgbsa' not in self.results or 'binding_energies' not in self.results['mmgbsa']:
-                    log.warning("Interaction Entropy requires binding energies from MM/GBSA run")
+            if method in ('interaction', 'c2'):
+                # Interaction entropy (IE) or its second-order cumulant (C2),
+                # both from the gas-phase receptor-ligand interaction energy
+                if 'mmgbsa' not in self.results or 'interaction_energies' not in self.results['mmgbsa']:
+                    log.warning("Entropy estimates require the per-frame interaction energies from the MM/GBSA run")
                     return None
-                
-                binding_energies = self.results['mmgbsa']['binding_energies']
+
                 temperature = analysis_settings.get('temperature', 300)
-                
-                entropy_penalty = calculator.calculate_interaction_entropy(binding_energies, temperature)
-                
-                log.result("Interaction Entropy (-TΔS)", f"{entropy_penalty:.2f}", "kcal/mol")
+                entropy = entropy_result(self.results['mmgbsa']['interaction_energies'], method, temperature)
+
+                for line in describe(entropy):
+                    log.info(line)
+                log.result(f"{entropy['label']} (-TΔS)", f"{entropy['value']:.2f}", "kcal/mol")
                 log.info("(Positive value indicates entropic penalty)")
-                
+
+                mmgbsa = self.results['mmgbsa']
+                if not mmgbsa.get('entropy'):
+                    # Report it like an entropy_method result (HTML report, dG)
+                    mmgbsa['entropy'] = entropy
+                    mmgbsa['entropy_penalty'] = entropy['value']
+                    mmgbsa['delta_g'] = mmgbsa['mean_binding_energy'] + entropy['value']
+
                 return {
                     'status': 'completed',
-                    'method': 'interaction_entropy',
-                    'entropy_penalty': entropy_penalty,
-                    'T': temperature
+                    'method': entropy['label'],
+                    'entropy_penalty': entropy['value'],
+                    'T': temperature,
+                    **{k: v for k, v in entropy.items() if k not in ('method', 'label', 'value')}
                 }
                 
             elif method in ['nmode', 'normal_mode']:
@@ -786,7 +796,11 @@ class MMGBSARunner:
                     f.write("ENTROPY ANALYSIS:\n")
                     f.write("-" * 20 + "\n")
                     f.write(f"Status: {self.results['entropy']['status']}\n")
-                    f.write(f"Method: {self.results['entropy']['method']}\n\n")
+                    f.write(f"Method: {self.results['entropy']['method']}\n")
+                    if 'sigma_interaction_energy' in self.results['entropy']:
+                        for line in describe(self.results['entropy']):
+                            f.write(f"{line}\n")
+                    f.write("\n")
                 
                 if 'decomposition' in self.results:
                     f.write("PER-RESIDUE DECOMPOSITION:\n")

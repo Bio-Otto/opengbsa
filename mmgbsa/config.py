@@ -476,9 +476,13 @@ analysis_settings:
 
   # === Advanced Analysis Options ===
   
-  # Calculate entropy (Interaction Entropy method). True/False.
-  # Note: Entropy calculations can be computationally expensive.
+  # Calculate entropy (-TdS). True/False. entropy_method selects the estimate:
+  # 'interaction' (interaction entropy, default) or 'c2' (second-order
+  # cumulant), both from the fluctuation of the gas-phase interaction energy.
+  # Both are reported with its standard deviation; IE is unreliable above
+  # 3.6 kcal/mol and C2 above 6.0 kcal/mol (Ekberg & Ryde 2021).
   run_entropy_analysis: true
+  entropy_method: 'interaction'
   
   # Perform per-residue energy decomposition. True/False.
   run_per_residue_decomposition: true

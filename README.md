@@ -41,7 +41,7 @@ conda install -c conda-forge openmm mdtraj rdkit parmed
 pip install openff-toolkit matplotlib seaborn pandas pyyaml Jinja2
 
 # Install the package (stable OpenMM >=8.5.1 from conda-forge)
-conda install -c bio-otto -c conda-forge opengbsa=0.0.18
+conda install -c bio-otto -c conda-forge opengbsa=0.0.19
 # GPU (CUDA): match the CUDA runtime to your driver's CUDA version (nvidia-smi,
 # top right), e.g. for a driver that supports CUDA 12.9:
 #   conda install -c conda-forge "cuda-version=12.9"
