@@ -16,6 +16,7 @@ import json
 import yaml
 from datetime import datetime
 import matplotlib.patches as mpatches
+from .interaction_entropy import interaction_energies, interaction_entropy
 from matplotlib.patches import FancyBboxPatch
 import matplotlib.patheffects as path_effects
 
@@ -848,14 +849,16 @@ class AdvancedVisualization:
 
     def plot_entropy_convergence(self, compound_name="Ligand"):
         """
-        Plot Interaction Entropy Convergence (TdS vs dH)
-        This is expensive, so we might skip it if N is large, or do stride.
+        Plot Interaction Entropy Convergence (-TdS vs number of frames),
+        computed from the gas-phase interaction energy like the reported value
+        (mmgbsa.interaction_entropy).
         """
         if not self.mmgbsa_data or 'binding_data' not in self.mmgbsa_data:
             return None
         
-        # Only if Interaction Entropy was requested/calculated
-        if self.mmgbsa_data.get('entropy_penalty', 0.0) == 0.0:
+        # Only if an interaction-energy entropy was requested/calculated
+        entropy = self.mmgbsa_data.get('entropy')
+        if not entropy:
             return None
 
         try:
@@ -865,40 +868,13 @@ class AdvancedVisualization:
                 
             output_dir = self.output_dir / "plots"
             
-            # Calculate IE on expanding windows [0..N]
-            # IE Formula: -kT * ln < exp(beta * dE) >
-            # We need to replicate the calculation here
-            
-            T = 298.15 # Default/Approx (User didn't pass temp to viz, assuming 298)
-            # Use gas constant from core
-            R = 0.0019872041
-            beta = 1.0 / (R * T)
-            
-            ie_values = []
-            frames = []
+            T = entropy['temperature']
+            energies = interaction_energies(df)
             
             # Stride to avoid re-calculating every frame for long traj
             stride = max(1, len(df) // 50) 
-            
-            energies = df['binding_energy'].values
-            
-            for i in range(10, len(df) + 1, stride):
-                subset = energies[:i]
-                mean_E = np.mean(subset)
-                dE = subset - mean_E
-                
-                # Safe Exp Mean
-                try:
-                    avg_exp = np.mean(np.exp(beta * dE))
-                    if avg_exp > 0:
-                        ts = (1.0/beta) * np.log(avg_exp)
-                        ie_values.append(ts) # This is TS (Entropy Term, usually negative)
-                        # Wait, formula returns "Entropy contribution (-TdS)". 
-                        # core.py returns: penalty_tds = (1.0/beta) * np.log(avg_val).
-                        # IE term is typically POSITIVE penalty for binding.
-                        frames.append(i)
-                except OverflowError:
-                    continue
+            frames = list(range(10, len(df) + 1, stride))
+            ie_values = [interaction_entropy(energies[:i], T) for i in frames]
 
             if not ie_values:
                 return None

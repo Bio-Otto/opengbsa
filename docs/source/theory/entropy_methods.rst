@@ -1,12 +1,12 @@
 Entropy Methods
 ===============
 
-The entropic contribution (:math:`-T\Delta S`) is the most challenging component of free energy calculations. It represents the loss of translational, rotational, and vibrational degrees of freedom upon binding. OpenGBSA offers three methods to estimate this term.
+The entropic contribution (:math:`-T\Delta S`) is the most challenging component of free energy calculations. It represents the loss of translational, rotational, and vibrational degrees of freedom upon binding. OpenGBSA offers four methods to estimate this term.
 
 1. Interaction Entropy (IE)
 ---------------------------
 
-The Interaction Entropy method approximates the entropy change directly from the fluctuations of the interaction energy (:math:`\Delta E_{int} = E_{complex} - (E_{receptor} + E_{ligand})`) along the MD trajectory.
+The Interaction Entropy method approximates the entropy change directly from the fluctuations of the gas-phase receptor--ligand interaction energy along the MD trajectory, :math:`\Delta E_{int} = \Delta E_{vdW} + \Delta E_{elec}` (the per-frame ``delta_vdw`` and ``delta_elec`` columns). The solvation terms of the binding enthalpy are not part of :math:`\Delta E_{int}`, as in Duan et al. and gmx_MMPBSA.
 
 **Theory**:
 Derived from the rigorous Zwanzig relation, it avoids the assumption of Gaussian distribution of conformations.
@@ -21,8 +21,21 @@ Where :math:`\Delta E_{int}^{fluct} = \Delta E_{int} - \langle \Delta E_{int} \r
     *   **Computationally Efficient**: Requires only the interaction energies (already calculated for enthalpy) and simple post-processing.
     *   **No Diagonalization**: Does not require matrix diagonalization.
 *   **Cons**:
-    *   **Convergence**: Can be difficult to converge if the standard deviation of the interaction energy is large (> 3-4 kcal/mol).
+    *   **Convergence**: The exponential average cannot be converged in practice when the standard deviation :math:`\sigma` of :math:`\Delta E_{int}` exceeds 15 kJ/mol (3.6 kcal/mol). OpenGBSA reports :math:`\sigma` and flags larger values.
 *   **Citation**: Duan, L., et al. (2016). Interaction entropy: A new paradigm for computing binding free energy. *Journal of the American Chemical Society*, 138(17), 5722-5728.
+
+Second-order cumulant (C2)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Expanding the exponential average to second order gives
+
+.. math::
+
+   -T\Delta S_{C2} = \frac{\sigma^2}{2kT}
+
+which converges much faster than IE but becomes unrealistically large when :math:`\sigma` exceeds 25 kJ/mol (6.0 kcal/mol). Select it with ``entropy_method: c2``. OpenGBSA reports both estimates with :math:`\sigma` whichever method is selected.
+
+*   **Citation**: Ekberg, V., & Ryde, U. (2021). On the use of interaction entropy and related methods to estimate binding entropies. *Journal of Chemical Theory and Computation*, 17(8), 5379-5391.
 
 2. Quasi-Harmonic Analysis (QHA)
 --------------------------------

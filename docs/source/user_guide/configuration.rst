@@ -60,10 +60,11 @@ Controls the physics model and sampling protocols.
 ``entropy_method``
 ~~~~~~~~~~~~~~~~~~
 *   **Type**: String
-*   **Options**: ``none``, ``interaction``, ``quasiharmonic``, ``normal_mode``
+*   **Options**: ``none``, ``interaction``, ``c2``, ``quasiharmonic``, ``normal_mode``
 *   **Default**: ``none``
 *   **Description**: Specifies the method to estimate the entropic penalty (:math:`-T\Delta S`). 
-    *   ``interaction``: Fast, good for rigid binding.
+    *   ``interaction``: Interaction entropy (IE) from the fluctuation of the gas-phase interaction energy. Fast; reliable only when its standard deviation is at most 3.6 kcal/mol.
+    *   ``c2``: Second-order cumulant (C2) of the same energy. Fast; reliable only when its standard deviation is at most 6.0 kcal/mol.
     *   ``normal_mode``: Slow, standard reference.
     *   ``none``: Returns :math:`\Delta G` without entropy (often sufficient for ranking).
 

@@ -92,6 +92,9 @@ except ImportError:
 from .inputs import InputManager, EngineMode
 from .topology import TopologyLoader
 from .trajectory import TrajectoryProcessor, reimage_molecules
+from .interaction_entropy import (IE_SIGMA_LIMIT, METHOD_LABELS, describe,
+                                  entropy_estimates, entropy_result,
+                                  interaction_energies)
 from openmm import app, openmm, unit
 try:
     from openff.toolkit.topology import Molecule
@@ -1613,7 +1616,9 @@ class GBSACalculator(GBSAForceManager):
         solvent_dielectric : float
              Solvent dielectric constant (default 78.5)
         entropy_method : str
-             Entropy calculation method ('interaction', 'normal_mode', 'none')
+             Entropy calculation method ('interaction', 'c2', 'normal_mode', 'none').
+             'interaction' (IE) and 'c2' use the gas-phase interaction energy
+             (mmgbsa.interaction_entropy)
         platform : str, optional
              Platform to force (CPU, CUDA, OpenCL, Reference)
         reporting_settings : dict, optional
@@ -3763,7 +3768,11 @@ class GBSACalculator(GBSAForceManager):
             'bootstrap_results': bootstrap_results,
             'binding_energies': binding_energies.tolist()
         })
-        
+        if {'delta_vdw', 'delta_elec'}.issubset(df.columns):
+            # Gas-phase receptor-ligand interaction energy, the input of the
+            # interaction-energy entropy estimates (mmgbsa.interaction_entropy)
+            results['interaction_energies'] = (df['delta_vdw'] + df['delta_elec']).tolist()
+
         # Generate detailed report
         output_dir = self.generate_detailed_report(results, output_dir)
         results['report_directory'] = str(output_dir)
@@ -5231,31 +5240,27 @@ class GBSACalculator(GBSAForceManager):
             'std_dev': std_dev
         }
 
-    # Above this per-frame std. dev. of the (binding energy - mean) fluctuation
-    # (kcal/mol), the exponential average in the IE formula is dominated by a
-    # small number of high-energy tail frames and is considered statistically
-    # unreliable (see Duan et al., JACS 2016 and subsequent IE literature,
-    # which commonly flag sigma(dE) above ~3-3.6 kcal/mol at 300 K as a sign
-    # the reported -TdS should not be trusted without more sampling).
-    IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL = 3.6
+    # Above this std. dev. of the gas-phase interaction energy (kcal/mol, i.e.
+    # 15 kJ/mol) the IE exponential average cannot be converged in practice
+    # (Ekberg & Ryde, J Chem Theory Comput 2021, 17, 5379).
+    IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL = IE_SIGMA_LIMIT
 
-    def calculate_interaction_entropy(self, binding_energies, temperature=300.0):
+    def calculate_interaction_entropy(self, energies, temperature=300.0):
         """
-        Calculate Interaction Entropy (IE) from binding energy fluctuations.
+        Calculate Interaction Entropy (IE) from interaction energy fluctuations.
 
-        Formula: -TdS = kT * ln < e^(beta * (E - <E>)) >
+        Formula: -TdS = kT * ln < e^(beta * (dE_int - <dE_int>)) >
         Reference: Duan et al., JACS 2016, 138, 5722-5728.
 
-        The exponential average is computed via log-sum-exp for numerical
-        stability (the naive `np.exp(beta*dE)` can overflow for frames with a
-        large positive energy fluctuation). The standard deviation of the
-        binding-energy fluctuation, sigma(dE), is also computed and printed:
-        a large sigma(dE) means the average is dominated by rare high-energy
-        frames and the resulting -TdS is not statistically reliable, per the
-        original IE literature's own diagnostic. This function raises rather
-        than silently returning 0.0 on failure, since a silent zero is
-        indistinguishable from a legitimately negligible entropy correction
-        in downstream output.
+        `energies` are the per-frame gas-phase receptor-ligand
+        interaction energies, dE_vdW + dE_elec (see
+        `mmgbsa.interaction_entropy.interaction_energies`), as in Duan et al.
+        and gmx_MMPBSA -- not the binding enthalpy, whose solvation terms
+        damp the fluctuation. sigma(dE_int) is stored in `_last_ie_sigma_dE`
+        and a warning is printed above IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL.
+        This function raises rather than silently returning 0.0 on failure,
+        since a silent zero is indistinguishable from a legitimately
+        negligible entropy correction in downstream output.
 
         Returns
         -------
@@ -5266,47 +5271,17 @@ class GBSACalculator(GBSAForceManager):
         Raises
         ------
         ValueError
-            If fewer than 2 binding energies are given, or the computed
-            average exponential is non-positive (would require an invalid
-            log).
+            If fewer than 2 energies are given or an energy is not finite.
         """
-        import numpy as np
-        from scipy.special import logsumexp
-
-        # Constants
-        gas_constant = 0.0019872041  # kcal/(mol*K)
-        T = float(temperature) # Ensure scalar
-        beta = 1.0 / (gas_constant * T)
-
-        E = np.array(binding_energies, dtype=float).flatten() # Ensure 1D array
-        if E.size < 2:
-            raise ValueError(
-                f"Interaction entropy requires at least 2 binding energy samples, got {E.size}."
-            )
-        mean_E = np.mean(E)
-        dE = E - mean_E
-        sigma_dE = float(np.std(dE))
-
+        estimates = entropy_estimates(energies, temperature)
+        sigma_dE = estimates['sigma_interaction_energy']
         if sigma_dE > self.IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL:
-            print(f"WARNING: Interaction Entropy sigma(dE) = {sigma_dE:.2f} kcal/mol exceeds the "
-                  f"commonly-cited reliability threshold ({self.IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL} "
-                  f"kcal/mol). The exponential average is likely dominated by a small number of "
-                  f"high-energy frames; treat the reported -TdS as unreliable and consider more "
-                  f"sampling or a normal-mode/quasi-harmonic entropy estimate instead.")
-
-        # log<e^(beta*dE)> via log-sum-exp: log(mean(exp(beta*dE)))
-        #                                 = logsumexp(beta*dE) - log(N)
-        log_avg_exp = logsumexp(beta * dE) - np.log(dE.size)
-
-        if not np.isfinite(log_avg_exp):
-            raise ValueError(
-                f"Interaction entropy average exponential is non-finite (log_avg_exp={log_avg_exp}); "
-                f"cannot compute -TdS from this binding energy sample (sigma(dE)={sigma_dE:.2f} kcal/mol)."
-            )
-
-        penalty_tds = (1.0 / beta) * log_avg_exp
+            print(f"WARNING: Interaction Entropy sigma(dE_int) = {sigma_dE:.2f} kcal/mol exceeds "
+                  f"{self.IE_SIGMA_DE_RELIABILITY_THRESHOLD_KCAL:.1f} kcal/mol (15 kJ/mol), above "
+                  f"which the exponential average cannot be converged (Ekberg & Ryde 2021); treat "
+                  f"the reported -TdS as unreliable.")
         self._last_ie_sigma_dE = sigma_dE  # exposed for callers/reporting that want the diagnostic
-        return float(penalty_tds)
+        return estimates['interaction_entropy']
 
     def save_results(self, output_dir=None):
         """Save fixed enhanced MM/GBSA results to file"""
@@ -5374,20 +5349,24 @@ class GBSACalculator(GBSAForceManager):
         # ENTROPY CALCULATION
         entropy_penalty = 0.0
         delta_g = mean_binding
-        
-        if self.entropy_method == 'interaction':
+        entropy = None
+
+        if self.entropy_method in ('interaction', 'c2'):
             try:
-                print(f"\nCalculating Interaction Entropy...")
+                print(f"\nCalculating {METHOD_LABELS[self.entropy_method]} from the interaction energy...")
                 temp_val = self.temperature.value_in_unit(unit.kelvin)
-                entropy_penalty = self.calculate_interaction_entropy(df['binding_energy'].values, temp_val)
+                entropy = entropy_result(interaction_energies(df), self.entropy_method, temp_val)
+                entropy_penalty = entropy['value']
                 delta_g = mean_binding + entropy_penalty
-                
-                print(f"Interaction Entropy (-TΔS): {entropy_penalty:.2f} kcal/mol")
-                print(f"Final Binding Free Energy (ΔG): {delta_g:.2f} kcal/mol")
+
+                for line in describe(entropy):
+                    print(line)
+                print(f"Final Binding Free Energy (ΔG = ΔH - TΔS, {entropy['label']}): {delta_g:.2f} kcal/mol")
             except Exception as e:
                 print(f"Entropy calculation failed: {e}")
                 entropy_penalty = 0.0
                 delta_g = mean_binding
+                entropy = None
         elif self.entropy_method == 'normal_mode':
              print("\nNote: Normal Mode Analysis selected. This will be calculated in the post-processing step.")
         elif self.entropy_method == 'quasiharmonic':
@@ -5433,6 +5412,7 @@ class GBSACalculator(GBSAForceManager):
             'std_error': std_error,
             'n_frames': len(df),
             'entropy_penalty': entropy_penalty,
+            'entropy': entropy,
             'delta_g': delta_g,
             'parameterized_residues': self.parameterized_residues,
             'physics_assumptions': merged_assumptions,

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.19] - 2026-10-27
+
+### Added
+- **C2 entropy (`entropy_method: c2`)**, the second-order cumulant of the interaction entropy (Ekberg & Ryde, J Chem Theory Comput 2021, 17, 5379). Every interaction-energy entropy result now gives both estimates, the standard deviation σ of the interaction energy and a reliability flag for each estimate: interaction entropy is flagged above σ = 15 kJ/mol (3.6 kcal/mol), C2 above 25 kJ/mol (6.0 kcal/mol), the limits found by Ekberg & Ryde. They appear in the log, `final_report.txt` and `results_summary.yaml`. New module `mmgbsa/interaction_entropy.py`.
+
+### Fixed
+- **The interaction entropy was computed from the binding enthalpy instead of the interaction energy.** `-TΔS` came from the fluctuation of the per-frame binding enthalpy, whose GB and SA terms damp the fluctuation. It now uses the gas-phase receptor–ligand interaction energy ΔE_vdW + ΔE_elec, as defined by Duan et al. (J Am Chem Soc 2016, 138, 5722) and implemented in gmx_MMPBSA; on the same energies the two programs agree to a relative 1e-7. This applies to `entropy_method: interaction`, to `run_entropy_analysis`, to the HTML report's own estimate (`reporting_settings.entropy_approximation`) and to the entropy convergence plot, which also used 298.15 K instead of the run temperature. Binding enthalpies are unchanged. Regression test: `test/unit/test_interaction_entropy.py`.
+- **The HTML report showed an entropy row of 0.00 ("Interaction Entropy") and ΔG = ΔH when no entropy method was selected.** It now shows −TΔS and ΔG only when an entropy estimate was computed, including one from `run_entropy_analysis` alone.
+
 ## [0.0.18] - 2026-10-22
 
 ### Added
