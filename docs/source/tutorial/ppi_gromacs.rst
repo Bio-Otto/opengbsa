@@ -63,7 +63,33 @@ What to notice in the config
   ``HIS`` template -- ``HID``/``HIE``/``HIP`` must be determined from
   which hydrogens are actually present).
 
-Full write-up (including two OpenGBSA bugs specific to the
-Coordinate-Mode + ``binding_mode: ppi`` combination, found and fixed
-during this validation): see ``test/configs/ppi_1gcq_test/README.md`` in
-the repository.
+Expected result
+---------------
+
+From the root of the repository, ``check_validation.py`` runs the
+configuration and compares the mean binding enthalpy (kcal/mol) with the
+recorded value; ``--amber-compatible`` runs it with ``amber_compatible: true``
+and compares with Amber MMPBSA.py on the same frames:
+
+.. code-block:: bash
+
+    python test/configs/check_validation.py 1gcq 2oob
+    python test/configs/check_validation.py 1gcq 2oob --amber-compatible
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Case
+     - OpenGBSA, default settings
+     - MMPBSA.py (``amber_compatible``)
+   * - ``1gcq``
+     - -36.300
+     - -37.921
+   * - ``2oob``
+     - -23.898
+     - -25.472
+
+The difference between the two settings is the Born-radius cutoff of
+MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+details: ``test/configs/ppi_1gcq_test/README.md``.

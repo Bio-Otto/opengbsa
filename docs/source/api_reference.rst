@@ -40,6 +40,58 @@ Core Analysis
       gas-phase interaction energy (van der Waals + electrostatic). The C2
       estimate and the reliability limits are in :mod:`mmgbsa.interaction_entropy`.
 
+Entropy estimates
+-----------------
+
+.. module:: mmgbsa.interaction_entropy
+
+.. function:: interaction_energies(frames)
+
+   Per-frame gas-phase interaction energy, ``delta_vdw + delta_elec``, of a
+   frame table (DataFrame or dict).
+
+.. function:: interaction_entropy(energies, temperature)
+
+   :math:`-T\Delta S` by interaction entropy (Duan et al. 2016), in kcal/mol.
+
+.. function:: c2_entropy(energies, temperature)
+
+   :math:`-T\Delta S` by the second-order cumulant (Ekberg and Ryde 2021).
+
+.. function:: entropy_estimates(energies, temperature)
+
+   Both estimates, the standard deviation of the energies and the reliability
+   flags (``IE_SIGMA_LIMIT`` = 3.6, ``C2_SIGMA_LIMIT`` = 6.0 kcal/mol).
+
+Input conversion
+----------------
+
+.. module:: mmgbsa.conversion
+
+.. class:: OpenMMSystemPreprocessor
+
+   .. staticmethod:: convert_to_amber(xml_file, pdb_file, output_dir, gb_model='OBC2', radii_set='auto')
+
+      Converts a serialised OpenMM System and the PDB file of its atoms to an
+      Amber topology for Native Mode. Raises ``ValueError`` for forces that
+      cannot be converted, such as a ``CustomNonbondedForce``.
+
+.. class:: GromacsPreprocessor
+
+   .. staticmethod:: convert_to_amber(topology_file, coordinate_file, output_dir=None, gb_model='OBC2')
+
+      Converts a GROMACS ``.top`` with its ``.gro`` to Amber topologies.
+
+Visualization
+-------------
+
+.. module:: mmgbsa.pymol_viz
+
+.. function:: write_hotspot_pymol(topology, positions_nm, residue_values, residue_atoms, ligand_atoms, output_dir, energy_threshold=-0.5, filename='view_binding.pml')
+
+   Writes ``hotspots.pdb`` with per-residue contributions as B-factors and a
+   PyMOL script that colours and labels the hot spots.
+
 Execution Management
 --------------------
 

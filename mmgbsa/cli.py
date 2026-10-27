@@ -15,7 +15,6 @@ from ._version import __version__, __author__, __email__, __link__, __license__
 try:
     from .config import ConfigManager
     from .runner import MMGBSARunner
-    from .complete_runner import CompleteMMGBSARunner
     from .utils import setup_logging, create_output_directory, check_dependencies
 except ImportError:
     # Fallback for direct execution
@@ -28,20 +27,23 @@ def create_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Create default configuration
-  mmgbsa --create-config
+  # Write a configuration template: minimal, or with every option explained
+  opengbsa --create-config
+  opengbsa --create-complete-config
 
-  # Run analysis with configuration file
-  mmgbsa config.yaml
+  # Run an analysis defined by a configuration file
+  opengbsa config.yaml
+  opengbsa config.yaml --output-dir results
 
-  # Run complete analysis
-  mmgbsa --complete config.yaml
+  # Check the installation
+  opengbsa --version
+  opengbsa --check-deps
 
-  # Check dependencies
-  mmgbsa --check-deps
+  # List and download the test and validation data
+  opengbsa --list-test-data
+  opengbsa --fetch-test-data --only core-fixtures
 
-  # Show version
-  mmgbsa --version
+Documentation: https://opengbsa.readthedocs.io/
         """
     )
     
@@ -68,7 +70,7 @@ Examples:
     parser.add_argument(
         '--complete',
         action='store_true',
-        help='Use complete runner with advanced features'
+        help='Deprecated and ignored: every run uses the same validated pipeline'
     )
     
     parser.add_argument(
@@ -165,7 +167,7 @@ def list_test_data_command():
 
 def fetch_test_data_command(only: Optional[str] = None, force: bool = False):
     """Download and verify test/validation datasets command."""
-    from .fetch_test_data import fetch_all
+    from .fetch_test_data import data_root, fetch_all
 
     only_list = [n.strip() for n in only.split(',')] if only else None
     print(f"Fetching test data{f' ({only_list})' if only_list else ' (all datasets)'}...")
@@ -176,7 +178,8 @@ def fetch_test_data_command(only: Optional[str] = None, force: bool = False):
         return 1
 
     total_files = sum(len(files) for files in results.values())
-    print(f"\n✓ Fetched {len(results)} dataset(s), {total_files} file(s) total.")
+    print(f"\n✓ Fetched {len(results)} dataset(s), {total_files} file(s) total, "
+          f"available under {data_root() / 'test' / 'data'}")
     return 0
 
 def create_config_command(complete: bool = False):
@@ -199,7 +202,7 @@ def create_config_command(complete: bool = False):
     
     if success:
         print(f"✓ Configuration file created: {config_name}")
-        print(f"Edit the file and run: mmgbsa {config_name}")
+        print(f"Edit the file and run: opengbsa {config_name}")
         return 0
     else:
         print(f"✗ Error creating configuration file: {config_name}")
@@ -237,9 +240,10 @@ def run_analysis_command(config_file: str, complete: bool = False, output_dir: O
     # Run analysis
     try:
         if complete:
-            runner = CompleteMMGBSARunner(config_manager.get_config(), output_path)
-        else:
-            runner = MMGBSARunner(config_manager.get_config(), output_path)
+            # The former "complete runner" ignored many settings (amber_compatible,
+            # sa_model, entropy_method, ...) and is retired; one pipeline serves all runs.
+            print("⚠️  --complete is deprecated and has no effect; running the standard pipeline.")
+        runner = MMGBSARunner(config_manager.get_config(), output_path)
         
         success = runner.run_analysis()
         

@@ -1,0 +1,196 @@
+# Expected mean binding enthalpies (kcal/mol) of the validation cases, read by
+# check_validation.py. opengbsa_defaults: OpenGBSA at its default settings with the
+# configuration in this folder. mmpbsa: Amber MMPBSA.py on the same frames, the
+# reference for a run with amber_compatible: true. Values from the OpenGBSA paper's
+# validation (Additional file 1, Tables S1 and S3).
+# download: size of that folder's fetch_data.sh download (*: one archive for all
+# seven 3CLpro ligands; the VRC01 size is per variant). prepare: the commands that
+# download and prepare the inputs, run in the case folder.
+
+3dd2:
+  folder: rna_protein_test
+  config: 3dd2_config.yaml
+  prepare: "./fetch_data.sh && python prepare_system.py"
+  description: protein-RNA, Amber .prmtop (Native Mode)
+  frames: 300
+  download: 44 MB
+  opengbsa_defaults: -16.575
+  mmpbsa: -23.493
+  tolerance: 0.02
+
+irf11:
+  folder: dna_protein_test
+  config: irf11_dna_config.yaml
+  prepare: "./fetch_data.sh && python prepare_system.py"
+  description: protein-DNA, multi-model PDB (Coordinate Mode)
+  frames: 101
+  download: 25 MB
+  opengbsa_defaults: -103.845
+  mmpbsa: -109.623
+  tolerance: 0.05
+  note: OpenMM's and Amber's Coulomb constants differ by 4 parts per million; on the -7,225 kcal/mol electrostatic term of this complex that gives the expected -0.024 kcal/mol
+
+ctla4:
+  folder: namd_charmm_test
+  config: ctla4_peptide_config.yaml
+  prepare: "./fetch_data.sh"
+  description: protein-peptide, NAMD/CHARMM .psf (Native Mode)
+  frames: 300
+  download: 321 MB
+  opengbsa_defaults: -32.056
+  mmpbsa: -32.571
+  tolerance: 0.02
+
+1gcq:
+  folder: ppi_1gcq_test
+  config: 1gcq_config.yaml
+  prepare: "./fetch_data.sh && python prepare_system.py --system 1gcq"
+  description: protein-protein, GROMACS coordinates (Coordinate Mode)
+  frames: 300
+  download: 1.4 GB
+  opengbsa_defaults: -36.300
+  mmpbsa: -37.921
+  tolerance: 0.02
+
+2oob:
+  folder: ppi_1gcq_test
+  config: 2oob_config.yaml
+  prepare: "./fetch_data.sh && python prepare_system.py --system 2oob"
+  description: protein-protein, GROMACS coordinates (Coordinate Mode)
+  frames: 300
+  download: 1.4 GB
+  opengbsa_defaults: -23.898
+  mmpbsa: -25.472
+  tolerance: 0.02
+
+3clpro_baicalein:
+  folder: 3clpro_zenodo_test
+  config: baicalein_config.yaml
+  prepare: "./fetch_data.sh"
+  description: protein-ligand, Amber .prmtop (Native Mode), baicalein
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -23.873
+  mmpbsa: -23.888
+  tolerance: 0.02
+
+3clpro_compound7a:
+  folder: 3clpro_zenodo_test
+  config: compound7a_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7a/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7a
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -22.034
+  mmpbsa: -22.138
+  tolerance: 0.02
+
+3clpro_compound7b:
+  folder: 3clpro_zenodo_test
+  config: compound7b_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7b/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7b
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -30.642
+  mmpbsa: -30.700
+  tolerance: 0.02
+
+3clpro_compound7c:
+  folder: 3clpro_zenodo_test
+  config: compound7c_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7c/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7c
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -40.916
+  mmpbsa: -40.886
+  tolerance: 0.02
+
+3clpro_compound7d:
+  folder: 3clpro_zenodo_test
+  config: compound7d_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7d/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7d
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -37.840
+  mmpbsa: -37.879
+  tolerance: 0.02
+
+3clpro_compound7e:
+  folder: 3clpro_zenodo_test
+  config: compound7e_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7e/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7e
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -27.277
+  mmpbsa: -27.472
+  tolerance: 0.02
+
+3clpro_compound7f:
+  folder: 3clpro_zenodo_test
+  config: compound7f_config.yaml
+  prepare: "./fetch_data.sh && unzip -o raw/1_MD.zip -d raw '1_MD/compound7f/*'"
+  description: protein-ligand, Amber .prmtop (Native Mode), compound 7f
+  frames: 300
+  download: 9.1 GB*
+  opengbsa_defaults: -46.463
+  mmpbsa: -46.398
+  tolerance: 0.02
+
+vrc01_wt:
+  folder: antibody_vrc01_test
+  config: vrc01_wt_config.yaml
+  prepare: "./fetch_data.sh"
+  description: antibody-antigen, CHARMM .psf (Native Mode), VRC01 wt
+  frames: 300
+  download: 1.05 GB
+  opengbsa_defaults: -36.820
+  mmpbsa: -52.461
+  tolerance: 0.02
+
+vrc01_d99a:
+  folder: antibody_vrc01_test
+  config: vrc01_d99a_config.yaml
+  prepare: "./fetch_data.sh"
+  description: antibody-antigen, CHARMM .psf (Native Mode), VRC01 D99A
+  frames: 300
+  download: 1.05 GB
+  opengbsa_defaults: -43.599
+  mmpbsa: -59.167
+  tolerance: 0.02
+
+vrc01_g54a:
+  folder: antibody_vrc01_test
+  config: vrc01_g54a_config.yaml
+  prepare: "./fetch_data.sh"
+  description: antibody-antigen, CHARMM .psf (Native Mode), VRC01 G54A
+  frames: 300
+  download: 1.05 GB
+  opengbsa_defaults: -44.912
+  mmpbsa: -60.699
+  tolerance: 0.02
+
+vrc01_n100aa:
+  folder: antibody_vrc01_test
+  config: vrc01_n100aa_config.yaml
+  prepare: "./fetch_data.sh"
+  description: antibody-antigen, CHARMM .psf (Native Mode), VRC01 N100AA
+  frames: 300
+  download: 1.05 GB
+  opengbsa_defaults: -48.600
+  mmpbsa: -64.280
+  tolerance: 0.02
+
+vrc01_w100ba:
+  folder: antibody_vrc01_test
+  config: vrc01_w100ba_config.yaml
+  prepare: "./fetch_data.sh"
+  description: antibody-antigen, CHARMM .psf (Native Mode), VRC01 W100BA
+  frames: 300
+  download: 1.05 GB
+  opengbsa_defaults: -25.427
+  mmpbsa: -40.903
+  tolerance: 0.02

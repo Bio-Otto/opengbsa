@@ -1,0 +1,29 @@
+# OpenGBSA quickstart: OXA-family beta-lactamase 6T1H with ligand 1151.
+#
+# Run from the root of the repository:
+#
+#     opengbsa examples/quickstart/quickstart.yaml
+#
+# Native Mode with Amber (CHARMM36 chamber) topologies. The trajectory holds
+# 50 frames from the last 50 ns of a 100 ns simulation, with the solvent
+# already removed. Every option is explained in the documentation's
+# configuration reference: https://opengbsa.readthedocs.io/
+
+input_files:
+  complex_pdb: test/data/6t1h_1151_comp/complex.prmtop       # topology of the complex
+  receptor_topology: test/data/6t1h_1151_comp/receptor.prmtop
+  ligand_topology: test/data/6t1h_1151_comp/ligand.prmtop
+  trajectory: examples/quickstart/trajectory.xtc
+
+output_settings:
+  output_directory: quickstart_results
+
+analysis_settings:
+  gb_model: OBC2
+  salt_concentration: 0.15
+  temperature: 300.0
+  max_frames: 50
+  run_per_residue_decomposition: true
+  decomp_frames: 50
+  run_entropy_analysis: true
+  entropy_method: interaction

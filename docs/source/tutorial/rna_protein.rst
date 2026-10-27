@@ -53,7 +53,30 @@ What to notice in the config
   explicit topology split here instead of ``chainid`` selection, because
   a real topology was available to split.
 
-Full write-up (including two OpenGBSA bugs found in nucleic-acid ligand
-detection during this validation, both in how Native Mode identifies
-which atoms are "the ligand" when a topology is already provided): see
-``test/configs/rna_protein_test/README.md`` in the repository.
+Expected result
+---------------
+
+From the root of the repository, ``check_validation.py`` runs the
+configuration and compares the mean binding enthalpy (kcal/mol) with the
+recorded value; ``--amber-compatible`` runs it with ``amber_compatible: true``
+and compares with Amber MMPBSA.py on the same frames:
+
+.. code-block:: bash
+
+    python test/configs/check_validation.py 3dd2
+    python test/configs/check_validation.py 3dd2 --amber-compatible
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 35 35
+
+   * - Case
+     - OpenGBSA, default settings
+     - MMPBSA.py (``amber_compatible``)
+   * - ``3dd2``
+     - -16.575
+     - -23.493
+
+The difference between the two settings is the Born-radius cutoff of
+MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+details: ``test/configs/rna_protein_test/README.md``.

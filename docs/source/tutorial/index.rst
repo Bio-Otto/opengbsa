@@ -1,64 +1,61 @@
-Tutorial
-========
+Tutorials
+=========
 
-Five worked examples, each built from an independent, published MD
-dataset, each self-contained under ``test/configs/`` in the OpenGBSA
-repository. Every example ships its own data-fetch script, its own YAML
-config, and (where the source dataset provides no ready-to-use topology)
-a system-preparation script -- so each one can be reproduced from a clean
-checkout with three commands:
+Six worked examples, each built from an MD dataset published by another group
+and each ready to run from ``test/configs/`` in the repository. Together they
+cover protein-ligand, protein-peptide, protein-protein, protein-RNA,
+protein-DNA and antibody-antigen complexes, the Amber, GROMACS, CHARMM/NAMD and
+PDB input formats, and both Native and Coordinate Mode. Each example has a
+``fetch_data.sh`` that downloads the data from Zenodo, a configuration file, a
+three-frame variant for a quick test (``*_config_test.yaml``) and a
+``README.md`` with the provenance.
+
+Every example follows the same pattern:
 
 .. code-block:: bash
 
-    cd test/configs/<example>_test
-    ./fetch_data.sh
+    cd test/configs/<example>
+    ./fetch_data.sh                 # plus a preparation step for some examples
     opengbsa <config>.yaml
 
-Together they cover every receptor/ligand *kind* combination OpenGBSA
-supports and every native input format it accepts (Amber, GROMACS, and
-CHARMM/NAMD), plus both of its two system-building paths, Native Mode
-(load an existing topology) and Coordinate Mode (parameterize from plain
-coordinates via OpenMM's ``ForceField``).
+``python test/configs/check_validation.py <case>`` runs an example and
+compares the result with the expected value (:doc:`../testing`).
 
-.. grid:: 2
+.. list-table::
+   :header-rows: 1
+   :widths: 30 26 26 18
 
-    .. grid-item-card::  🧬  Protein-ligand batch (Amber)
-        :link: protein_ligand_3clpro
-        :link-type: doc
+   * - Example
+     - Input
+     - Mode
+     - Download
+   * - :doc:`protein_ligand_3clpro`
+     - Amber ``.prmtop``
+     - Native
+     - 9.1 GB
+   * - :doc:`namd_charmm`
+     - NAMD/CHARMM ``.psf``
+     - Native
+     - 321 MB
+   * - :doc:`ppi_gromacs`
+     - GROMACS ``.gro``
+     - Coordinate
+     - 2.8 GB
+   * - :doc:`rna_protein`
+     - Amber ``.prmtop``
+     - Native
+     - 44 MB
+   * - :doc:`dna_protein`
+     - multi-model PDB
+     - Coordinate
+     - 25 MB
+   * - :doc:`antibody_vrc01`
+     - NAMD/CHARMM ``.psf``
+     - Native
+     - 5.3 GB
 
-        Seven independent small-molecule inhibitors against one protease,
-        from real Amber topologies. Native Mode, the standard case.
-
-    .. grid-item-card::  🧵  Protein-peptide (NAMD/CHARMM)
-        :link: namd_charmm
-        :link-type: doc
-
-        A peptide-protein complex loaded directly from native NAMD
-        ``.psf``/CHARMM36 parameter files -- no topology reconstruction.
-
-    .. grid-item-card::  🤝  Protein-protein (GROMACS)
-        :link: ppi_gromacs
-        :link-type: doc
-
-        Two complexes with no topology provided at all -- built from
-        scratch via OpenMM's ``ForceField`` (Coordinate Mode) and split by
-        ``binding_mode: ppi`` chain selection instead of a ligand residue.
-
-    .. grid-item-card::  🧶  Protein-RNA (Amber-native)
-        :link: rna_protein
-        :link-type: doc
-
-        A protein bound to a 25-nucleotide RNA chain, using explicit
-        ``receptor_topology``/``ligand_topology`` split from one complex
-        prmtop.
-
-    .. grid-item-card::  🧬  Protein-DNA (GROMACS-derived)
-        :link: dna_protein
-        :link-type: doc
-
-        A protein bound to a 42-nucleotide DNA duplex, delivered as a
-        single multi-model PDB trajectory -- Coordinate Mode again, this
-        time on a nucleic acid.
+The protein-RNA example is the quickest to try: 44 MB and about a minute on a
+GPU.
 
 .. toctree::
    :hidden:
@@ -68,9 +65,7 @@ coordinates via OpenMM's ``ForceField``).
    ppi_gromacs
    rna_protein
    dna_protein
+   antibody_vrc01
 
-Before starting any of these, make sure OpenGBSA itself is installed and
-working -- see :doc:`../installation`. Each tutorial page links back to
-the corresponding ``test/configs/`` folder's own ``README.md``, which is
-the authoritative, most detailed version of these instructions and is
-kept in sync with the actual config files.
+Before starting, make sure OpenGBSA is installed and working
+(:doc:`../installation`).

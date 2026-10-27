@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opengbsa"
-version = "0.0.19"
+version = "0.0.20"
 description = "OpenGBSA - A comprehensive MM/GBSA analysis package with advanced features"
 readme = "README.md"
 license = {text = "MIT"}
@@ -61,6 +61,7 @@ dependencies = [
     "plotly>=5.0.0",
     "pyyaml>=6.0",
     "pathlib2>=2.3.0",
+    "parmed",
     "pooch>=1.7.0"
 ]
 

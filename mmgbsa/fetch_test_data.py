@@ -22,6 +22,15 @@ log = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def data_root():
+    """The folder whose test/data/ receives the fetched datasets: the source
+    checkout when OpenGBSA runs from one, otherwise the current directory (the
+    root of a cloned repository, next to a conda-installed package)."""
+    if (REPO_ROOT / "test" / "unit").is_dir():
+        return REPO_ROOT
+    return Path.cwd()
+
+
 def _get_manifest():
     from .test_data_manifest import TEST_DATA_RECORDS
     return TEST_DATA_RECORDS
@@ -46,6 +55,8 @@ def _build_pooch(record):
         path=pooch.os_cache("opengbsa") / record["name"],
         base_url=f"doi:{record['doi']}/",
         registry=registry,
+        # multi-GB archives: a dropped connection retries instead of failing
+        retry_if_failed=5,
     )
 
 
@@ -159,15 +170,23 @@ def fetch_all(only=None, force=False):
                         f"single named directory per archive."
                     )
                 extracted_root = untar_dir / next(iter(top_level_dirs))
-                link_target = REPO_ROOT / info["extract_to"] / extracted_root.name
+                link_target = data_root() / info["extract_to"] / extracted_root.name
                 link_target.parent.mkdir(parents=True, exist_ok=True)
-                if link_target.is_symlink() or link_target.exists():
-                    if link_target.is_symlink():
-                        link_target.unlink()
-                    else:
-                        log.warning(f"{link_target} already exists and is not a symlink -- "
-                                    f"leaving it as-is rather than overwriting real data.")
-                        continue
+                if link_target.is_dir() and not link_target.is_symlink():
+                    # A real folder, e.g. one whose topologies are tracked in the
+                    # repository: link only the files it does not have yet, so the
+                    # repository's own files are never replaced.
+                    added = 0
+                    for src in extracted_root.rglob("*"):
+                        dst = link_target / src.relative_to(extracted_root)
+                        if src.is_file() and not dst.exists() and not dst.is_symlink():
+                            dst.parent.mkdir(parents=True, exist_ok=True)
+                            dst.symlink_to(src)
+                            added += 1
+                    log.info(f"  {fname} -> {extracted_root} ({added} file(s) linked into {link_target})")
+                    continue
+                if link_target.is_symlink():
+                    link_target.unlink()
                 link_target.symlink_to(extracted_root, target_is_directory=True)
                 log.info(f"  {fname} -> {extracted_root} (linked at {link_target})")
             else:

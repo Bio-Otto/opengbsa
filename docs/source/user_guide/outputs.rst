@@ -1,76 +1,136 @@
-Outputs and Results
-===================
+Output files
+============
 
-OpenGBSA generates a comprehensive set of results in the specified output directory. This section details the file structure and provides guidelines on interpreting the data.
-
-Directory Structure
--------------------
+Every run writes its results to a new folder,
+``<output_directory>/analysis_<date>_<time>/`` (or
+``<DIR>/mmgbsa_analysis_<date>_<time>/`` with ``--output-dir DIR``), so runs
+never overwrite each other. The files below are those of the
+:doc:`../quickstart`, which uses the OBC2 model, the per-residue decomposition
+and the entropy estimate.
 
 .. code-block:: text
 
-    results/
-    ├── analysis_YYYYMMDD_HHMMSS/
-    │   ├── final_report.txt               # Executive summary text file
-    │   ├── mmgbsa_results.csv             # Time-series global energies (Total, VdW, Elec, etc.)
-    │   ├── interactive_report.html        # ⚡ The Main Interactive Dashboard
-    │   ├── mmgbsa.log                     # Detailed execution log
-    │   ├── figures/                       # Static PNG plots (High Resolution)
-    │   │   ├── binding_energy_plot.png
-    │   │   ├── energy_components.png
-    │   │   └── per_residue_decomposition.png
-    │   └── decompositions/                # (If enabled)
-    │       ├── per_residue_ligand.csv     # Ligand residue contributions (Energy vs Residue)
-    │       ├── per_residue_receptor.csv   # Receptor residue contributions
-    │       └── decomposition_summary.csv  # Mean/Std for each residue
+    analysis_<date>_<time>/
+    ├── fixed_enhanced_mmgbsa_results_obc2.csv          energies of every frame
+    ├── results_summary.yaml                            all results, machine-readable
+    ├── final_report.txt                                summary of the run
+    ├── mmgbsa_report.txt                               statistics of the binding enthalpy
+    ├── analysis_config.yaml                            the configuration as run
+    ├── energy_analysis.png                             binding enthalpy plots
+    │   (with run_per_residue_decomposition: true)
+    ├── per_residue_detailed.csv                        mean contribution of every receptor residue
+    ├── frame_by_frame_decomposition.csv                contribution of every residue in every frame
+    ├── frame_by_frame_decomposition_residue_summary.csv  column index of the file above
+    ├── binding_hot_spots.csv                           residues that contribute most
+    ├── decomposition_summary.csv                       sum and top residue
+    ├── per_residue_decomposition.png                   hot-spot plots
+    ├── per_residue_heatmap.png                         top residues frame by frame
+    ├── interactive_report.html                         all results in one web page
+    ├── hotspots.pdb, view_binding.pml                  PyMOL view coloured by contribution
+    └── temp_*.pdb                                      intermediate structures
 
-Interactive Report
+The binding enthalpy of every frame
+-----------------------------------
+
+``fixed_enhanced_mmgbsa_results_<gb model>.csv`` has one row per frame. All
+energies are in kcal/mol.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Column
+     - Meaning
+   * - ``frame``
+     - Index of the frame among the evaluated frames (from 0).
+   * - ``complex_energy``, ``protein_energy``, ``ligand_energy``
+     - Total energy of the complex, the receptor and the ligand.
+   * - ``binding_energy``
+     - :math:`\Delta H_\mathrm{bind}` = complex - receptor - ligand.
+   * - ``delta_vdw``, ``delta_elec``
+     - Van der Waals and electrostatic interaction energy in the gas phase.
+   * - ``delta_nb``
+     - Their sum.
+   * - ``delta_gb``
+     - Polar solvation (Generalized Born) part of the binding enthalpy.
+   * - ``delta_sa``
+     - Non-polar solvation (surface-area) part.
+   * - ``complex_nb``, ``complex_gb``, ``complex_sa``, ``complex_bond``, ``complex_angle``, ``complex_torsion``
+     - The terms of the complex.
+
+``binding_energy`` equals ``delta_vdw + delta_elec + delta_gb + delta_sa``. The
+bonded terms cancel because the receptor and ligand coordinates are taken from
+the complex (single-trajectory approach).
+
+Summaries
+---------
+
+``results_summary.yaml`` holds every result in machine-readable form. Under
+``mmgbsa``: ``mean_binding_energy``, ``std_dev`` (frame-to-frame standard
+deviation), ``std_error`` (standard error of the mean),
+``median_binding_energy``, ``min_binding_energy`` and ``max_binding_energy``,
+``n_frames``, ``bootstrap_results`` and ``convergence_check``, the
+platform (``platform_requested``, ``platform_used``, ``platform_fallback``)
+and, when an entropy estimate was made, ``entropy`` and ``delta_g``. Under
+``entropy``: the estimate of each method with the standard deviation of the
+interaction energy and the reliability flags. Read it in Python with:
+
+.. code-block:: python
+
+    import yaml
+    summary = yaml.safe_load(open("results_summary.yaml"))
+    print(summary["mmgbsa"]["mean_binding_energy"], summary["mmgbsa"]["std_error"])
+
+``final_report.txt`` repeats the configuration, the binding enthalpy and the
+entropy estimates in plain text. ``mmgbsa_report.txt`` adds the median, the
+range, a bootstrap 95% confidence interval of the mean and a convergence check
+that compares the first and second halves of the frames.
+``analysis_config.yaml`` is the configuration as it was run, with the defaults
+filled in.
+
+Per-residue decomposition
+-------------------------
+
+``per_residue_detailed.csv`` has one row per receptor residue with the mean
+over the decomposed frames and its standard deviation (``_std`` columns):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Column
+     - Meaning
+   * - ``residue_id``
+     - ``NAME_NUMBER_CHAIN``, for example ``PHE_111_0`` (chain as index).
+   * - ``vdw``, ``electrostatic``
+     - Gas-phase interaction of the residue with the ligand.
+   * - ``solvation``
+     - Polar (GB) solvation part of the residue.
+   * - ``nonpolar_solvation``
+     - Non-polar (surface-area) part of the residue.
+   * - ``total``
+     - ``vdw + electrostatic + solvation``.
+   * - ``n_frames``
+     - Number of decomposed frames.
+
+The contribution of a residue to the binding enthalpy is
+``total + nonpolar_solvation``. Negative values favour binding.
+``frame_by_frame_decomposition.csv`` gives the same terms for every frame, in
+columns named ``<NAME><NUMBER>_<CHAIN>_<term>``.
+``binding_hot_spots.csv`` lists the residues with the largest contributions,
+and ``decomposition_summary.csv`` gives their sum and the top residue.
+
+Plots and reports
+-----------------
+
+The plots, the interactive HTML report and the PyMOL view are shown in
+:doc:`visualization`.
+
+Intermediate files
 ------------------
 
-The ``interactive_report.html`` is the primary interface for exploring your results. It aggregates all data into a single, portable file.
-
-1.  **Summary Table**: Key statistics (Mean Binding Energy, Standard Deviation).
-2.  **Dynamic Plots**: Zoomable, pannable Plotly charts for time-series data.
-3.  **3D Structure**: An embedded NGLView/3Dmol viewer showing the complex with mapped binding hotspots.
-4.  **Residue Table**: A sortable, searchable table of per-residue energy components.
-
-Interpreting Results
---------------------
-
-Global Binding Free Energy
-~~~~~~~~~~~~~~~~~~~~~~~~~~
-The ``mmgbsa_results.csv`` file contains the time series of the binding free energy components.
-
-*   **Total Binding Energy (:math:`\Delta G_{bind}`)**:
-    *   **Negative Value**: Indicates favorable binding. The more negative, the stronger the affinity.
-    *   **Positive Value**: Indicates unfavorable binding (no affinity).
-*   **VDW vs Electrostatics**:
-    *   Hydrophobic binders are typically driven by :math:`\Delta E_{vdw}` and non-polar solvation (:math:`\Delta G_{SA}`).
-    *   Polar/Salt-bridge driven binders show strong favorable electrostatic energy (:math:`\Delta E_{elec}`), often partially offset by the penalty of desolvation (:math:`\Delta G_{GB}`).
-
-Per-Residue Decomposition
-~~~~~~~~~~~~~~~~~~~~~~~~~
-Decomposition analysis identifies which residues contribute most to binding.
-
-*   **Hotspots**: Residues with highly negative interaction energies (e.g., < -1.0 kcal/mol) are key binding determinants.
-*   **Interpret with Caution**: Decomposition energies are effective pairwise interactions and do not strictly sum to the total binding free energy due to the non-additive nature of the GB solvation term. They are best used qualitatively to identify important contacts.
-
-CSV Formats
------------
-
-**mmgbsa_results.csv**
-
-Columns correspond to energy terms per frame:
-
-   - ``delta_total``: Final binding free energy (~ :math:`\Delta H - T\Delta S`).
-   - ``delta_vdw``: Van der Waals contribution.
-   - ``delta_elec``: Electrostatic contribution.
-   - ``delta_gb``: Polar solvation (Generalized Born).
-   - ``delta_sa``: Non-polar solvation (Surface Area).
-
-**per_residue_*.csv**
-
-Matrix format where:
-
-   - **Rows**: Trajectory Frames.
-   - **Columns**: Residue IDs (e.g., ``ALA:12``).
-   - **Values**: Total interaction energy of that residue with the binding partner.
+``temp_from_traj.pdb`` (first frame), ``temp_from_prmtop.pdb`` and
+``temp_fixed_for_panda.pdb`` are structures that the run writes for the
+viewers; they can be deleted. A converted GROMACS topology is written next to
+the ``.top`` file, and a converted OpenMM System to ``openmm_system/`` in the
+results folder.

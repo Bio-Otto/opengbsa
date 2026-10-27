@@ -37,6 +37,30 @@ which converges much faster than IE but becomes unrealistically large when :math
 
 *   **Citation**: Ekberg, V., & Ryde, U. (2021). On the use of interaction entropy and related methods to estimate binding entropies. *Journal of Chemical Theory and Computation*, 17(8), 5379-5391.
 
+How reliable are these estimates?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+OpenGBSA reports the standard deviation :math:`\sigma` of the interaction
+energy with both estimates and marks an estimate as unreliable above its limit.
+In the 45 runs of the OpenGBSA paper :math:`\sigma` lay between 3.0 and 197
+kcal/mol. Only three small-molecule complexes were below the IE limit and five
+runs below the C2 limit; for antibody and nucleic-acid complexes both estimates
+reached hundreds to tens of thousands of kcal/mol. OpenGBSA's values agree with
+those of gmx_MMPBSA's routines on the same energies to within 0.24 kcal/mol.
+
+.. figure:: ../_static/figures/entropy_reliability.png
+   :width: 90%
+   :align: center
+   :alt: Entropy estimates against the standard deviation of the interaction energy
+
+   :math:`-T\Delta S` by interaction entropy and C2 against :math:`\sigma` of
+   the interaction energy, for the 45 validation and application runs of the
+   OpenGBSA paper (log scales). The dashed lines are the reliability limits of
+   Ekberg and Ryde (2021).
+
+For most protein-protein and protein-nucleic acid complexes the binding
+enthalpy is therefore the more useful quantity.
+
 2. Quasi-Harmonic Analysis (QHA)
 --------------------------------
 
@@ -54,6 +78,13 @@ It diagonalizes the mass-weighted covariance matrix of atomic fluctuations. The 
 *   **Cons**:
     *   **Sampling**: Requires that the simulation is long enough to sample the relevant phase space. If the trajectory is too short (fewer frames than degrees of freedom), the entropy will be underestimated.
 *   **Citation**: Karplus, M., & Kushick, J. N. (1981). Method for estimating the configurational entropy of macromolecules. *Macromolecules*, 14(2), 325-332.
+*   **In OpenGBSA** (``entropy_method: quasiharmonic``): the absolute
+    entropy of the ligand over the evaluated frames. With
+    ``qha_analyze_complex: true`` the receptor and the complex are analysed as
+    well, and the binding entropy :math:`T\Delta S = TS_\mathrm{complex} -
+    TS_\mathrm{receptor} - TS_\mathrm{ligand}` is added to
+    :math:`\Delta G`. The quasi-harmonic estimate has not been compared with
+    Amber's implementation.
 
 3. Normal Mode Analysis (NMode)
 -------------------------------
@@ -72,3 +103,8 @@ The system is first minimized to a local energy minimum. The Hessian matrix (sec
 *   **Cons**:
     *   **Expensive**: Minimization and Hessian diagonalization for large systems is extremely slow.
     *   **Approximation**: The harmonic approximation may effectively fail for highly flexible biomolecules.
+*   **In OpenGBSA** (``entropy_method: normal_mode`` with
+    ``run_entropy_analysis: true``): the vibrational entropy of the
+    ligand, minimised and parameterised from ``ligand_mol``. It is reported
+    but not added to :math:`\Delta G`, and it has not been compared with
+    Amber's implementation.

@@ -166,15 +166,16 @@ def test_validate_analysis_settings_injects_defaults_for_missing_optional_params
     assert settings["max_frames"] == 50
 
 
-def test_validate_analysis_settings_missing_gb_model_is_an_error(tmp_path, existing_files):
-    # gb_model has no injected default (unlike temperature/salt/max_frames).
+def test_validate_analysis_settings_missing_gb_model_defaults_to_obc2(tmp_path, existing_files):
+    # Since 0.0.20 gb_model is injected like temperature/salt/max_frames: every
+    # code path already defaulted to OBC2, only validation refused the omission.
     complex_pdb, trajectory = existing_files
     mgr = ConfigManager()
     cfg = make_valid_config(tmp_path, complex_pdb, trajectory)
     del cfg["analysis_settings"]["gb_model"]
     mgr.config = cfg
-    assert mgr.validate_config() is False
-    assert any("gb_model" in e for e in mgr.get_validation_errors())
+    assert mgr.validate_config() is True
+    assert mgr.config["analysis_settings"]["gb_model"] == "OBC2"
 
 
 @pytest.mark.parametrize("gb_model", ["OBC1", "OBC2", "HCT", "GBn", "GBn2"])

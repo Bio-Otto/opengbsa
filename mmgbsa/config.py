@@ -69,8 +69,12 @@ class ConfigManager:
     def _normalize_config(self):
         """
         Normalize configuration to standard format.
-        Handles legacy 'input' section alias to 'input_files'.
+        Handles legacy 'input' section alias to 'input_files', and turns a
+        section left empty in YAML (which loads as null) into an empty section.
         """
+        for section, value in list(self.config.items()):
+            if value is None and section.endswith(('_files', '_settings', 'params')):
+                self.config[section] = {}
         if 'input_files' not in self.config and 'input' in self.config:
             logger.info("Normalizing legacy 'input' section to 'input_files'")
             inp = self.config['input']
@@ -154,6 +158,7 @@ class ConfigManager:
                 # Inject defaults for common parameters instead of failing
                 defaults = {
                     'temperature': 300.0,
+                    'gb_model': 'OBC2',
                     'salt_concentration': 0.15,
                     'max_frames': 50
                 }
@@ -172,8 +177,21 @@ class ConfigManager:
                 
             param_type, min_val, max_val = validation_rule
             
+            if param_type is float and isinstance(value, int) and not isinstance(value, bool):
+                value = float(value)   # 300 means 300.0
+                self.config['analysis_settings'][param] = value
             if not self._validate_parameter(param, value, param_type, min_val, max_val):
                 self.validation_errors.append(f"Invalid parameter value: {param} = {value}")
+
+        # Options that select a code path: an unknown value would otherwise be ignored
+        # or fail only later in the run
+        for param, allowed in (('frame_selection', ['sequential', 'equidistant', 'random']),
+                               ('entropy_method', ['none', 'interaction', 'c2', 'quasiharmonic',
+                                                   'normal_mode', 'nmode']),
+                               ('decomposition_method', ['full', 'fast'])):
+            value = settings.get(param)
+            if value is not None and value not in allowed:
+                self.validation_errors.append(f"Invalid {param} '{value}'. Must be one of: {allowed}")
         
         # Validate gb_radii_set ('auto': an Amber .prmtop keeps its own radii)
         valid_radii_sets = ['auto', 'mbondi', 'mbondi2', 'mbondi3', 'bondi']
@@ -289,319 +307,210 @@ class ConfigManager:
     
     def create_default_config(self, output_path: str) -> bool:
         """
-        Create default configuration file.
-        
+        Create a short, commented configuration file with the settings most
+        runs need (`opengbsa --create-config`).
+
         Args:
             output_path: Path to save configuration file
-            
+
         Returns:
             True if successful, False otherwise
         """
-        default_config = {
-            'input_files': {
-                'ligand_mol': 'path/to/ligand.sdf',
-                'complex_pdb': 'path/to/complex.pdb',
-                'ligand_pdb': 'path/to/ligand.pdb',
-                'trajectory': 'path/to/trajectory.xtc'
-            },
-            'analysis_settings': {
-                'temperature': 300.0,
-                'gb_model': 'OBC2',
-                'salt_concentration': 0.15,
-                'max_frames': 50,
-                'frame_start': None,
-                'frame_end': None,
-                'frame_stride': None,
-                'frame_selection': 'sequential',
-                'random_seed': None,
-                'run_entropy_analysis': False,
-                'run_per_residue_decomposition': True,
-                'decomp_frames': 10,
-                'energy_decomposition': False,
-                'use_cache': True,
-                'parallel_processing': True,
-                'use_gpu': False,
-                'gpu_platform': None,
-                'reimage_trajectory': True
-            }
-        }
-        
+        default_config_yaml = """# OpenGBSA configuration (opengbsa --create-config).
+# Run it with:  opengbsa mmgbsa_config.yaml
+# Every option is listed with --create-complete-config and explained at
+# https://opengbsa.readthedocs.io/
+
+input_files:
+  # Native Mode: the topology used for the MD simulation (.prmtop, .top, .tpr,
+  # .psf or a serialised OpenMM system .xml with a .pdb of the same name).
+  # Coordinate Mode: a .pdb of the complex; OpenGBSA then builds the topology.
+  complex_pdb: path/to/complex.prmtop
+  trajectory: path/to/trajectory.xtc
+  # Coordinate Mode only: the small-molecule ligand with bond orders and charges.
+  # ligand_mol: path/to/ligand.sdf
+  # Native Mode, optional: separate receptor and ligand topologies.
+  # receptor_topology: path/to/receptor.prmtop
+  # ligand_topology: path/to/ligand.prmtop
+  # Topology of the atoms in the trajectory, if it still contains solvent.
+  # solvated_topology: path/to/complex_solvated.gro
+
+output_settings:
+  output_directory: mmgbsa_results
+
+analysis_settings:
+  gb_model: OBC2              # OBC2, OBC1, HCT, GBn or GBn2
+  salt_concentration: 0.15    # M
+  temperature: 300.0          # K
+  max_frames: 50
+  frame_start: null           # first frame (0-based); null = start
+  frame_end: null             # end frame (exclusive); null = last
+  frame_stride: null          # every Nth frame; null = 1
+  run_per_residue_decomposition: false
+  decomp_frames: 10
+  run_entropy_analysis: false
+  entropy_method: interaction # interaction or c2
+  amber_compatible: false     # true = reproduce Amber MMPBSA.py's conventions
+"""
+
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
-                yaml.dump(default_config, f, default_flow_style=False, indent=2)
-            
+                f.write(default_config_yaml)
+
             logger.info(f"Default configuration created: {output_path}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error creating default configuration: {e}")
             return False
-    
+
     def create_complete_config(self, output_path: str) -> bool:
         """
-        Create complete configuration file with all options and explanations.
-        
+        Create a configuration file with every option the analysis reads, its
+        default and its meaning (`opengbsa --create-complete-config`).
+
         Args:
             output_path: Path to save configuration file
-            
+
         Returns:
             True if successful, False otherwise
         """
-        complete_config_yaml = """# OpenGBSA Complete Configuration File
-# This file contains all available settings with explanations and alternative options.
+        complete_config_yaml = """# OpenGBSA complete configuration (opengbsa --create-complete-config).
+# Every option the analysis reads, set to its default. Delete what you do not
+# need: an option that is left out takes the value shown here.
+# Reference: https://opengbsa.readthedocs.io/
 
+# ---------------------------------------------------------------- input files
 input_files:
-  # Path to the ligand file (SDF format is highly recommended over PDB for preserving bond orders and formal charges)
-  ligand_mol: 'test/ligand.sdf'
-  
-  # Path to the complex PDB file (receptor + ligand)
-  complex_pdb: 'test/complex.pdb'
-  
-  # Path to the ligand-only PDB file
-  ligand_pdb: 'test/ligand.pdb'
-  
-  # Path to the MD trajectory file (XTC, DCD, TRR, etc.)
-  trajectory: 'test/complex.xtc'
-  
-  # Optional: Explicit Gromacs/Amber topology files (leave commented if using PDB)
-  # receptor_topology: 'path/to/receptor.top'
-  # ligand_topology: 'path/to/ligand.top'
-  # solvated_topology: 'path/to/complex_solvated.top'
+  # Native Mode (the topology of the MD simulation is read as is):
+  #   Amber .prmtop, GROMACS .top (with a .gro of the same folder) or .tpr,
+  #   CHARMM/NAMD .psf (needs forcefield_settings.charmm_params), or a
+  #   serialised OpenMM System .xml with a .pdb of the same name next to it.
+  # Coordinate Mode (OpenGBSA builds the topology from a force field):
+  #   .pdb or .gro of the complex, plus ligand_mol for a small-molecule ligand.
+  complex_pdb: path/to/complex.prmtop
 
+  # MD trajectory (.xtc, .trr, .dcd, .nc, .trj, multi-model .pdb, ...).
+  trajectory: path/to/trajectory.xtc
+
+  # Topology of the atoms in the trajectory when it still contains water and
+  # ions (for example the solvated .gro or .prmtop). Not needed for a dry
+  # trajectory.
+  solvated_topology: null
+
+  # Native Mode, Amber only: receptor and ligand topologies written with the
+  # complex. Their atom counts define the receptor and the ligand.
+  receptor_topology: null
+  ligand_topology: null
+
+  # Coordinate Mode: the small-molecule ligand (.sdf, or .mol2), with bond
+  # orders and partial charges. Parameterised with OpenFF.
+  ligand_mol: null
+
+  # Optional ligand-only .pdb; used only to check the ligand residue names.
+  ligand_pdb: null
+
+  # Residue name shown in the ligand box of the interactive 3D viewer.
+  ligand_resname: null
+
+# ---------------------------------------------------------------- output
 output_settings:
-  # Main directory where all analysis results will be saved
-  output_directory: 'mmgbsa_results'
-  
-  # Name of this specific analysis run (used for subdirectories)
-  analysis_name: 'sample_analysis'
-  
-  # Output formats to save results in
-  output_formats: ['csv', 'txt', 'yaml']
-  
-  # Enable saving plots automatically
-  save_plots: true
-  
-  # Formats for saving plots
-  plot_formats: ['png', 'pdf']
-  
-  # Save intermediate generated files (useful for debugging, takes more space)
-  save_intermediate: false
-  
-  # Save aligned/processed trajectories
-  save_trajectories: false
-  
-  # Save detailed log files
-  save_logs: true
-  
-  # Compress large output files automatically
-  compress_output: false
+  # Each run writes <output_directory>/analysis_<date>_<time>/.
+  # opengbsa --output-dir DIR overrides this.
+  output_directory: mmgbsa_results
 
+# ---------------------------------------------------------------- analysis
 analysis_settings:
-  # === Core Execution Settings ===
-  
-  # Analytical binding mode. Options:
-  # - 'standard': Standard Receptor-Ligand binding.
-  # - 'dimer_ligand': Dimer-Ligand binding (Ligand is extracted from dimer interface).
-  # - 'ppi': Protein-Protein Interaction (Treats one protein chain as the ligand).
-  binding_mode: 'standard'
-  
-  # Temperature in Kelvin for calculations
-  temperature: 310.0
-  
-  # Generalized Born (GB) model for solvation free energy. Options:
-  # - 'OBC2' (Default, recommended for proteins)
-  # - 'OBC1' 
-  # - 'HCT'
-  # - 'GBn'
-  # - 'GBn2'
-  gb_model: 'OBC2'
-  
-  # Salt concentration in Molar (M) for the implicit solvent model
-  salt_concentration: 0.15
+  # --- receptor and ligand ---
+  # standard: receptor = everything but the ligand, ligand found automatically
+  #   (receptor_topology atom count, else residue LIG/UNL/UNK/DRUG/MOL, else the
+  #   smallest non-solvent residue). ppi: receptor = chainid 0, ligand = chainid 1.
+  # dimer_ligand: same as standard.
+  binding_mode: standard
+  # MDTraj selections; they override binding_mode, e.g. "chainid 1".
+  receptor_selection: null
+  ligand_selection: null
 
-  # Non-polar (surface-area) model: 'LCPO' (default; MMPBSA.py's GB default,
-  # gamma 0.0072 kcal/mol/A^2, offset 0) or 'ACE' (OpenMM's default).
-  sa_model: 'LCPO'
-
-  # LCPO parameter assignment: 'element' (default; by element and bonding, as in
-  # OpenMM) or 'amber' (by atom-type name, as Amber MMPBSA.py does; differs for
-  # non-Amber types such as CHARMM or GAFF). amber_compatible sets 'amber'.
-  lcpo_typing: null
-
-  # Reproduce Amber MMPBSA.py's GB conventions: LCPO with Amber's atom typing,
-  # effective Born radii only within rgbmax = 25 A, and MMPBSA.py's solvent
-  # dielectric (80.0 for CHARMM/chamber topologies, which it evaluates with
-  # sander; 78.3 otherwise, NAB). Off by default: OpenGBSA then evaluates every
-  # pair at dielectric 78.5 and assigns LCPO parameters by element.
+  # --- solvation model ---
+  gb_model: OBC2               # OBC2, OBC1, HCT, GBn, GBn2
+  gb_radii_set: auto           # auto, mbondi, mbondi2, mbondi3, bondi
+  salt_concentration: 0.15     # M, Debye-Hueckel screening
+  temperature: 300.0           # K
+  solute_dielectric: 1.0
+  solvent_dielectric: null     # null = 78.5 (MMPBSA.py's value with amber_compatible)
+  sa_model: LCPO               # non-polar term: LCPO or ACE
+  lcpo_typing: null            # element (default) or amber
+  rgbmax: null                 # Born-radius cutoff in A; null = every atom pair
+  nonbonded_cutoff: null       # A; null (or >= 999) = no cutoff
+  # true = Amber MMPBSA.py's conventions: rgbmax 25 A, MMPBSA.py's solvent
+  # dielectric and LCPO with Amber's atom typing.
   amber_compatible: false
 
-  # Born-radius cutoff in A (Amber's rgbmax): only atoms within this distance
-  # descreen an atom. null = every pair (default); amber_compatible sets 25.
-  # Unlike nonbonded_cutoff it leaves the energy terms uncut.
-  rgbmax: null
-
-  # === Frame Selection Strategy ===
-  
-  # Maximum number of frames to process
-  max_frames: 100
-  
-  # Starting frame index (0-indexed). If null, starts from the beginning.
-  frame_start: null
-  
-  # Ending frame index. If null, goes to the end of the trajectory.
-  frame_end: null
-  
-  # Stride (step size) between frames. Use 1 for every frame, 10 for every 10th frame.
-  frame_stride: null
-  
-  # How to select frames if the trajectory has more than max_frames. Options:
-  # - 'sequential': Selects frames evenly spaced across the trajectory.
-  # - 'random': Selects frames randomly (requires random_seed).
-  frame_selection: 'sequential'
-  
-  # Random seed for reproducible random frame selection. Used only if frame_selection is 'random'.
+  # --- frames ---
+  frame_start: null            # 0-based; null = first frame
+  frame_end: null              # exclusive; null = last frame
+  frame_stride: null           # null = 1
+  max_frames: 50               # null = every selected frame
+  # sequential: the first max_frames frames of the range after striding;
+  # equidistant: max_frames frames spread evenly over the range;
+  # random: max_frames random frames (random_seed).
+  frame_selection: sequential
   random_seed: 42
+  reimage_trajectory: true     # make molecules whole across periodic boundaries
 
-  # Re-image molecules across periodic boundaries (PBC re-wrapping) before
-  # computing any energy. A raw MD trajectory has no guarantee a molecule
-  # stays whole/centered from frame to frame -- if the protein or ligand
-  # drifts and wraps to the opposite side of the periodic box mid-trajectory,
-  # downstream vdW/electrostatic energies are silently corrupted even though
-  # the true physics hasn't changed. True/False. Default true. Only disable
-  # if the input trajectory is already known to be correctly imaged (e.g.
-  # already processed with cpptraj `autoimage` or an equivalent tool) --
-  # re-imaging an already-imaged trajectory is a harmless no-op but still
-  # costs time, so this lets you skip it in that specific case.
-  reimage_trajectory: true
+  # --- per-residue decomposition ---
+  run_per_residue_decomposition: false
+  decomp_frames: 10            # frames used; must not exceed max_frames
+  report_raw_energies: false   # also write complex/receptor/ligand energies
+  plot_top_residues: 10        # residues shown in the hot-spot plots
 
-  # === Advanced Analysis Options ===
-  
-  # Calculate entropy (-TdS). True/False. entropy_method selects the estimate:
-  # 'interaction' (interaction entropy, default) or 'c2' (second-order
-  # cumulant), both from the fluctuation of the gas-phase interaction energy.
-  # Both are reported with its standard deviation; IE is unreliable above
-  # 3.6 kcal/mol and C2 above 6.0 kcal/mol (Ekberg & Ryde 2021).
-  run_entropy_analysis: true
-  entropy_method: 'interaction'
-  
-  # Perform per-residue energy decomposition. True/False.
-  run_per_residue_decomposition: true
-  
-  # Number of frames to use for per-residue decomposition. Must be <= max_frames.
-  decomp_frames: 20
-  
-  # Enable pairwise energy decomposition (Residue-Residue interaction matrix). True/False.
-  energy_decomposition: true
-  
-  # Save frame-by-frame decomposition energies to CSV
-  save_frame_by_frame_csv: true
-  
-  # Filename for the frame-by-frame CSV
-  frame_by_frame_csv_name: "frame_by_frame_decomposition"
-  
-  # Include overall residue averages in the output summaries
-  include_residue_summary: true
-  
-  # Components to output in the frame-by-frame file
-  frame_output_components: ['vdw', 'electrostatic', 'solvation', 'total']
-  
-  # Format for detailed decomposition outputs (csv, json, hdf5)
-  frame_output_format: 'csv'
+  # --- entropy (-TdS) ---
+  # interaction (interaction entropy) or c2 (second-order cumulant), both from
+  # the fluctuation of the gas-phase interaction energy; reported with its
+  # standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol).
+  # quasiharmonic: ligand quasi-harmonic entropy (qha_analyze_complex: true
+  # adds receptor and complex to give a binding entropy).
+  run_entropy_analysis: false
+  entropy_method: interaction
+  qha_analyze_complex: false
 
-  # === Hardware & Performance ===
-  
-  # Cache intermediate topologies and calculations to speed up re-runs. True/False.
-  use_cache: true
-  
-  # Use Python multiprocessing to calculate frames in parallel (CPU only). True/False.
-  parallel_processing: true
-  
-  # Maximum number of parallel workers (leave null for auto-detect based on CPU cores)
-  max_workers: null
+  # --- execution ---
+  max_workers: null            # CPU worker processes; null = min(cores - 1, 4)
+  print_interval: 10           # progress line every N frames
 
+# ---------------------------------------------------------------- force field
 forcefield_settings:
-  # Protein forcefield to use for parameterization
-  protein_forcefield: 'amber14-all.xml'
-
-  # Specific variant of the protein forcefield (optional)
-  protein_variant: null
-
-  # Ligand parameterization forcefield
-  ligand_forcefield: 'openff-2.1.0.offxml'
-
-  # CHARMM parameter file(s) (.prm/.str/.rtf), required ONLY when
-  # input.topology is a NAMD/CHARMM .psf file -- a PSF has no embedded
-  # force-field parameters (unlike Amber's prmtop), so they must be
-  # supplied separately. Accepts a single path or a list of paths, e.g.
-  # ['par_all36m_prot.prm', 'toppar_water_ions_prot.str']. Ignored for
-  # Amber/GROMACS/generic-PDB topologies.
+  # Coordinate Mode only: amber (ff14SB, default), amber14 (amber14-all),
+  # charmm or charmm_gromacs (CHARMM36).
+  protein_forcefield: amber
+  # CHARMM/NAMD .psf input: parameter files (.prm, .str, .rtf), one path or a list.
   charmm_params: null
-
-  # Companion coordinate file (.pdb/.coor/.crd) for a NAMD/CHARMM .psf
-  # topology -- a PSF carries no atomic positions of its own (unlike
-  # Amber's prmtop+inpcrd pairing), so this is required to get a
-  # physically real starting structure rather than an all-zeros
-  # placeholder. Ignored for Amber/GROMACS/generic-PDB topologies.
+  # CHARMM/NAMD .psf input: coordinates (.pdb, .coor, .crd) if no
+  # solvated_topology is given.
   charmm_coordinates: null
-  
-  # Water model to use
-  water_model: null
-  
-  # Ion parameters to use
-  ion_forcefield: null
+
+# ---------------------------------------------------------------- hardware
+platform_settings:
+  # null = automatic (CUDA, then OpenCL, then CPU). Or CUDA, OpenCL, CPU,
+  # Reference. Select a GPU with the environment variable CUDA_VISIBLE_DEVICES.
+  preferred_platform: null
+  # Platform for the per-residue decomposition; null = same as above.
+  decomposition_platform: null
+  # true = stop with an error instead of falling back to another platform.
+  strict_platform: false
 
 advanced_settings:
-  # Tolerance for OpenMM energy minimization
-  minimization_tolerance: 1.0e-06
-  
-  # Maximum steps for energy minimization before analysis
-  max_minimization_steps: 10000
-  
-  # Normal Mode Analysis quality threshold
-  nma_quality_threshold: 'Good'
-  
-  # Hot spot interaction energy threshold (kcal/mol). Residues below this are flagged as hot spots.
-  hot_spot_threshold: -1.0
-  
-  # Bootstrap confidence interval (e.g. 0.95 for 95%)
-  bootstrap_confidence: 0.95
-  
-  # Number of bootstrap samples for error estimation
-  bootstrap_samples: 1000
+  # Worker processes for a per-residue decomposition on the CPU; -1 = all cores.
+  n_jobs: -1
 
-platform_settings:
-  # Preferred OpenMM platform. Options: 'CUDA', 'OpenCL', 'CPU', 'Reference'
-  preferred_platform: 'CUDA'
-
-  # If the preferred platform cannot be used (no GPU, or a CUDA runtime newer
-  # than the driver supports), OpenGBSA warns, runs on the next usable platform
-  # and records both in results_summary.yaml. Set true to stop with an error.
-  strict_platform: false
-  
-  # CUDA device index to use if platform is CUDA
-  cuda_device: 0
-  
-  # Precision for CUDA calculations. Options: 'single', 'mixed', 'double'
-  cuda_precision: 'mixed'
-
+# ---------------------------------------------------------------- HTML report
 reporting_settings:
-  # Generate a comprehensive final report
-  generate_final_report: true
-  
-  # Automatically generate result plots
-  include_plots: true
-  
-  # Include summary of configuration in the final report
-  include_config_summary: true
-
-reproducibility_settings:
-  # Save a copy of the configuration next to the results
-  save_configuration: true
-  
-  # Save environment info to track Python/package versions
-  save_environment: true
+  include_all_plots: true      # energy time series and distributions
+  export_format: png           # format of the plot export button
+  export_width: 4200
+  export_height: 2800
 """
-        
+
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 f.write(complete_config_yaml)

@@ -64,3 +64,41 @@ def test_explicit_platform_name_overrides_preference():
     c = calc(platform_preference="NoSuchPlatform")
     platform, _ = select(c, platform_name="CPU")
     assert platform.getName() == "CPU" and c.platform_fallback is None
+
+
+def test_gpu_probe_compiles_a_kernel_no_cache_holds(monkeypatch):
+    """OpenMM caches compiled GPU kernels by source in a shared temporary
+    directory. A probe made only of common kernels passed on another
+    environment's cached code while this environment's CUDA runtime built code
+    the driver could not load (CUDA_ERROR_UNSUPPORTED_PTX_VERSION in the run
+    itself). The GPU probe must contain a force whose kernel source differs on
+    every call, and must evaluate it."""
+    import mmgbsa.mmgbsa_core as core
+
+    probed = []
+    real_context = core.openmm.Context
+
+    class Recorder:
+        def __init__(self, system, integrator, platform, props):
+            forces = [system.getForce(i) for i in range(system.getNumForces())]
+            probed.append((platform.getName(), [f.getEnergyFunction() for f in forces
+                                                if isinstance(f, openmm.CustomExternalForce)]))
+            self._ctx = real_context(system, integrator, openmm.Platform.getPlatformByName("Reference"))
+
+        def setPositions(self, positions):
+            self._ctx.setPositions(positions)
+
+        def getState(self, **kw):
+            probed[-1] = probed[-1] + (True,)
+            return self._ctx.getState(**kw)
+
+    monkeypatch.setattr(core.openmm, "Context", Recorder)
+    for _ in range(2):
+        select(calc(platform_preference="CUDA"))
+
+    gpu = [p for p in probed if p[0] == "CUDA"]
+    if not gpu:
+        pytest.skip("this OpenMM build has no CUDA platform")
+    expressions = [e for _, energy_functions, *_ in gpu for e in energy_functions]
+    assert len(expressions) == 2 and expressions[0] != expressions[1]
+    assert all(p[-1] is True for p in gpu), "the probe must evaluate the force"

@@ -74,6 +74,7 @@ Complete Advanced MM/GBSA Calculator with GBSA Force Implementation
 Fixed version that properly handles force exceptions to avoid OpenMM errors
 """
 import os
+import random
 import pickle
 import time
 import multiprocessing as mp
@@ -3417,8 +3418,19 @@ class GBSACalculator(GBSAForceManager):
                 plat = openmm.Platform.getPlatformByName(name)
                 test_system = openmm.System()
                 test_system.addParticle(1.0)
+                if name in ('CUDA', 'OpenCL'):
+                    # OpenMM caches compiled GPU kernels by source in a shared temporary
+                    # directory, so a probe made only of common kernels can pass on code
+                    # another environment compiled, even when this environment's CUDA
+                    # runtime builds code the driver cannot load. A force whose kernel
+                    # source is unique to this probe has to be compiled here.
+                    probe = openmm.CustomExternalForce(f"{1 + random.random():.17g}*x")
+                    probe.addParticle(0, [])
+                    test_system.addForce(probe)
                 test_integrator = openmm.VerletIntegrator(0.001 * unit.picoseconds)
                 _ctx = openmm.Context(test_system, test_integrator, plat, props)
+                _ctx.setPositions([openmm.Vec3(0.0, 0.0, 0.0)] * unit.nanometers)
+                _ctx.getState(getEnergy=True)
                 del _ctx
                 del test_integrator
                 return plat
@@ -4392,6 +4404,13 @@ class GBSACalculator(GBSAForceManager):
                                if i not in set(ligand_indices)]
             log.info(f"Using explicit ligand/receptor atom indices ({len(ligand_indices)} ligand, "
                      f"{len(protein_indices)} receptor) from receptor_topology's atom count.")
+            # a one-residue ligand keeps its name for the 3D view of the HTML report
+            all_atoms = list(complex_top.atoms() if callable(getattr(complex_top, 'atoms', None))
+                             else complex_top.atoms)
+            lig_set = set(ligand_indices)
+            names = {all_atoms[i].residue.name for i in lig_set if i < len(all_atoms)}
+            if len(names) == 1:
+                self.report_ligand_resname = names.pop()
         else:
             ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
             protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
@@ -5229,7 +5248,10 @@ class GBSACalculator(GBSAForceManager):
 
         # Generate Interactive HTML Report (New Method)
         if output_dir:
-            self.generate_detailed_report(results, output_dir, ligand_resname=ligand_resname, complex_pdb=complex_pdb)
+            self.generate_detailed_report(
+                results, output_dir,
+                ligand_resname=ligand_resname or getattr(self, 'report_ligand_resname', None) or 'LIG',
+                complex_pdb=complex_pdb)
 
         return results
 

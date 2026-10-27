@@ -1,113 +1,135 @@
-MM/GBSA Theory
-==============
+MM/GBSA
+=======
 
-Molecular Mechanics / Generalized Born Surface Area (MM/GBSA) is a powerful and widely used method for estimating the relative binding free energies of biomolecular complexes. It balances computational efficiency with accuracy by combining molecular mechanics energies, continuum solvation models, and entropy estimates.
+MM/GBSA (molecular mechanics with Generalized Born and surface-area
+solvation) estimates the binding free energy of a receptor and a ligand from
+MD snapshots. It evaluates only the end states, the complex and the separated
+receptor and ligand, which makes it much cheaper than alchemical free-energy
+methods and more accurate than docking scores (Genheden and Ryde 2015).
 
-OpenGBSA leverages the high-performance OpenMM engine to calculate these terms rapidly on modern hardware.
-
-Thermodynamic Cycle
--------------------
-
-The binding free energy (:math:`\Delta G_{bind}`) is defined as the difference between the free energy of the complex (:math:`G_{complex}`) and the sum of the free energies of the unbound receptor (:math:`G_{receptor}`) and ligand (:math:`G_{ligand}`):
-
-.. math::
-   :label: binding_energy
-
-   \Delta G_{bind} = G_{complex} - (G_{receptor} + G_{ligand})
-
-Since calculating absolute free energies is computationally prohibitive, MM/GBSA employs a thermodynamic cycle. The calculations are typically performed on an ensemble of snapshots extracted from a Molecular Dynamics (MD) trajectory.
-
-The free energy of each state (:math:`G`) is estimated as:
+The thermodynamic cycle
+-----------------------
 
 .. math::
-   :label: free_energy_decomp
 
-   G = E_{MM} + G_{solv} - T\Delta S
+   \Delta G_\mathrm{bind} = G_\mathrm{complex} - \left( G_\mathrm{receptor} + G_\mathrm{ligand} \right)
 
-Where:
-   - :math:`E_{MM}` is the gas-phase molecular mechanics energy.
-   - :math:`G_{solv}` is the solvation free energy.
-   - :math:`T\Delta S` is the conformational entropy contribution.
-
-Combining these, the binding free energy is approximated as:
+Each free energy is an average over snapshots and, for one snapshot, is
+approximated as
 
 .. math::
-   :label: mmgbsa_equation
 
-   \Delta G_{bind} \approx \Delta E_{MM} + \Delta G_{solv} - T\Delta S
+   G = E_\mathrm{MM} + G_\mathrm{solv} - TS
 
-Energy Components
+where :math:`E_\mathrm{MM}` is the gas-phase molecular mechanics energy
+(bonded, van der Waals and electrostatic terms), :math:`G_\mathrm{solv}` the
+solvation free energy and :math:`-TS` the entropy contribution.
+
+.. figure:: ../_static/figures/thermodynamic_cycle.png
+   :width: 90%
+   :align: center
+   :alt: Thermodynamic cycle of MM/GBSA
+
+   Binding in water is computed as binding in the gas phase plus the change of
+   solvation free energy.
+
+Single trajectory
 -----------------
 
-Molecular Mechanics Energy (:math:`E_{MM}`)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The molecular mechanics energy represents the enthalpy of the system in the gas phase. It is the sum of bonded and non-bonded interactions:
-
-.. math::
-   :label: emm_components
-
-   E_{MM} = E_{bonded} + E_{elec} + E_{vdw}
-
-1. **Bonded Interactions** (:math:`E_{bonded}`):
-   Includes bond stretching, angle bending, and torsional (dihedral) terms. In the "single trajectory" approach (where receptor and ligand snapshots are extracted from the complex trajectory), :math:`\Delta E_{bonded}` is often assumed to be zero, as the internal geometries are identical. However, OpenGBSA calculates this explicitly to support multiple-trajectory protocols.
-
-2. **Electrostatic Interactions** (:math:`E_{elec}`):
-   Calculated using Coulomb's law. In MM/GBSA, this represents the gas-phase electrostatic energy (usually with no cutoff or a very large cutoff, as PME is not used in the implicit solvent post-processing).
-
-   .. math::
-
-      E_{elec} = \sum_{i<j} \frac{q_i q_j}{4\pi \epsilon_0 r_{ij}}
-
-3. **Van der Waals Interactions** (:math:`E_{vdw}`):
-   Modeled using the Lennard-Jones 12-6 potential, capturing steric repulsion and dispersion attraction.
-
-   .. math::
-
-      E_{vdw} = \sum_{i<j} 4\epsilon_{ij} \left[ \left(\frac{\sigma_{ij}}{r_{ij}}\right)^{12} - \left(\frac{\sigma_{ij}}{r_{ij}}\right)^{6} \right]
-
-Solvation Free Energy (:math:`G_{solv}`)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The solvation energy is the energy required to transfer the solute from the gas phase to the solvent. It is decomposed into polar and non-polar parts:
+OpenGBSA takes the receptor and ligand coordinates from the frames of the
+complex trajectory. The bonded terms of the complex then equal those of the
+receptor and the ligand and cancel exactly, and the binding enthalpy of a frame
+is
 
 .. math::
-   :label: g_solv
 
-   G_{solv} = G_{polar} + G_{nonpolar}
+   \Delta H_\mathrm{bind} = \Delta E_\mathrm{vdW} + \Delta E_\mathrm{elec}
+   + \Delta G_\mathrm{GB} + \Delta G_\mathrm{SA}
 
-1. **Polar Solvation** (:math:`G_{polar}`):
-   This term accounts for the electrostatic interaction between the solute and the implicit solvent. In MM/GBSA, this is solved using the **Generalized Born (GB)** equation, which is an analytical approximation to the Poisson-Boltzmann (PB) equation.
+These are the columns ``delta_vdw``, ``delta_elec``, ``delta_gb`` and
+``delta_sa`` of the per-frame output (:doc:`../user_guide/outputs`). The
+electrostatic and van der Waals terms use no cutoff.
 
-   .. math::
+Solvation
+---------
 
-      G_{GB} = - \frac{1}{2} \left( \frac{1}{\epsilon_{in}} - \frac{1}{\epsilon_{out}} \right) \sum_{i,j} \frac{q_i q_j}{f_{GB}(r_{ij})}
+The solvation free energy has a polar and a non-polar part,
+:math:`G_\mathrm{solv} = G_\mathrm{polar} + G_\mathrm{nonpolar}`.
 
-   Where :math:`\epsilon_{in}` is the solute dielectric (typically 1.0 or 2.0), :math:`\epsilon_{out}` is the solvent dielectric (80.0 for water), and :math:`f_{GB}` depends on the effective Born radii of the atoms.
+The **polar part** comes from a GB model (:doc:`gb_models`):
 
-2. **Non-Polar Solvation** (:math:`G_{nonpolar}`):
-   This term accounts for the cost of cavity formation and van der Waals interactions between the solute and the solvent. It is standardly approximated as linearly dependent on the Solvent Accessible Surface Area (SASA):
+.. math::
 
-   .. math::
+   G_\mathrm{GB} = -\frac{1}{2}\left(\frac{1}{\varepsilon_\mathrm{in}} -
+   \frac{e^{-\kappa f_\mathrm{GB}}}{\varepsilon_\mathrm{out}}\right)
+   \sum_{i,j} \frac{q_i q_j}{f_\mathrm{GB}(r_{ij}, R_i, R_j)}, \qquad
+   f_\mathrm{GB} = \sqrt{r_{ij}^2 + R_i R_j \exp\left(-\frac{r_{ij}^2}{4 R_i R_j}\right)}
 
-      G_{nonpolar} = \gamma \cdot \text{SASA} + b
+with the effective Born radii :math:`R_i`, the solute and solvent dielectric
+constants and the Debye-Hückel screening parameter :math:`\kappa`.
 
-   Standard values (from AMBER): :math:`\gamma = 0.00542` kcal/mol/Å\ :sup:`2`, :math:`b = 0.92` kcal/mol.
+The **non-polar part** is a linear function of the solvent-accessible surface
+area, :math:`G_\mathrm{nonpolar} = \gamma \cdot \mathrm{SASA} + b`:
 
-Entropic Contribution (:math:`-T\Delta S`)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. list-table::
+   :header-rows: 1
+   :widths: 18 30 52
 
-Binding restricts the conformational freedom of the ligand and receptor, resulting in an entropy penalty (:math:`\Delta S < 0`). This term is crucial for obtaining absolute binding free energies but is computationally expensive and has high statistical uncertainty.
+   * - ``sa_model``
+     - :math:`\gamma`, :math:`b`
+     - Surface area
+   * - ``LCPO`` (default)
+     - 0.0072 kcal/mol/Å², 0
+     - linear combination of pairwise overlaps (Weiser et al. 1999), as in
+       Amber's GB calculations
+   * - ``ACE``
+     - 0.0054 kcal/mol/Å², 0
+     - OpenMM's analytical continuum electrostatics approximation (Schaefer
+       et al. 1998)
 
-Common approximations include:
-- **Interaction Entropy**: Approximated from potential energy fluctuations.
-- **Normal Mode Analysis (NMA)**: Based on vibrational frequencies of the minimized structure.
-- **Quasi-Harmonic Analysis (QHA)**: Derived from the covariance of atomic fluctuations.
+Binding enthalpy and binding free energy
+----------------------------------------
 
-See :doc:`entropy_methods` for detailed methodologies.
+The entropy term is estimated separately because it is much less precise than
+the other terms (:doc:`entropy_methods`). OpenGBSA therefore reports the
+binding enthalpy :math:`\Delta H_\mathrm{bind}`, which is
+:math:`\Delta G_\mathrm{bind}` without :math:`-T\Delta S`, and adds an entropy
+estimate only on request. Amber MMPBSA.py reports the same quantity by default.
+MM/GBSA values are best used to rank related complexes; their absolute size is
+usually larger than measured binding free energies.
+
+The Born-radius cutoff and ``amber_compatible``
+-----------------------------------------------
+
+At its default settings OpenGBSA computes every atom's Born radius from all
+other atoms. Amber MMPBSA.py includes only atoms within 25 Å (``rgbmax``). For
+atom pairs inside the receptor or inside the ligand the cutoff acts the same
+way in the complex and in the free molecules and largely cancels. For pairs
+between receptor and ligand it does not cancel, because these pairs exist only
+in the complex. The polar term therefore differs between the two programs by an
+amount that grows with the size of the complex: about 0.1 kcal/mol for small
+ligands of a protease, 0.4 kcal/mol for the OXA ligands, 1.6 kcal/mol for small
+protein-protein complexes, 6 to 7 kcal/mol for protein-nucleic acid and
+antibody-PD-1 complexes and 16 kcal/mol for an antibody-gp120 complex.
+
+``amber_compatible: true`` applies Amber's conventions together: the 25 Å
+cutoff, MMPBSA.py's solvent dielectric and Amber's assignment of LCPO
+parameters by atom-type name. With it, OpenGBSA reproduces MMPBSA.py on the
+same frames to within 0.05 kcal/mol (:doc:`../testing`). Use it to compare with
+MMPBSA.py results. The default settings omit the cutoff, which has no physical
+basis, and assign LCPO parameters from each atom's element and bonding, which
+does not depend on how a force field names its atom types.
 
 References
 ----------
 
-1.  **Massova, I., & Kollman, P. A. (2000).** Combined molecular mechanical and continuum solvent approach (MM-PBSA/GBSA) to predict ligand binding. *Perspectives in Drug Discovery and Design*, 18(1), 113-135.
-2.  **Genheden, S., & Ryde, U. (2015).** The MM/PBSA and MM/GBSA methods to estimate ligand-binding affinities. *Expert Opinion on Drug Discovery*, 10(5), 449-461.
+* Genheden S, Ryde U (2015) The MM/PBSA and MM/GBSA methods to estimate
+  ligand-binding affinities. *Expert Opin Drug Discov* 10:449-461.
+* Weiser J, Shenkin PS, Still WC (1999) Approximate atomic surfaces from linear
+  combinations of pairwise overlaps (LCPO). *J Comput Chem* 20:217-230.
+* Schaefer M, Bartels C, Karplus M (1998) Solution conformations and
+  thermodynamics of structured peptides: molecular dynamics simulation with an
+  implicit solvation model. *J Mol Biol* 284:835-848.
+* Srinivasan J, Trevathan MW, Beroza P, Case DA (1999) Application of a
+  pairwise generalized Born model to proteins and nucleic acids: inclusion of
+  salt effects. *Theor Chem Acc* 101:426-434.

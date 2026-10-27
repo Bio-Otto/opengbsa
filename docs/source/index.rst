@@ -1,85 +1,128 @@
-OpenGBSA Manual
-===============
+OpenGBSA
+========
 
-.. image:: _static/logo.png
+**OpenGBSA** computes MM/GBSA binding enthalpies from molecular dynamics (MD)
+trajectories. All energies are computed with `OpenMM <https://openmm.org>`_, on
+CPUs or on GPUs through CUDA or OpenCL. OpenGBSA reads Amber, GROMACS,
+CHARMM/NAMD and OpenMM input as well as plain PDB files. It is installed with
+one conda command and needs no AmberTools installation.
+
+.. figure:: _static/figures/workflow.png
    :align: center
-   :alt: OpenGBSA Logo
-   :width: 600px
+   :width: 100%
+   :alt: The OpenGBSA workflow in four steps
 
-**OpenGBSA** is a high-performance computational chemistry toolkit for estimating the relative binding free energies of protein-ligand and protein-protein complexes. It implements the **MM/GBSA** (Molecular Mechanics / Generalized Born Surface Area) method using **OpenMM** for rapid processing on CPUs and GPUs.
+   The four steps of an OpenGBSA run. (1) Input: Native Mode reads the
+   topology of the MD simulation, and Coordinate Mode builds one from a force
+   field. (2) Preprocessing: solvent stripping, receptor/ligand split,
+   periodic-boundary re-imaging and GB radii. (3) Energy evaluation of the
+   complex, the receptor and the ligand for every frame. (4) Output: the
+   binding enthalpy and its terms, the per-residue decomposition and an
+   optional entropy estimate.
 
-Designed for both ease of use and scientific rigor, OpenGBSA automates the complex workflows of topology preparation, trajectory processing, and energy decomposition.
+Features
+--------
+
+* **Two interfaces.** A command-line interface (CLI) writes configuration
+  templates, checks the installation and downloads test data. A
+  configuration-driven interface (CDI) defines the whole calculation in one
+  YAML file, which ``opengbsa config.yaml`` runs. See :doc:`user_guide/interfaces`.
+* **Many input formats.** Amber ``.prmtop``, GROMACS ``.top``/``.tpr``,
+  CHARMM/NAMD ``.psf``, a serialised OpenMM System ``.xml``, or a PDB file of
+  the complex. See :doc:`user_guide/input_formats`.
+* **Five Generalized Born models.** HCT, OBC1, OBC2, GBn and GBn2, with salt
+  screening and two non-polar models (LCPO and ACE).
+* **Amber-compatible mode.** ``amber_compatible: true`` reproduces the
+  conventions of Amber MMPBSA.py, so results can be compared directly with
+  published MMPBSA.py values.
+* **Per-residue decomposition.** The contribution of every receptor residue,
+  per frame and on average, with plots, an interactive HTML report and a PyMOL
+  script that colours the hot-spot residues.
+* **Entropy estimates.** Interaction entropy and its second-order cumulant
+  (C2) with their reliability limits, quasi-harmonic and normal-mode analysis.
+* **GPU acceleration.** CUDA and OpenCL come with OpenMM. On the CPU the frames
+  are divided among worker processes.
+
+Where to start
+--------------
 
 .. grid:: 2
 
-    .. grid-item-card::  🚀  Getting Started
+    .. grid-item-card::  Installation
         :link: installation
         :link-type: doc
 
-        Installation guide and quickstart tutorial.
+        Install OpenGBSA with conda and check that it works.
 
-    .. grid-item-card::  📘  User Guide
-        :link: user_guide/index
+    .. grid-item-card::  Quickstart
+        :link: quickstart
         :link-type: doc
 
-        Detailed instructions on configuration, input structures, and output interpretation.
+        Run a first calculation on a bundled protein-ligand system in a few
+        minutes.
 
-    .. grid-item-card::  📚  Tutorial
+    .. grid-item-card::  Testing and validation
+        :link: testing
+        :link-type: doc
+
+        Step by step from a clean machine to the unit tests and the
+        third-party validation cases, with the expected results.
+
+    .. grid-item-card::  Configuration reference
+        :link: user_guide/configuration
+        :link-type: doc
+
+        Every option of the configuration file, with its default and its
+        meaning.
+
+    .. grid-item-card::  Tutorials
         :link: tutorial/index
         :link-type: doc
 
-        Five worked examples, one per receptor/ligand combination and
-        input format, each runnable end-to-end from the repository.
+        Six worked examples: protein-ligand, protein-peptide, protein-protein,
+        protein-RNA, protein-DNA and antibody-antigen.
 
-    .. grid-item-card::  🧠  Theory Guide
+    .. grid-item-card::  Theory
         :link: theory/index
         :link-type: doc
 
-        Rigorous mathematical background, GB model definitions (OBC2, GBn), and entropy methods.
+        MM/GBSA, the GB models, the Born-radius cutoff and the entropy
+        estimators.
 
-    .. grid-item-card::  ⚙️  API Reference
-        :link: api_reference
-        :link-type: doc
-
-        Python API documentation for custom workflows and integration.
-
---------------------------------------------------------------------------------
-
-Table of Contents
------------------
 .. toctree::
    :maxdepth: 2
-   :caption: Introduction
-   :includehidden:
+   :caption: Getting started
+   :hidden:
 
    installation
-   multi_engine_guide
+   quickstart
+   testing
 
 .. toctree::
    :maxdepth: 2
-   :caption: User Guide
-   :includehidden:
+   :caption: User guide
+   :hidden:
 
    user_guide/index
 
 .. toctree::
    :maxdepth: 2
    :caption: Tutorials
-   :includehidden:
+   :hidden:
 
    tutorial/index
 
 .. toctree::
    :maxdepth: 2
-   :caption: Theory and Methods
-   :includehidden:
+   :caption: Theory and methods
+   :hidden:
 
    theory/index
 
 .. toctree::
-   :maxdepth: 2
-   :caption: API and Development
-   :includehidden:
+   :maxdepth: 1
+   :caption: Reference
+   :hidden:
 
    api_reference
    changelog
@@ -87,15 +130,14 @@ Table of Contents
 
 Citing OpenGBSA
 ---------------
-If you use OpenGBSA in your research, please cite:
 
-*   **OpenGBSA**: see `CITATION.cff <https://github.com/bio-otto/opengbsa/blob/main/CITATION.cff>`_ in the repository root for citation metadata.
-*   **OpenMM**: Eastman, P., et al. (2017). OpenMM 7: Rapid development of high performance algorithms for molecular dynamics. *PLoS Computational Biology*, 13(7), e1005659.
-*   **MDTraj**: McGibbon, R. T., et al. (2015). MDTraj: A modern open library for the analysis of molecular dynamics trajectories. *Biophysical Journal*, 109(8), 1528-1532.
+Please cite OpenGBSA with the metadata in
+`CITATION.cff <https://github.com/Bio-Otto/opengbsa/blob/main/CITATION.cff>`_,
+and the software it is built on:
 
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+* OpenMM: Eastman P et al. (2024) OpenMM 8: molecular dynamics simulation with
+  machine learning potentials. *J Phys Chem B* 128:109--116.
+* MDTraj: McGibbon RT et al. (2015) MDTraj: a modern open library for the
+  analysis of molecular dynamics trajectories. *Biophys J* 109:1528--1532.
+* ParmEd: Shirts MR et al. (2017) Lessons learned from comparing molecular
+  dynamics engines on the SAMPL5 dataset. *J Comput Aided Mol Des* 31:147--161.
