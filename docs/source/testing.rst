@@ -78,6 +78,9 @@ case. It runs after the data of that case are downloaded (Step 4, 44 MB), and
 then all 129 tests pass.
 
 The data are cached in ``~/.cache/opengbsa`` and linked into ``test/data/``.
+A dropped connection is retried up to five times. If the download still
+stops, run the same command again: archives that were completed are kept and
+checked, not downloaded again.
 The tests cover, among others:
 
 * the five GB models and their radii, against Amber-written topologies;

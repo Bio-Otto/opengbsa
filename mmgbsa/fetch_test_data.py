@@ -55,6 +55,8 @@ def _build_pooch(record):
         path=pooch.os_cache("opengbsa") / record["name"],
         base_url=f"doi:{record['doi']}/",
         registry=registry,
+        # multi-GB archives: a dropped connection retries instead of failing
+        retry_if_failed=5,
     )
 
 
