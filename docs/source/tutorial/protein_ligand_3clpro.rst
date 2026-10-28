@@ -70,33 +70,42 @@ and compares with Amber MMPBSA.py on the same frames:
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 22 26 26 26
 
    * - Case
      - OpenGBSA, default settings
-     - MMPBSA.py (``amber_compatible``)
+     - OpenGBSA, ``amber_compatible``
+     - Amber MMPBSA.py
    * - ``3clpro_baicalein``
      - -23.873
      - -23.888
+     - -23.888
    * - ``3clpro_compound7a``
      - -22.034
+     - -22.137
      - -22.138
    * - ``3clpro_compound7b``
      - -30.642
+     - -30.699
      - -30.700
    * - ``3clpro_compound7c``
      - -40.916
      - -40.886
+     - -40.886
    * - ``3clpro_compound7d``
      - -37.840
+     - -37.879
      - -37.879
    * - ``3clpro_compound7e``
      - -27.277
      - -27.472
+     - -27.472
    * - ``3clpro_compound7f``
      - -46.463
+     - -46.399
      - -46.398
 
-The difference between the two settings is the Born-radius cutoff of
-MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+With ``amber_compatible`` OpenGBSA and MMPBSA.py agree within 0.01 kcal/mol.
+At the default settings they differ by the Born-radius cutoff of MMPBSA.py
+(:doc:`../theory/mmgbsa_theory`). Provenance and preparation
 details: ``test/configs/3clpro_zenodo_test/README.md``.

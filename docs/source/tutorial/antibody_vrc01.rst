@@ -66,27 +66,34 @@ Expected result
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 22 26 26 26
 
    * - Case
      - OpenGBSA, default settings
-     - MMPBSA.py (``amber_compatible``)
+     - OpenGBSA, ``amber_compatible``
+     - Amber MMPBSA.py
    * - ``vrc01_wt``
      - -36.820
+     - -52.459
      - -52.461
    * - ``vrc01_d99a``
      - -43.599
+     - -59.162
      - -59.167
    * - ``vrc01_g54a``
      - -44.912
+     - -60.695
      - -60.699
    * - ``vrc01_n100aa``
      - -48.600
      - -64.280
+     - -64.280
    * - ``vrc01_w100ba``
      - -25.427
+     - -40.900
      - -40.903
 
+With ``amber_compatible`` OpenGBSA and MMPBSA.py agree within 0.01 kcal/mol.
 For this large interface the Born-radius cutoff of MMPBSA.py changes the
 binding enthalpy by about 16 kcal/mol, the largest difference between the two
 settings among the validation cases (:doc:`../theory/mmgbsa_theory`). Both

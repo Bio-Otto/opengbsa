@@ -74,15 +74,18 @@ and compares with Amber MMPBSA.py on the same frames:
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 22 26 26 26
 
    * - Case
      - OpenGBSA, default settings
-     - MMPBSA.py (``amber_compatible``)
+     - OpenGBSA, ``amber_compatible``
+     - Amber MMPBSA.py
    * - ``ctla4``
      - -32.056
+     - -32.574
      - -32.571
 
-The difference between the two settings is the Born-radius cutoff of
-MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+With ``amber_compatible`` OpenGBSA and MMPBSA.py agree within 0.01 kcal/mol.
+At the default settings they differ by the Born-radius cutoff of MMPBSA.py
+(:doc:`../theory/mmgbsa_theory`). Provenance and preparation
 details: ``test/configs/namd_charmm_test/README.md``.
