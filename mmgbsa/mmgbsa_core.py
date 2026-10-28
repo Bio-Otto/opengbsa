@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Integration of Normal Mode Analysis with MM/GBSA calculations
-Combines your existing NormalModeAnalysis class with MM/GBSA workflow
+MM/GBSA calculations with OpenMM.
 
 This is the real MM/GBSA engine (GBSACalculator, StructureManager,
 GBSAForceManager) -- import directly from this module. An earlier
@@ -1588,7 +1587,8 @@ class GBSACalculator(GBSAForceManager):
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
              visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None, nonbonded_cutoff=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
-             gb_radii_set='auto', amber_compatible=False, rgbmax=None, lcpo_typing=None):
+             gb_radii_set='auto', amber_compatible=False, rgbmax=None, lcpo_typing=None,
+             nmode_frames=10, nmode_drms=0.001, nmode_maxcyc=10000, nmode_precision='mixed'):
         """
         Initialize the MM/GBSA calculator with enhanced features
         
@@ -1617,9 +1617,23 @@ class GBSACalculator(GBSAForceManager):
         solvent_dielectric : float
              Solvent dielectric constant (default 78.5)
         entropy_method : str
-             Entropy calculation method ('interaction', 'c2', 'normal_mode', 'none').
-             'interaction' (IE) and 'c2' use the gas-phase interaction energy
-             (mmgbsa.interaction_entropy)
+             Entropy calculation method ('interaction', 'c2', 'quasiharmonic',
+             'nmode', 'none'). 'interaction' (IE) and 'c2' use the gas-phase
+             interaction energy (mmgbsa.interaction_entropy); 'nmode' (alias
+             'normal_mode') is the normal-mode binding entropy of complex,
+             receptor and ligand (mmgbsa.nmode_entropy)
+        nmode_frames : int or None
+             'nmode': number of frames, spread evenly over the analysed frames
+             (None: every analysed frame)
+        nmode_drms : float
+             'nmode': RMS gradient (kcal/mol/A) each minimization must reach;
+             frames where a species does not reach it are left out
+        nmode_maxcyc : int
+             'nmode': iterations per minimization round
+        nmode_precision : str
+             'nmode': 'mixed' or 'double' force precision for minimization and
+             Hessian on CUDA/OpenCL (CPU runs use the double-precision
+             Reference platform)
         platform : str, optional
              Platform to force (CPU, CUDA, OpenCL, Reference)
         reporting_settings : dict, optional
@@ -1704,6 +1718,13 @@ class GBSACalculator(GBSAForceManager):
             solvent_dielectric = 78.5     # amber_compatible: replaced once the topology is known
         self.solvent_dielectric = solvent_dielectric
         self.entropy_method = entropy_method
+        # Normal-mode entropy (entropy_method 'nmode'): frames used, minimization
+        # criterion (kcal/mol/A) and iterations, GPU precision of the Hessian
+        self.nmode_frames = nmode_frames
+        self.nmode_drms = nmode_drms
+        self.nmode_maxcyc = nmode_maxcyc
+        self.nmode_precision = nmode_precision
+        self.nmode_result = None
         self.decomposition_method = decomposition_method
         self.reimage_trajectory = reimage_trajectory
         self.charmm_params = charmm_params
@@ -5055,6 +5076,19 @@ class GBSACalculator(GBSAForceManager):
                  import traceback
                  traceback.print_exc()
 
+        # Normal-mode entropy: complex, receptor and ligand minimized from the same frames
+        if self.entropy_method in ('nmode', 'normal_mode'):
+            try:
+                self.nmode_result = self._run_nmode_entropy(
+                    traj, selected_frames, {'complex': (complex_system, complex_top),
+                                            'receptor': (protein_system, protein_top),
+                                            'ligand': (ligand_system, ligand_top)},
+                    prot_idx, lig_idx, is_native_mode or is_ppi_coordinate_mode,
+                    platform, properties, output_dir)
+            except Exception as e:
+                log.error(f"Normal-mode entropy failed: {e}")
+                self.nmode_result = None
+
         print(f"✓ Energy calculation time: {calc_time:.1f}s")
         print(f"✓ Total analysis time: {total_time:.1f}s")
         
@@ -5310,6 +5344,71 @@ class GBSACalculator(GBSAForceManager):
         self._last_ie_sigma_dE = sigma_dE  # exposed for callers/reporting that want the diagnostic
         return estimates['interaction_entropy']
 
+    def _run_nmode_entropy(self, traj, frame_numbers, systems, prot_idx, lig_idx, full_complex,
+                           platform, properties, output_dir=None):
+        """Normal-mode binding entropy on nmode_frames of the analysed frames.
+
+        `systems` holds the (System, Topology) of the complex, receptor and ligand;
+        `full_complex` says whether the complex System follows the frame's own
+        atom order (Native and PPI Coordinate Mode) or receptor-then-ligand.
+        Each species is minimized and its normal modes computed as in
+        mmgbsa.nmode_entropy; amber_compatible uses MMPBSA.py's nmode energy
+        function. Writes nmode_entropy.csv and returns the summary of
+        nmode_entropy.binding_entropy with the per-frame rows.
+        """
+        from mmgbsa import nmode_entropy as nm
+
+        temperature = self.temperature
+        if unit.is_quantity(temperature):
+            temperature = temperature.value_in_unit(unit.kelvin)
+        # MMPBSA.py fixes 298.15 K for its normal-mode entropy, whatever the run temperature
+        if self.amber_compatible:
+            temperature = nm.AMBER_THERMO_TEMPERATURE
+        device = {k: v for k, v in (properties or {}).items() if 'DeviceIndex' in k}
+        species = {}
+        for name, (system, topology) in systems.items():
+            s = nm.amber_nmode_system(system, topology) if self.amber_compatible else nm.nmode_system(system)
+            species[name] = (nm.make_contexts(s, platform.getName(), self.nmode_precision, device),
+                             [s.getParticleMass(i).value_in_unit(unit.dalton) for i in range(s.getNumParticles())])
+        precision = 'double' if species['complex'][0]['mixed'] is None else 'mixed'
+        indices = nm.select_frames(traj.n_frames, self.nmode_frames)
+        energy_function = ("MMPBSA.py's nmode function (HCT, rgbmax 15 A, no salt)" if self.amber_compatible
+                           else f"{self.gb_model} without the non-polar term")
+        print(f"\nNormal-mode entropy on {len(indices)} of {traj.n_frames} frames: {energy_function}, "
+              f"minimized to RMS gradient {self.nmode_drms:g} kcal/mol/A, Hessian in {precision} precision")
+
+        frames = []
+        for count, i in enumerate(indices, 1):
+            t0 = time.time()
+            xyz = traj.xyz[i].astype(float)
+            positions = {'complex': xyz if full_complex else np.concatenate((xyz[prot_idx], xyz[lig_idx])),
+                         'receptor': xyz[prot_idx], 'ligand': xyz[lig_idx]}
+            frame = {'frame': int(frame_numbers[i])}
+            for name in ('complex', 'receptor', 'ligand'):
+                contexts, masses = species[name]
+                frame[name] = nm.species_entropy(contexts, positions[name], masses, temperature,
+                                                 self.nmode_drms, self.nmode_maxcyc)
+            frames.append(frame)
+            row = nm.binding_entropy([frame], temperature)[0][0]
+            status = (f"-TdS = {row['minus_TdS']:.2f} kcal/mol" if row['converged'] else
+                      "left out, minimization did not reach the RMS gradient")
+            print(f"  frame {frame['frame']} ({count}/{len(indices)}, {time.time() - t0:.0f} s): {status}")
+
+        rows, summary = nm.binding_entropy(frames, temperature)
+        summary.update(precision=precision, drms=self.nmode_drms, amber_compatible=self.amber_compatible,
+                       rows=rows)
+        if output_dir:
+            from pathlib import Path
+            path = Path(output_dir) / 'nmode_entropy.csv'
+            pd.DataFrame(rows).to_csv(path, index=False)
+            summary['csv'] = str(path)
+        if summary['n_converged']:
+            print(f"✓ Normal-mode -TdS = {summary['value']:.2f} ± {summary['sd']:.2f} kcal/mol (SD, "
+                  f"{summary['n_converged']} of {summary['n_frames']} frames)")
+        else:
+            print("❌ Normal-mode entropy: no frame reached the RMS gradient criterion")
+        return summary
+
     def save_results(self, output_dir=None):
         """Save fixed enhanced MM/GBSA results to file"""
         if len(self.energies['binding']) == 0:
@@ -5394,8 +5493,18 @@ class GBSACalculator(GBSAForceManager):
                 entropy_penalty = 0.0
                 delta_g = mean_binding
                 entropy = None
-        elif self.entropy_method == 'normal_mode':
-             print("\nNote: Normal Mode Analysis selected. This will be calculated in the post-processing step.")
+        elif self.entropy_method in ('nmode', 'normal_mode'):
+            res = self.nmode_result
+            if res and res.get('n_converged'):
+                entropy = {k: v for k, v in res.items() if k != 'rows'}
+                entropy.update(method='nmode', label='Normal-mode entropy')
+                entropy_penalty = res['value']
+                delta_g = mean_binding + entropy_penalty
+                print(f"\nNormal-mode entropy (-TΔS): {entropy_penalty:.2f} ± {res['sd']:.2f} kcal/mol "
+                      f"(SD over {res['n_converged']} frames)")
+                print(f"Final Binding Free Energy (ΔG = ΔH - TΔS, normal modes): {delta_g:.2f} kcal/mol")
+            else:
+                print("\nNormal-mode entropy unavailable; ΔG is not reported.")
         elif self.entropy_method == 'quasiharmonic':
              ts_val = getattr(self, 'qha_entropy', 0.0)
              delta_ts_val = getattr(self, 'qha_delta_ts', None)

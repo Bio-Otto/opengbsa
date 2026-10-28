@@ -63,6 +63,40 @@ Entropy estimates
    Both estimates, the standard deviation of the energies and the reliability
    flags (``IE_SIGMA_LIMIT`` = 3.6, ``C2_SIGMA_LIMIT`` = 6.0 kcal/mol).
 
+.. module:: mmgbsa.nmode_entropy
+
+.. function:: nmode_system(system)
+
+   Copy of a species ``System`` without its non-polar solvation forces. Raises
+   ``ValueError`` for a ``System`` with bond constraints or a massless particle.
+
+.. function:: amber_nmode_system(system, topology=None, solute_dielectric=1.0)
+
+   MMPBSA.py's nmode energy function built from a species ``System``: HCT GB
+   with the same charges and radii, no salt, a 15 Å Born-radius cutoff and no
+   non-polar term. GBn and GBn2 systems need their ``topology``.
+
+.. function:: make_contexts(system, platform_name, precision='mixed', device_properties=None)
+
+   The double-precision context (and, for ``precision='mixed'`` on CUDA or
+   OpenCL, the mixed-precision context) of one species.
+
+.. function:: species_entropy(contexts, positions, masses, temperature, drms=0.001, maxcyc=10000)
+
+   Minimizes one species from ``positions`` (nm) and returns the RMS gradient,
+   the minimized energy, the number of imaginary modes and the translational,
+   rotational, vibrational and total entropy in cal/(mol K).
+
+.. function:: thermo(frequencies, masses, coordinates, temperature)
+
+   Ideal-gas rigid-rotor harmonic-oscillator entropies with the constants of
+   Amber's nmode program.
+
+.. function:: binding_entropy(frames, temperature)
+
+   Per-frame :math:`-T\Delta S` (kcal/mol) from the species results, and its
+   mean, standard deviation and standard error over the converged frames.
+
 Input conversion
 ----------------
 
