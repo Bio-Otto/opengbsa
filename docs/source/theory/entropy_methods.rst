@@ -143,10 +143,10 @@ and the binding entropy is
     double-precision Hessian agree with those of Amber's nmode program within
     0.02 cal/(mol K), and :math:`-T\Delta S` is 17.82 kcal/mol against
     Amber's 17.81 kcal/mol. The mixed-precision Hessian gives 17.98 kcal/mol.
-    Different minimizers, or the same minimizer with a different summation
-    order, reach different minima from the same frame: Amber's nab program
-    run directly on frame 29701 gives 14.72 kcal/mol, and MMPBSA.py gives
-    18.88 kcal/mol for the same frame. Per-frame values are therefore
+    Minimizations that start from the same frame can end in different
+    minima, even within one program: Amber's nab program run directly on
+    frame 29701 gives 14.72 kcal/mol, and MMPBSA.py gives 18.88 kcal/mol for
+    the same frame. Per-frame values are therefore
     compared through their mean over frames. Over frames 29701, 29801 and
     29901, MMPBSA.py gives 19.36 ± 0.61 kcal/mol and OpenGBSA 20.04 ± 2.49
     kcal/mol (standard deviation over frames). The translational and
