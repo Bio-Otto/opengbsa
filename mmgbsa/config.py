@@ -220,6 +220,23 @@ class ConfigManager:
         if sa_model is not None and sa_model not in ('ACE', 'LCPO'):
             self.validation_errors.append(f"Invalid sa_model '{sa_model}'. Must be one of: ['ACE', 'LCPO']")
 
+        # Normal-mode entropy: frames, minimization criterion and iterations, precision
+        def positive(value, kind):
+            return isinstance(value, kind) and not isinstance(value, bool) and value > 0
+        nmode_frames = settings.get('nmode_frames', None)
+        if nmode_frames is not None and not positive(nmode_frames, int):
+            self.validation_errors.append(f"Invalid nmode_frames '{nmode_frames}': a positive number of "
+                                          f"frames, or null for every analysed frame")
+        nmode_drms = settings.get('nmode_drms', None)
+        if nmode_drms is not None and not positive(nmode_drms, (int, float)):
+            self.validation_errors.append(f"Invalid nmode_drms '{nmode_drms}': a positive RMS gradient in kcal/mol/A")
+        nmode_maxcyc = settings.get('nmode_maxcyc', None)
+        if nmode_maxcyc is not None and not positive(nmode_maxcyc, int):
+            self.validation_errors.append(f"Invalid nmode_maxcyc '{nmode_maxcyc}': a positive number of iterations")
+        nmode_precision = settings.get('nmode_precision', None)
+        if nmode_precision is not None and nmode_precision not in ('mixed', 'double'):
+            self.validation_errors.append(f"Invalid nmode_precision '{nmode_precision}'. Must be one of: ['mixed', 'double']")
+
         # Validate binding_mode
         valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
         binding_mode = settings.get('binding_mode', 'standard')
@@ -483,12 +500,18 @@ analysis_settings:
   # the fluctuation of the gas-phase interaction energy and reported with its
   # standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol);
   # quasiharmonic: ligand quasi-harmonic entropy (qha_analyze_complex: true
-  # adds receptor and complex to give a binding entropy); normal_mode:
-  # normal-mode entropy of the ligand alone (needs ligand_mol), not added to dG.
+  # adds receptor and complex to give a binding entropy); nmode: normal-mode
+  # binding entropy of complex, receptor and ligand, each minimized in GB
+  # without the non-polar term (amber_compatible: MMPBSA.py's HCT model,
+  # 15 A Born-radius cutoff and no salt), on nmode_frames frames spread
+  # evenly over the analysed frames.
   run_entropy_analysis: false
   entropy_method: interaction
   qha_analyze_complex: false
-  nmode_cutoff_frequency: 10.0 # normal_mode: modes below this (cm-1) are left out
+  nmode_frames: 10             # nmode: frames used; null = every analysed frame
+  nmode_drms: 0.001            # nmode: RMS gradient (kcal/mol/A) the minimization must reach
+  nmode_maxcyc: 10000          # nmode: iterations per minimization round
+  nmode_precision: mixed       # nmode: GPU force precision for the Hessian; double on CPU
 
   # --- execution ---
   max_workers: null            # CPU worker processes; null = min(cores - 1, 4)

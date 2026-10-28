@@ -19,7 +19,6 @@ warnings.filterwarnings("ignore", message="importing 'simtk.openmm' is deprecate
 
 # Import your existing modules
 from .mmgbsa_core import GBSACalculator
-from .entropy import run_ultra_robust_nma
 from .interaction_entropy import describe, entropy_result
 from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
@@ -247,6 +246,10 @@ class MMGBSARunner:
             amber_compatible=analysis_settings.get('amber_compatible', False),
             rgbmax=analysis_settings.get('rgbmax', None),
             lcpo_typing=analysis_settings.get('lcpo_typing', None),     # 'element'; 'amber' with amber_compatible
+            nmode_frames=analysis_settings.get('nmode_frames', 10),       # null: every analysed frame
+            nmode_drms=analysis_settings.get('nmode_drms', 0.001),
+            nmode_maxcyc=analysis_settings.get('nmode_maxcyc', 10000),
+            nmode_precision=analysis_settings.get('nmode_precision', 'mixed'),
             cache_dir=cache_dir
         )
 
@@ -611,56 +614,21 @@ class MMGBSARunner:
                 }
                 
             elif method in ['nmode', 'normal_mode']:
-                # Run Normal Mode Analysis
-                log.warning("Running Normal Mode Analysis (Computationally Expensive)")
-                
-                from .normal_mode import NormalModeAnalysis
-                from openmm import unit
-                import openmm
-                
-                try:
-                    ligand_mol = self.config['input_files']['ligand_mol']
-                    temperature = analysis_settings.get('temperature', 300)
-                    
-                    log.process("Parameterizing ligand for NMA...")
-                    ligand_system, ligand_top, ligand_mol_obj = calculator.parameterize_ligand_openff(ligand_mol)
-                    
-                    integrator = openmm.VerletIntegrator(1.0 * unit.femtoseconds)
-                    
-                    conf = ligand_mol_obj.conformers[0]
-                    if hasattr(conf, 'magnitude'):
-                         positions = conf.magnitude * unit.angstrom
-                    elif hasattr(conf, 'value_in_unit'):
-                         positions = conf.value_in_unit(unit.angstrom) * unit.angstrom
-                    else:
-                         positions = conf * unit.angstrom
-                    
-                    log.process("Initializing NormalModeAnalysis...")
-                    nma = NormalModeAnalysis(ligand_top, ligand_system, integrator, positions)
-                    
-                    log.process("Running Minimization (CUDA/CPU)...")
-                    nma.CUDAMinimizationCycle(MaxMiniCycle=100)
-                    
-                    log.process("Calculating Normal Modes...")
-                    cutoff_freq = analysis_settings.get('nmode_cutoff_frequency', 10.0)
-                    nma.CalculateNormalModes(cutoff_frequency=cutoff_freq)
-                    
-                    log.process("Calculating Vibrational Entropy...")
-                    nma.getVibrationalEntropyQM(Temperature=temperature*unit.kelvin)
-                    
-                    entropy_val = nma.VibrationalEntropyQM.value_in_unit(unit.kilocalories_per_mole)
-                    
-                    log.result("Vibrational Entropy Term (TS)", f"{entropy_val:.2f}", "kcal/mol")
-                    log.result("Entropic Contribution (-TS)", f"{-entropy_val:.2f}", "kcal/mol")
-                    
-                    return {
-                        'status': 'completed',
-                        'method': 'normal_mode',
-                        'entropy_term': entropy_val,
-                        'contribution': -entropy_val
-                    }
-                except Exception as e:
-                    log.error(f"NMA Failed: {e}")
+                # Normal-mode binding entropy, computed by the calculator from the
+                # minimized complex, receptor and ligand (mmgbsa.nmode_entropy)
+                entropy = self.results.get('mmgbsa', {}).get('entropy')
+                if not entropy or entropy.get('method') != 'nmode':
+                    log.warning("Normal-mode entropy is not available from the MM/GBSA run")
+                    return None
+                log.result(f"{entropy['label']} (-TΔS)", f"{entropy['value']:.2f} ± {entropy['sd']:.2f}",
+                           "kcal/mol")
+                return {
+                    'status': 'completed',
+                    'method': entropy['label'],
+                    'entropy_penalty': entropy['value'],
+                    'T': entropy['temperature'],
+                    **{k: v for k, v in entropy.items() if k not in ('method', 'label', 'value')}
+                }
 
         except Exception as e:
             log.error(f"Entropy analysis failed: {e}")
@@ -820,6 +788,12 @@ class MMGBSARunner:
                     if 'sigma_interaction_energy' in self.results['entropy']:
                         for line in describe(self.results['entropy']):
                             f.write(f"{line}\n")
+                    if 'n_converged' in self.results['entropy']:
+                        e = self.results['entropy']
+                        f.write(f"-TdS = {e['entropy_penalty']:.2f} +/- {e['sd']:.2f} kcal/mol (SD) over "
+                                f"{e['n_converged']} of {e['n_frames']} frames at {e['T']:.2f} K\n")
+                        f.write(f"  translational {-e['TdS_translational']:.2f}, rotational "
+                                f"{-e['TdS_rotational']:.2f}, vibrational {-e['TdS_vibrational']:.2f} kcal/mol\n")
                     f.write("\n")
                 
                 if 'decomposition' in self.results:

@@ -2,7 +2,7 @@
 Quasi-harmonic vibrational entropy from a trajectory's covariance matrix.
 
 Implements `QuasiHarmonicAnalysis`, an alternative to normal-mode analysis
-(`mmgbsa/normal_mode.py`) for `entropy_method='quasiharmonic'`: it builds
+(`mmgbsa/nmode_entropy.py`) for `entropy_method='quasiharmonic'`: it builds
 the mass-weighted atomic-fluctuation covariance matrix directly from
 sampled trajectory frames rather than a single-structure Hessian.
 """

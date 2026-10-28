@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Normal-mode binding entropy** (`entropy_method: nmode`, alias `normal_mode`). For `nmode_frames` frames spread evenly over the analysed frames (default 10), the complex, the receptor and the ligand are each minimized until the root-mean-square gradient is below `nmode_drms` (default 0.001 kcal/mol/Å), their normal modes come from a finite-difference Hessian of the OpenMM forces, and the rigid-rotor harmonic-oscillator model gives the translational, rotational and vibrational entropy. `-TΔS = -T(S_complex - S_receptor - S_ligand)` is added to ΔG, with its standard deviation over frames; a frame in which a species does not reach `nmode_drms` is left out and reported. Per-frame terms are written to `nmode_entropy.csv`. The energy function is the run's own GB model without the non-polar term; with `amber_compatible: true` it is MMPBSA.py's nmode function (HCT, a 15 Å Born-radius cutoff as in NAB, no salt, 298.15 K). On CUDA and OpenCL, `nmode_precision: mixed` (default) minimizes first in mixed precision, finishes in double precision and takes the Hessian in mixed precision; `double` uses double precision throughout. CPU runs use the double-precision Reference platform. The thermochemistry reproduces the entropies of Amber's nmode program (`mmpbsa_py_nabnmode`) from its own frequencies to 0.001 cal/(mol K). Against MMPBSA.py on 3CLpro with baicalein, the entropies of the complex, the receptor and the ligand at the same minima agree within 0.02 cal/(mol K) with a double-precision Hessian (`-TΔS` 17.82 against 17.81 kcal/mol; 17.98 kcal/mol with the mixed-precision Hessian), and over three frames `-TΔS` is 20.04 ± 2.49 kcal/mol against MMPBSA.py's 19.36 ± 0.61 kcal/mol. Per-frame values differ because minimizers reach different minima; the documentation's entropy page gives the details and timings. Tests: `test/unit/test_nmode_entropy.py`.
+
+### Removed
+- The ligand-only normal-mode estimate, which re-parameterised the ligand from `ligand_mol` with OpenFF and was not added to ΔG, and its option `nmode_cutoff_frequency`.
+
 ## [0.0.21] - 2026-10-27
 
 Fixes from an independent walk-through of the documentation, from installation to the validation cases.

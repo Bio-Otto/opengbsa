@@ -248,16 +248,31 @@ Entropy
        reported with its standard deviation and reliability.
        ``quasiharmonic``: quasi-harmonic entropy of the ligand
        (``qha_analyze_complex: true`` adds receptor and complex to give a
-       binding entropy). ``normal_mode``: normal-mode entropy of the ligand
-       alone (needs ``ligand_mol``), reported but not added to
-       :math:`\Delta G`.
+       binding entropy). ``nmode`` (alias ``normal_mode``): normal-mode
+       binding entropy of the complex, the receptor and the ligand, each
+       minimized from the same frames.
        See :doc:`../theory/entropy_methods`.
    * - ``qha_analyze_complex``
      - ``false``
      - With ``quasiharmonic``: also analyse the receptor and the complex.
-   * - ``nmode_cutoff_frequency``
-     - ``10.0``
-     - With ``normal_mode``: modes below this frequency (cm⁻¹) are left out.
+   * - ``nmode_frames``
+     - ``10``
+     - With ``nmode``: number of frames, spread evenly over the analysed
+       frames; ``null`` uses every analysed frame.
+   * - ``nmode_drms``
+     - ``0.001``
+     - With ``nmode``: root-mean-square gradient (kcal/mol/Å) each
+       minimization must reach. A frame in which the complex, the receptor
+       or the ligand does not reach it is left out and reported.
+   * - ``nmode_maxcyc``
+     - ``10000``
+     - With ``nmode``: iterations per minimization round.
+   * - ``nmode_precision``
+     - ``mixed``
+     - With ``nmode`` on CUDA or OpenCL: ``mixed`` minimizes first in
+       mixed precision, finishes in double precision and takes the Hessian
+       in mixed precision; ``double`` uses double precision throughout.
+       CPU runs use the double-precision Reference platform.
 
 Execution
 ~~~~~~~~~
