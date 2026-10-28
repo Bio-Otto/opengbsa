@@ -72,19 +72,22 @@ and compares with Amber MMPBSA.py on the same frames:
 
 .. list-table::
    :header-rows: 1
-   :widths: 30 35 35
+   :widths: 22 26 26 26
 
    * - Case
      - OpenGBSA, default settings
-     - MMPBSA.py (``amber_compatible``)
+     - OpenGBSA, ``amber_compatible``
+     - Amber MMPBSA.py
    * - ``irf11``
      - -103.845
+     - -109.647
      - -109.623
 
 For this complex OpenGBSA and MMPBSA.py differ by -0.024 kcal/mol even with
 ``amber_compatible``. OpenMM's Coulomb constant is 3.5e-5 larger than
 Amber's. The electrostatic term of this complex (-7,225 kcal/mol) therefore
 differs by -0.25 kcal/mol and the polar term (+7,220 kcal/mol) by +0.22
-kcal/mol, and the two largely cancel. The difference between the two settings
-is the Born-radius cutoff of MMPBSA.py (:doc:`../theory/mmgbsa_theory`). Provenance and preparation
+kcal/mol, and the two largely cancel. At the default settings the two programs
+also differ by the Born-radius cutoff of MMPBSA.py (:doc:`../theory/mmgbsa_theory`).
+Provenance and preparation
 details: ``test/configs/dna_protein_test/README.md``.
