@@ -754,15 +754,17 @@ class PerResidueDecomposition:
         """
         
         averaged = {}
-        
-        # Get all residue IDs and sample keys
-        all_residues = set()
-        sample_keys = set()
-        
+
+        # All residue IDs and energy keys, in order of first appearance (the
+        # residue map's order), so every run writes the same row and column
+        # order whatever the path or the process's string hashing.
+        all_residues = {}
+        sample_keys = {}
+
         for frame_result in residue_energies:
-            all_residues.update(frame_result.keys())
+            all_residues.update(dict.fromkeys(frame_result.keys()))
             for res_data in frame_result.values():
-                sample_keys.update(k for k in res_data.keys() if isinstance(res_data[k], (int, float)))
+                sample_keys.update(dict.fromkeys(k for k in res_data.keys() if isinstance(res_data[k], (int, float))))
         
         # Average each residue's contributions
         for res_id in all_residues:
