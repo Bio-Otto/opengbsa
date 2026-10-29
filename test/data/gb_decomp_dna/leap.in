@@ -1,0 +1,10 @@
+source leaprc.DNA.OL15
+source leaprc.protein.ff14SB
+dna = sequence { DG5 DA DC DG DT DC3 }
+pep = sequence { NLYS ARG GLU TRP CASP }
+set default PBRadii mbondi3
+saveamberparm dna receptor.prmtop receptor.inpcrd
+saveamberparm pep ligand.prmtop ligand.inpcrd
+complex = combine { dna pep }
+saveamberparm complex complex.prmtop complex.inpcrd
+quit

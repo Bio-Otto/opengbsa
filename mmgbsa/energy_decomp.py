@@ -27,7 +27,7 @@ class EnergyDecomposer:
     physical quantity than `decomposition_method='full'`
     (`PerResidueDecomposition`), whose per-residue table also includes a
     'solvation' column derived from the actual GB force (see
-    `PerResidueDecomposition._gb_solvation_decomposition`). Do not compare
+    `mmgbsa.solvation_peratom`). Do not compare
     'total' columns between the two modes as if they meant the same thing.
     """
 
