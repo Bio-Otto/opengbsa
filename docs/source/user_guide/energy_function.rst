@@ -23,7 +23,7 @@ the three energies is computed. They all belong to ``analysis_settings``.
 These are the defaults. The rest of this page explains each option: what it
 does, how OpenGBSA applies it, how much it changes a result and when to change
 it. The table at the end of the page shows the effect of each option on two
-bundled systems.
+systems that come with OpenGBSA.
 
 How the three energies are built
 --------------------------------
@@ -79,11 +79,10 @@ CHARMM names ``ADE``, ``CYT``, ``GUA``, ``THY`` and ``URA``. On a
 DNA-peptide test system the GB energy of every model agrees with ``sander``
 within 0.22 kcal/mol out of 1,100.
 
-*Effect.* The model changes the polar term of every complex, so it changes the
-binding enthalpy more than any other option except ``solute_dielectric``. The
-measured effects are in the table at the end of this page.
-
-.. TODO numbers from option_effects.csv
+*Effect.* The model changes the polar term of every complex. The five models
+gave binding enthalpies between -30.0 and -24.6 kcal/mol for the quickstart
+ligand and between -133.6 and -71.6 kcal/mol for the protein-DNA complex of
+the table at the end of this page.
 
 *When to change it.* OBC2 is the most widely used model in MM/GBSA and the
 default. GBn2 was fitted for proteins and nucleic acids and is a good choice for
@@ -118,8 +117,10 @@ Amber's ``tleap``. Any other value assigns that set to every atom, whatever the
 input. The decision is taken once, for the complex, and used for receptor and
 ligand as well, so the three always have the same radii.
 
-*Effect.* The quickstart topology already carries ``mbondi2`` radii. Other sets
-change the result by the amounts in the table at the end of this page.
+*Effect.* The quickstart topology carries ``mbondi2`` radii, and the other sets
+changed its binding enthalpy by up to 1.95 kcal/mol (``bondi``). For the
+protein-DNA complex, whose radii OpenGBSA assigns, they changed it by up to
+24 kcal/mol.
 
 *When to change it.* Keep ``auto``. Set the radii explicitly only to use a
 set that differs from the one in the topology, for example to follow a
@@ -157,8 +158,10 @@ depends on neither the temperature nor the solvent dielectric.
 
 *Effect.* Screening mostly acts between atoms far apart. Receptor and ligand
 atoms that interact are close, so salt changes the binding enthalpy of a small
-ligand very little. It matters for highly charged complexes, such as protein
-and DNA.
+ligand very little: 0.02 kcal/mol between 0 and 0.15 M for the quickstart. It
+matters for highly charged complexes. For the protein-DNA complex the binding
+enthalpy was -172.1 kcal/mol without salt, -103.9 kcal/mol at 0.15 M and -92.8
+kcal/mol at 0.5 M.
 
 *When to change it.* Use the ionic strength of the experiment or of the
 simulation. Use 0 to compare with results computed without salt.
@@ -178,7 +181,9 @@ it.
 
 *How it is applied.* :math:`\kappa` varies as :math:`T^{-1/2}`, so 310 K
 instead of 300 K lowers it by 1.6 %. Without salt the temperature does not
-change the binding enthalpy at all. With ``amber_compatible: true`` the
+change the binding enthalpy at all. At 0.15 M, 310 K instead of 300 K changed it
+by less than 0.01 kcal/mol for the quickstart and by -0.37 kcal/mol for the
+protein-DNA complex. With ``amber_compatible: true`` the
 screening does not depend on the temperature, as in ``sander``. The entropy
 estimates use it as :math:`k_\mathrm{B}T` and :math:`T\Delta S`, except the
 normal-mode estimate with ``amber_compatible: true``, which always uses
@@ -208,7 +213,10 @@ the unscaled charges.
 
 *Effect.* A larger value weakens all electrostatic contributions. Because the
 electrostatic interaction and the polar solvation largely cancel, the binding
-enthalpy changes by the difference of two large terms, which can be large.
+enthalpy changes by the difference of two large terms. A solute dielectric of
+2 made the binding enthalpy 11.3 kcal/mol more negative for the quickstart and
+11.9 kcal/mol for the protein-DNA complex; 4 made it 16.9 and 17.9 kcal/mol
+more negative.
 
 *When to change it.* Keep 1, the usual value in MM/GBSA and the value
 MMPBSA.py uses. Values of 2 or 4 are sometimes used for binding sites with many
@@ -242,7 +250,8 @@ CHARMM-like when it is a ``.psf``, a chamber ``.prmtop`` or contains CMAP or
 Urey-Bradley terms.
 
 *Effect.* Small. Between 78.5 and 80 the factor :math:`1 - 1/\varepsilon_\mathrm{solvent}`
-changes by 0.02 %.
+changes by 0.02 %, and the binding enthalpy changed by 0.01 kcal/mol for the
+quickstart and 0.24 kcal/mol for the protein-DNA complex.
 
 *When to change it.* Rarely; keep the default.
 
@@ -267,7 +276,8 @@ electrostatics approximation of the surface term, with :math:`\gamma` = 0.0054
 kcal/mol/Å² and the element radii of OpenMM.
 
 *Effect.* The two models give different surface areas, and ``ACE`` uses a
-different :math:`\gamma`. See the table at the end of this page.
+different :math:`\gamma`. ``ACE`` made the binding enthalpy 3.0 kcal/mol more
+negative for the quickstart and 5.0 kcal/mol for the protein-DNA complex.
 
 *When to change it.* Keep ``LCPO``, which is Amber's choice and the one used to
 validate OpenGBSA. ``ACE`` is there for comparison with OpenMM's own implicit
@@ -291,7 +301,9 @@ letters of the Amber atom-type name. The two agree for Amber force fields. They
 differ for atom types that do not follow Amber's names, such as CHARMM types or
 some ligand types.
 
-*Effect.* Only on the non-polar term, and only where the two rules differ.
+*Effect.* Only on the non-polar term, and only where the two rules differ: 0.23
+kcal/mol for the quickstart, whose topology has CHARMM atom types, and none for
+the protein-DNA complex, which has Amber types.
 
 *When to change it.* Keep the default. ``amber_compatible`` selects ``amber``
 so that the non-polar term matches MMPBSA.py exactly.
@@ -319,7 +331,9 @@ same way in the complex and in the free molecules, and their effect largely
 cancels. Pairs between receptor and ligand exist only in the complex, so the
 cutoff does not cancel for them. The difference grows with the size of the
 complex, from about 0.1 kcal/mol for small ligands to 16 kcal/mol for an
-antibody-gp120 complex (:doc:`../theory/mmgbsa_theory`).
+antibody-gp120 complex (:doc:`../theory/mmgbsa_theory`). Here, 25 Å changed the
+binding enthalpy by -0.40 kcal/mol for the quickstart and -5.8 kcal/mol for the
+protein-DNA complex, and 15 Å by -2.2 and -18.1 kcal/mol.
 
 *When to change it.* Keep ``null``. The cutoff has no physical basis; it exists
 to make Amber's calculation faster. Use ``amber_compatible`` to compare with
@@ -364,12 +378,29 @@ some interactions and not to others, and on GPUs it stopped the run. MM/GBSA
 evaluates every atom pair, as MMPBSA.py does. Use ``rgbmax`` to limit the
 Born-radius calculation.
 
+.. _effect-of-each-option:
+
 Effect of each option
 ---------------------
 
-.. TODO csv-table of docs/data/option_effects.csv after the code changes are merged
+The table gives the mean binding enthalpy and its standard deviation over the
+frames, in kcal/mol, when one option is changed from the base settings, and the
+change from the base value. The base settings are OBC2, 0.15 M and 300 K, with
+every other option at its default. The two systems come with OpenGBSA:
 
-The table shows the mean binding enthalpy of the quickstart system
-(:doc:`../quickstart`, 50 frames) when one option is changed from the
-quickstart settings, and the mean of each term. It is produced by
-``docs/scripts/option_effects.py``.
+* **6T1H-1151**, the quickstart (:doc:`../quickstart`): a beta-lactamase with a
+  small-molecule ligand, Native Mode with CHARMM36 chamber topologies, 50
+  frames.
+* **IRF11-DNA**: the 109-residue protein IRF11 bound to a 42-nucleotide DNA
+  fragment, Coordinate Mode with Amber ff14SB and OL15, 101 frames. It is the
+  validation case ``test/configs/dna_protein_test``, whose data its
+  ``fetch_data.sh`` downloads (:doc:`../testing`).
+
+The values were computed with OpenGBSA 0.0.23 on a GPU by
+``docs/scripts/option_effects.py``. The effect of the frame options is shown
+in :doc:`frames`.
+
+.. csv-table::
+   :file: ../../data/option_effects_energy.csv
+   :header-rows: 1
+   :widths: 18 12 19 12 19 12

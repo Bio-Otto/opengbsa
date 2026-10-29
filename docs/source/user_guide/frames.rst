@@ -97,7 +97,10 @@ helps.
 
 ``equidistant`` is the better choice when ``max_frames`` is smaller than the
 number of frames in the range: ``sequential`` then covers only the beginning of
-the range.
+the range. With 10 of the 50 quickstart frames, the first 10 gave a binding
+enthalpy 4.6 kcal/mol more negative than all 50, and 10 equidistant frames one
+1.3 kcal/mol more negative. For the 101 frames of the protein-DNA complex the
+differences were 27.4 and 0.4 kcal/mol (`Effect of the frame choice`_).
 
 .. _opt-random_seed:
 
@@ -137,6 +140,19 @@ box information is used as it is, with a warning.
 *When to change it.* Set ``false`` for a trajectory that was already imaged,
 for example with ``gmx trjconv -pbc cluster`` or ``cpptraj autoimage``, to save
 time.
+
+Effect of the frame choice
+--------------------------
+
+The mean binding enthalpy and its standard deviation over the frames, in
+kcal/mol, of the two systems of :ref:`the energy-function table
+<effect-of-each-option>` when one frame option is changed from the base
+settings (all 50 or 101 frames).
+
+.. csv-table::
+   :file: ../../data/option_effects_frames.csv
+   :header-rows: 1
+   :widths: 18 18 17 11 17 11
 
 Frames of the decomposition and the normal-mode entropy
 -------------------------------------------------------

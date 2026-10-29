@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Every option checked against what it does, the defects found fixed, and a user guide that explains each option.
+
+### Fixed
+- **The GB force of HCT, GBn and GBn2 in Native Mode ignored `solute_dielectric` and `temperature`.** ParmEd built it with a solute dielectric of 1 and salt screening at 298.15 K; OBC1 and OBC2 computed the screening at 300 K whatever the temperature. Every model is now built by one builder with the configured dielectrics and screening. Without salt and at the default dielectric the energies of all five models are unchanged (bit-identical on 3CLpro and 6T1H); with salt the binding enthalpy moves by less than 0.001 kcal/mol at 300 K.
+- **`solute_dielectric` now acts as Amber's `intdiel`:** the Coulomb energy, 1-4 pairs included, is divided by it as well as the GB term (checked against `sander`: `intdiel=2` halves EEL and 1-4 EEL and scales EGB by (1/2 - 1/78.5)/(1 - 1/78.5)). Before, OBC1/OBC2 applied it to the GB term only.
+- **Salt screening follows the configured temperature** in every model. With `amber_compatible` it is `sander`'s constant κ = 0.73·√(0.10806 I) Å⁻¹, which depends on neither the temperature nor `extdiel` (checked against `sander`; the salt effect on a DNA-peptide test system agrees within 0.01 kcal/mol for all five models).
+- **GBn2 gave the terminal residues of nucleic acids protein parameters.** Amber's terminal names (`DG5`, `DC3`, ... with the suffixes 5, 3 and N) and the CHARMM names now get the nucleic-acid parameters, as in `sander`; on a DNA-peptide test system this moved the GB energy by 131 kcal/mol, to within 0.19 kcal/mol of `sander`. GBn and GBn2 also used default screening factors for ParmEd atoms, whose element is an atomic number.
+- **`ligand_selection` without `receptor_selection` failed** on every frame: the receptor now is every other atom (and the ligand every other atom with a lone `receptor_selection`). Overlapping selections and selections that match nothing are errors; atoms in neither selection are left out and reported.
+- **`binding_mode: ppi`** on a topology with one chain or with more than two chains stops with an error that asks for selections, instead of failing every frame or dropping chains.
+- **`frame_stride` was ignored by `frame_selection: equidistant`.** The frames are chosen in one place, in a fixed order: range, stride, selection. With a stride of 1 every method gives the frames of 0.0.22. A `frame_start` or `frame_end` outside the trajectory is clamped with a warning. `random_seed` defaults to 42 for random selection, as documented.
+- **The decomposition frames are a subset of the analysed frames** for every selection method; with `equidistant` they could differ.
+- **Triclinic boxes** (GROMACS' rhombic dodecahedron and truncated octahedron) are re-imaged with the full box vectors; only the box lengths were used. All 31 trajectories with re-imaging in the validation and application runs have rectangular boxes and give identical coordinates.
+- **`print_interval: 0`** stopped CPU runs; it must be at least 1. Platform names are accepted in any letter case (`cuda` fell back to another platform).
+- **A failed per-residue decomposition was reported as completed**; it is now marked as failed in the log, `results_summary.yaml` and `final_report.txt`, and with `strict_platform: true` the run stops with an error.
+- **`charge_method`** now assigns the charges of a Coordinate-Mode ligand whose file has none (AM1-BCC by default; `mmff94` and `gasteiger` also allowed) and of residues parameterised with OpenFF; such a ligand received MMFF94 charges. Charges in the file are kept. A failing method stops the run with advice instead of falling back.
+- `quasiharmonic` entropy is stored in the results, the summary and the report. QHA uses the real atomic masses in the order of the analysed atoms; Coordinate Mode used hydrogen masses of 4 amu. Coordinate-Mode systems are built without bond constraints, so normal-mode entropy works there.
+- `receptor_topology` and `ligand_topology` accept `.parm7` (silently ignored before) and `.new`; other file types are an error.
+- Nothing is written next to the input files any more: `.mol2` conversions, the `.trj` alias, GROMACS conversions and the plots of `energy_decomposition: full` go into the run folder. Two runs started in the same second get separate folders.
+- `--create-config PATH` and `--create-complete-config PATH` write to `PATH`.
+- `analysis_config.yaml` is the configuration actually used, with every default filled in.
+- The HTML report's time series and heat map use the analysed trajectory frames, and `plot_top_residues` sets every list of top residues.
+- A `.pdb` complex no longer switches to GROMACS Native Mode when a `.top` of the same name lies next to it.
+
+### Added
+- **Unknown options are reported.** Every option and section is listed in one table (`mmgbsa/config.py`); an unknown one gives a warning with the closest known name, every value is checked, and the message says what is allowed. Older spellings keep working with a warning.
+- **User guide** in the style of OpenMM's: a first example read line by line, and for every option its default, values, Amber MMPBSA.py equivalent, how it is applied, its measured effect on two bundled systems and when to change it. A test checks that the documentation lists every option and that its examples use only existing options.
+- `ligand_mol` with `ligand_selection` in Coordinate Mode is a configuration error: a selected ligand is built with the protein force field.
+
+### Removed
+- `nonbonded_cutoff`: it cut some interactions and not others and stopped GPU runs. MM/GBSA evaluates every atom pair, as MMPBSA.py does; `rgbmax` limits the Born-radius calculation.
+- Options that had no effect: `use_cache` (the cache never reused anything), `parallel_processing`, `entropy_approximation`, `receptor_resname` and `ligand_charge`, the unreachable `visualization_settings`, and the options read only by the separate `complete_runner` module, which `opengbsa` never ran and which is removed (`analysis_name`, `compound_name`, the `save_frame_by_frame_csv` group, `generate_final_report`, `include_plots`, `include_statistics`, `include_convergence`, `reproducibility_settings`). Each gives a warning that says why.
+- `dimer_mode` and `receptor_subunits`: the second calculation used the wrong frames and overwrote the decomposition's receptor and ligand. A second run with `receptor_selection` and `ligand_selection` computes such an interface.
+
 ## [0.0.22] - 2026-10-29
 
 Normal-mode binding entropy of the complex, the receptor and the ligand, validated against MMPBSA.py.

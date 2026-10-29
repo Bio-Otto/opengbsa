@@ -2,18 +2,21 @@
 
     python docs/scripts/option_effects.py [--platform CUDA] [--work DIR]
 
-Runs two bundled systems once with their base settings and once for every
-variant below, each changing one option:
+Runs two systems of the repository once with their base settings and once
+for every variant below, each changing one option:
 
 * 6T1H with ligand 1151 (examples/quickstart, Native Mode, 50 frames), the
   quickstart settings;
 * IRF11 with DNA (test/configs/dna_protein_test, Coordinate Mode, 101 frames),
-  a highly charged protein-nucleic acid complex.
+  a highly charged protein-nucleic acid complex; run its fetch_data.sh and
+  prepare_system.py first.
 
-Writes docs/data/option_effects.csv, which the user guide shows as a table:
-the mean binding enthalpy, its standard deviation over the frames and the
-change from the base settings, in kcal/mol. Run it from the root of the
-repository.
+Writes docs/data/option_effects.csv: the mean binding enthalpy, its standard
+deviation over the frames and the change from the base settings, in kcal/mol.
+From it, the two tables the user guide shows: option_effects_energy.csv (the
+energy function) and option_effects_frames.csv (the frame choice).
+``--tables-only`` rebuilds these two from option_effects.csv without running.
+Run it from the root of the repository.
 """
 import argparse
 import subprocess
@@ -81,11 +84,32 @@ def run(system, settings, platform, work):
     return df["binding_energy"].mean(), df["binding_energy"].std()
 
 
+FRAME_OPTIONS = ("max_frames", "frame_selection", "frame_stride")
+
+
+def write_tables():
+    """The two tables of the user guide, from option_effects.csv."""
+    t = pd.read_csv(OUT).fillna("")
+    cols = {"Option": t["option"].map(lambda o: o if o.startswith("(") else f"``{o}``"),
+            "Value": t["value"]}
+    for system in SYSTEMS:
+        cols[f"{system} ΔH"] = [f"{h:.2f} ± {s:.2f}" for h, s in zip(t[f"{system} dH"], t[f"{system} SD"])]
+        cols[f"{system} change"] = [f"{c:+.2f}" if i else "" for i, c in enumerate(t[f"{system} change"])]
+    shown = pd.DataFrame(cols)
+    frames = t["option"].isin(FRAME_OPTIONS)
+    shown[~frames].to_csv(OUT.with_name("option_effects_energy.csv"), index=False)
+    shown[frames | (t.index == 0)].to_csv(OUT.with_name("option_effects_frames.csv"), index=False)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--platform", default="CUDA")
     ap.add_argument("--work", default=None, help="directory for the runs (default: a temporary one)")
+    ap.add_argument("--tables-only", action="store_true", help="rebuild the two tables from option_effects.csv")
     a = ap.parse_args()
+    if a.tables_only:
+        write_tables()
+        return
     work = Path(a.work or tempfile.mkdtemp())
     work.mkdir(parents=True, exist_ok=True)
 
@@ -107,7 +131,8 @@ def main():
         print(f"{system}: {time.time() - t0:.0f} s", file=sys.stderr)
     t = pd.DataFrame(rows).drop(columns="settings")
     t.round(2).to_csv(OUT, index=False)
-    print(f"wrote {OUT}", file=sys.stderr)
+    write_tables()
+    print(f"wrote {OUT} and the two tables of the user guide", file=sys.stderr)
 
 
 if __name__ == "__main__":
