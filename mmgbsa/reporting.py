@@ -14,7 +14,6 @@ import numpy as np
 # Configure logger
 logger = logging.getLogger(__name__)
 
-from .interaction_entropy import METHOD_LABELS, entropy_result, interaction_energies
 
 class HTMLReportGenerator:
     """
@@ -154,39 +153,13 @@ class HTMLReportGenerator:
 """
 
     
-    def _calculate_entropy_term(self, df_glob, temp=300.0):
-        """
-        Calculate Entropic Contribution (-TdS) from the fluctuation of the
-        gas-phase interaction energy (mmgbsa.interaction_entropy), for frame
-        tables that come without a pipeline entropy result.
-        Returns (neg_TdS_value, method_name)
-        """
-        try:
-            reporting_settings = self.config.get('reporting_settings', {})
-            method = reporting_settings.get('entropy_approximation', 'gaussian').lower()
-            # 'gaussian' is the second-order cumulant (C2), 'exponential' the
-            # interaction entropy (IE)
-            method = {'gaussian': 'c2', 'exponential': 'interaction',
-                      'interaction_entropy': 'interaction'}.get(method, method)
-            if method not in METHOD_LABELS or df_glob is None:
-                return None, None
-            if not {'delta_vdw', 'delta_elec'}.issubset(df_glob.columns):
-                return None, None
-
-            temp = self.config.get('analysis_settings', {}).get('temperature', temp)
-            entropy = entropy_result(interaction_energies(df_glob), method, temp)
-            return entropy['value'], entropy['label']
-
-        except Exception as e:
-            logger.error(f"Entropy calculation error: {e}")
-            return None, None
-
     def _extract_global_entropy(self, global_results=None, df_glob=None):
         """
-        Prefer entropy already computed by main MM/GBSA pipeline.
-        Falls back to local approximation only when unavailable.
-        Returns (neg_TdS, method_name, delta_g_total_or_none).
+        The entropy estimate of the MM/GBSA run (entropy_method), if any.
+        Returns (neg_TdS, method_name, delta_g_total_or_none); all None when
+        no entropy method was run.
         """
+        del df_glob   # kept for the call signature; the report computes no entropy itself
         neg_tds = None
         method = None
         delta_g = None
@@ -211,9 +184,6 @@ class HTMLReportGenerator:
                     delta_g = float(global_results.get('delta_g'))
                 except Exception:
                     delta_g = None
-
-        if neg_tds is None:
-            neg_tds, method = self._calculate_entropy_term(df_glob)
 
         return neg_tds, method, delta_g
 
@@ -651,10 +621,6 @@ class HTMLReportGenerator:
                         <td>-</td>
                     </tr>
                  """
-             elif self.config.get('reporting_settings', {}).get('entropy_approximation') == 'none':
-                 pass # User explicitly disabled
-             else:
-                 pass # Approximation not available (e.g. no binding energy column)
 
              # Solvation
              s_mean = df['delta_gb'] + df['delta_sa']

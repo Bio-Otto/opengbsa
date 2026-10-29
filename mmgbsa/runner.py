@@ -210,35 +210,20 @@ class MMGBSARunner:
         """Setup MM/GBSA calculator with configuration"""
         analysis_settings = self.config['analysis_settings']
         forcefield_settings = self.config.get('forcefield_settings', {})
-        
-        
-        # Determine cache directory
-        cache_dir = None
-        if self.output_dir:
-            cache_dir = Path(self.output_dir) / "cache"
-        else:
-            # Fallback if output_dir not yet set
-             out_settings = self.config.get('output_settings', {})
-             base_out = out_settings.get('output_directory', 'mmgbsa_results')
-             cache_dir = Path(base_out) / "cache"
 
         calculator = GBSACalculator(
             temperature=analysis_settings.get('temperature', 300),
-            verbose=analysis_settings.get('verbose', 1),
+            verbose=bool(analysis_settings.get('verbose', True)),
             gb_model=analysis_settings.get('gb_model', 'OBC2'),
             salt_concentration=analysis_settings.get('salt_concentration', 0.15),
-            use_cache=analysis_settings.get('use_cache', True),
-            parallel_processing=analysis_settings.get('parallel_processing', False),
             max_workers=analysis_settings.get('max_workers', None),
             protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
-            charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
             solvent_dielectric=analysis_settings.get('solvent_dielectric', None),   # 78.5, or MMPBSA.py's with amber_compatible
             entropy_method=(analysis_settings.get('entropy_method', 'interaction')
                             if analysis_settings.get('run_entropy_analysis', False) else 'none'),
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
             sa_model=analysis_settings.get('sa_model', None),                       # LCPO
-            nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
             charmm_params=forcefield_settings.get('charmm_params', None),
             charmm_coordinates=forcefield_settings.get('charmm_coordinates', None),
@@ -250,7 +235,6 @@ class MMGBSARunner:
             nmode_drms=analysis_settings.get('nmode_drms', 0.001),
             nmode_maxcyc=analysis_settings.get('nmode_maxcyc', 10000),
             nmode_precision=analysis_settings.get('nmode_precision', 'mixed'),
-            cache_dir=cache_dir
         )
 
         # Apply platform separation settings (analysis/decomposition) when provided.
@@ -443,52 +427,6 @@ class MMGBSARunner:
         if mmgbsa_results.get('parameterized_residues'):
             log.result("Parameterized Residues", ", ".join(mmgbsa_results['parameterized_residues']))
 
-        # DUAL MODE: Dimer Interface Analysis
-        if analysis_settings.get('dimer_mode', False):
-            log.section("STEP 4.5: Dimer Interface Analysis (Dual Mode)")
-            log.info("Calculating interface stability between defined subunits...")
-            
-            receptor_subunits = analysis_settings.get('receptor_subunits', {})
-            unit_a = receptor_subunits.get('unit_a')
-            unit_b = receptor_subunits.get('unit_b')
-            
-            if unit_a and unit_b:
-                try:
-                    interface_dir = output_dir / 'interface_stability'
-                    interface_dir.mkdir(exist_ok=True)
-                    
-                    log.info(f"  • Receptor Mask: {unit_a}")
-                    log.info(f"  • Ligand Mask:   {unit_b} (Treated as ligand for calculation)")
-                    
-                    interface_results = calculator.run_comprehensive(
-                        ligand_mol=None, # Force Protein-Protein mode
-                        complex_pdb=input_files['complex_pdb'],
-                        xtc_file=input_files['trajectory'],
-                        ligand_pdb=None,
-                        max_frames=analysis_settings.get('max_frames', 50),
-                        energy_decomposition=False, # Keep it simple for interface
-                        qha_analyze_complex=False,
-                        output_dir=interface_dir,
-                        ligand_selection=unit_b,
-                        receptor_selection=unit_a,
-                        print_interval=analysis_settings.get('print_interval', 10)
-                    )
-                    
-                    if interface_results:
-                        self.results['interface_stability'] = interface_results
-                        log.success(f"Interface Stability: {interface_results['mean_binding_energy']:.2f} ± {interface_results['std_error']:.2f} kcal/mol")
-                        
-                        # Compare energies
-                        binding_E = mmgbsa_results['mean_binding_energy']
-                        interface_E = interface_results['mean_binding_energy']
-                        log.result("Ligand Binding Energy", f"{binding_E:.2f}", "kcal/mol")
-                        log.result("Dimer Interface Energy", f"{interface_E:.2f}", "kcal/mol")
-                except Exception as e:
-                    log.error(f"Dimer Interface Analysis Failed: {e}")
-                    log.warning("Continuing with rest of analysis...")
-            else:
-                log.warning("dimer_mode is enabled but 'receptor_subunits' (unit_a, unit_b) are missing in config!")
-            
         # Step 5: Run entropy analysis (if enabled)
         if analysis_settings.get('run_entropy_analysis', False):
             log.section("STEP 5: Entropy Analysis")

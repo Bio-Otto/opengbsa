@@ -15,7 +15,6 @@ import pandas as pd
 import copy
 import time
 from pathlib import Path
-import pickle
 import warnings
 from .utils import convert_mol2_to_sdf
 import mdtraj as md
@@ -74,7 +73,6 @@ Fixed version that properly handles force exceptions to avoid OpenMM errors
 """
 import os
 import random
-import pickle
 import time
 import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
@@ -1581,11 +1579,16 @@ def _frame_worker_process(args):
 
 class GBSACalculator(GBSAForceManager):
     """Advanced True Force Field MMGBSA Calculator"""
-    
-    def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15,
-                 use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
-             charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
-             visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None, nonbonded_cutoff=None,
+
+    # Partial-charge method of the OpenFF parameterisation of a residue that the
+    # protein force field lacks (and of parameterize_ligand_openff). Ligands built
+    # from a ligand_mol file keep the file's charges (MMFF94 if it has none).
+    OPENFF_CHARGE_METHOD = 'am1bcc'
+
+    def __init__(self, temperature=300, verbose=True, gb_model='OBC2', salt_concentration=0.15,
+                 max_workers=None, protein_forcefield='amber',
+             solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
+             platform=None, sa_model=None, nonbonded_cutoff=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
              gb_radii_set='auto', amber_compatible=False, rgbmax=None, lcpo_typing=None,
              nmode_frames=10, nmode_drms=0.001, nmode_maxcyc=10000, nmode_precision='mixed'):
@@ -1596,22 +1599,17 @@ class GBSACalculator(GBSAForceManager):
         -----------
         temperature : float
              Temperature in Kelvin for the analysis
-        verbose : int
-             Verbosity level (0=quiet, 1=normal, 2=verbose, 3=debug)
+        verbose : bool
+             Print setup details (platform request, ...) in addition to the log
         gb_model : str
              Generalized Born model ('OBC1', 'OBC2', 'HCT', 'GBn', 'GBn2')
         salt_concentration : float
              Salt concentration in Molar for Debye-Hückel screening
-        use_cache : bool
-             Enable caching for faster repeated runs
-        parallel_processing : bool
-             Enable parallel processing for frame analysis
         max_workers : int, optional
-             Maximum number of parallel workers (None=auto-detect)
+             Worker processes of the CPU frame loop (None: min(cores - 1, 4)).
+             The frames are split over workers whenever the platform is CPU.
         protein_forcefield : str
              Protein forcefield to use ('amber', etc.)
-        charge_method : str
-             Charge method for ligand ('am1bcc', 'gasteiger')
         solute_dielectric : float
              Solute dielectric constant (default 1.0)
         solvent_dielectric : float
@@ -1636,8 +1634,6 @@ class GBSACalculator(GBSAForceManager):
              Reference platform)
         platform : str, optional
              Platform to force (CPU, CUDA, OpenCL, Reference)
-        reporting_settings : dict, optional
-             Settings for HTML report generation (charts, entropy viz, etc.)
         sa_model : str
              Surface Area model ('ACE' or 'LCPO')
         nonbonded_cutoff : float, optional
@@ -1675,17 +1671,14 @@ class GBSACalculator(GBSAForceManager):
         """
         self.temperature = temperature * unit.kelvin
         self.platform_preference = platform
-        self.reporting_settings = reporting_settings or {}
-        self.verbose = verbose
+        self.verbose = bool(verbose)
         self.gb_model = gb_model
         # 'auto': an Amber .prmtop keeps its own GB radii (as Amber does), other
         # inputs get the gb_model set; a set name forces it (gb_radii_decision).
         self.gb_radii_set = gb_radii_set or 'auto'
         self._gb_radii_decision = StructureManager._GB_MODEL_RADII_SET.get(gb_model, 'mbondi2')
         self.salt_concentration = salt_concentration
-        self.use_cache = use_cache
-        self.parallel_processing = parallel_processing
-        self.max_workers = max_workers or min(mp.cpu_count() - 1, 4)
+        self.max_workers = max_workers or max(1, min(mp.cpu_count() - 1, 4))
         # 'amber14-all' and the file name 'amber14-all.xml' mean the amber14 set;
         # 'auto' means the default
         pff = str(protein_forcefield or 'amber').strip().lower()
@@ -1693,7 +1686,6 @@ class GBSACalculator(GBSAForceManager):
         self.protein_forcefield = pff
         # Support user-defined ligand forcefield (openff, gaff)
         self.ligand_forcefield = 'openff' 
-        self.charge_method = charge_method
         self.solute_dielectric = solute_dielectric
         # amber_compatible reproduces Amber MMPBSA.py's GB conventions: LCPO non-polar
         # term, effective Born radii only within rgbmax = 25 A, and MMPBSA.py's solvent
@@ -1729,7 +1721,6 @@ class GBSACalculator(GBSAForceManager):
         self.reimage_trajectory = reimage_trajectory
         self.charmm_params = charmm_params
         self.charmm_coordinates = charmm_coordinates
-        self.visualization_settings = visualization_settings or {}
         self.parameterized_residues = [] # Track any dynamic residues
         self.physics_assumptions = []
 
@@ -1758,19 +1749,10 @@ class GBSACalculator(GBSAForceManager):
         
         self.energies = {'complex': [], 'protein': [], 'ligand': [], 'binding': []}
         self.energy_decompositions = []
-        
-        # Cache directory
-        # Cache directory
-        if cache_dir:
-            self.cache_dir = Path(cache_dir)
-        else:
-            self.cache_dir = Path('.mmgbsa_cache')
-            
-        if self.use_cache:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-            if self.verbose:
-                print(f"✓ Cache directory: {self.cache_dir}")
-        
+        # Folder for the files a run derives from its inputs (format conversions,
+        # aliases); the run's output folder once run_comprehensive/run knows it
+        self.work_dir = None
+
         # Platform settings for separate analysis/decomposition configuration
         self.preferred_platform = None
         self.decomposition_platform = None
@@ -1805,6 +1787,19 @@ class GBSACalculator(GBSAForceManager):
                     print(f"  Requested platform for analysis: {self.preferred_platform}")
                 if self.decomposition_platform:
                     print(f"  Platform for decomposition: {self.decomposition_platform}")
+
+    def _work_dir_path(self):
+        """Folder for files derived from the inputs (format conversions, aliases).
+
+        The run's output folder once run_comprehensive/run know it, else a fresh
+        temporary folder; never the folder of an input file.
+        """
+        if self.work_dir is None:
+            import tempfile
+            self.work_dir = Path(tempfile.mkdtemp(prefix='opengbsa_'))
+        path = Path(self.work_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def validate_input_files(self, ligand_mol, complex_pdb, ligand_pdb, xtc_file, solvated_topology=None):
         """
@@ -1894,9 +1889,7 @@ class GBSACalculator(GBSAForceManager):
                     # Use OpenFF for validation
                     if ligand_mol.endswith('.mol2'):
                         # Use our robust converter for validation
-                        cache_path = self.cache_dir if hasattr(self, 'cache_dir') else Path(".mmgbsa_cache")
-                        cache_path.mkdir(parents=True, exist_ok=True)
-                        validation_temp_sdf = str(cache_path / "validation_temp.sdf")
+                        validation_temp_sdf = str(self._work_dir_path() / "validation_temp.sdf")
                         
                         if convert_mol2_to_sdf(ligand_mol, validation_temp_sdf):
                             mol = Molecule.from_file(validation_temp_sdf, allow_undefined_stereo=True)
@@ -2196,8 +2189,7 @@ class GBSACalculator(GBSAForceManager):
             f.write(f"GB Model: {results['gb_model']}\n")
             f.write(f"Salt Concentration: {self.salt_concentration} M\n")
             f.write(f"Temperature: {self.temperature}\n")
-            f.write(f"Frames Analyzed: {results['n_frames']}\n")
-            f.write(f"Parallel Processing: {self.parallel_processing}\n\n")
+            f.write(f"Frames Analyzed: {results['n_frames']}\n\n")
             
             f.write("Results Summary:\n")
             f.write("-" * 20 + "\n")
@@ -2429,62 +2421,6 @@ class GBSACalculator(GBSAForceManager):
             self.ligand_forcefield = ff_name.lower()
             if self.verbose: print(f"Set ligand forcefield to: {self.ligand_forcefield}")
 
-    def _get_cache_filename(self, input_path, system_type, gb_model):
-        """Generate cache filename based on input file and parameters"""
-        file_path = Path(input_path)
-        # FIX: Include nonbonded_cutoff in hash to avoid stale cache on cutoff change
-        cutoff_val = self.nonbonded_cutoff if self.nonbonded_cutoff is not None else "NoCutoff"
-        file_hash = str(hash(f"{file_path.name}_{system_type}_{gb_model}_{self.salt_concentration}_{cutoff_val}"))
-        return self.cache_dir / f"{file_path.stem}_{system_type}_{gb_model}_{file_hash}.pkl"
-
-    def _save_system_to_cache(self, system, topology, mol_obj, cache_file):
-        """Save parameterized system to cache"""
-        try:
-            cache_data = {
-                'system_xml': openmm.XmlSerializer.serialize(system),
-                'topology': topology,
-                'mol_obj': mol_obj,
-                'gb_model': self.gb_model,
-                'salt_concentration': self.salt_concentration,
-                'nonbonded_cutoff': self.nonbonded_cutoff
-            }
-            with open(cache_file, 'wb') as f:
-                pickle.dump(cache_data, f)
-            if self.verbose:
-                print(f"✓ System saved to cache: {cache_file.name}")
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not save to cache: {e}")
-
-    def _load_system_from_cache(self, cache_file):
-        """Load parameterized system from cache"""
-        try:
-            with open(cache_file, 'rb') as f:
-                cache_data = pickle.load(f)
-            
-            # Verify cache matches current parameters
-            cached_cutoff = cache_data.get('nonbonded_cutoff', None)
-
-            if (cache_data['gb_model'] != self.gb_model or 
-                cache_data['salt_concentration'] != self.salt_concentration or
-                cached_cutoff != self.nonbonded_cutoff):
-                if self.verbose:
-                    print(f"Cache parameters don't match, will regenerate")
-                return None, None, None
-            
-            # Deserialize system
-            system = openmm.XmlSerializer.deserialize(cache_data['system_xml'])
-            
-            if self.verbose:
-                print(f"✓ System loaded from cache: {cache_file.name}")
-            
-            return system, cache_data['topology'], cache_data['mol_obj']
-            
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not load from cache: {e}")
-            return None, None, None
-
     def parameterize_ligand_openff(self, ligand_mol):
         """
         Parameterize ligand using OpenFF Toolkit or Antechamber (GAFF)
@@ -2501,16 +2437,6 @@ class GBSACalculator(GBSAForceManager):
         except ImportError:
              pass
 
-        # Check cache first
-        if self.use_cache:
-            cache_file = self._get_cache_filename(ligand_mol, 'ligand', self.gb_model)
-            if cache_file.exists():
-                log.process("Loading ligand from cache...")
-                cached_system, cached_topology, cached_mol = self._load_system_from_cache(cache_file)
-                if cached_system is not None:
-                    log.success(f"Ligand loaded from cache ({cached_system.getNumParticles()} particles)")
-                    return cached_system, cached_topology, cached_mol
-        
         log.process("Parameterizing ligand with OpenFF SMIRNOFF (this may take a while...)...")
         start_time = time.time()
         
@@ -2521,9 +2447,7 @@ class GBSACalculator(GBSAForceManager):
             elif ligand_mol.endswith('.mol2'):
             # Auto-convert to SDF for robust handling (bypass OpenFF/RDKit protonation issues)
                 log.process("Auto-converting Mol2 to SDF for robust OpenFF loading...")
-                # Ensure cache dir exists
-                self.cache_dir.mkdir(parents=True, exist_ok=True)
-                temp_sdf = str(self.cache_dir / (Path(ligand_mol).stem + "_converted.sdf"))
+                temp_sdf = str(self._work_dir_path() / (Path(ligand_mol).stem + "_converted.sdf"))
                 
                 if convert_mol2_to_sdf(ligand_mol, temp_sdf):
                     log.info(f"Converted to {temp_sdf}, loading...")
@@ -2546,14 +2470,14 @@ class GBSACalculator(GBSAForceManager):
         # Create force field and parameterize
         try:
             # Explicitly assign charges first
-            log.process(f"Assigning partial charges using {self.charge_method}...")
-            if self.charge_method in ['am1bcc', 'gasteiger']:
-                self.physics_assumptions.append(f"Ligand Parameterization: Missing explicit quantum RESP charges in native structural matrix. Approximated via empirical '{self.charge_method}' derivation.")
+            log.process(f"Assigning partial charges using {self.OPENFF_CHARGE_METHOD}...")
+            if self.OPENFF_CHARGE_METHOD in ['am1bcc', 'gasteiger']:
+                self.physics_assumptions.append(f"Ligand Parameterization: Missing explicit quantum RESP charges in native structural matrix. Approximated via empirical '{self.OPENFF_CHARGE_METHOD}' derivation.")
             try:
-                mol.assign_partial_charges(partial_charge_method=self.charge_method)
+                mol.assign_partial_charges(partial_charge_method=self.OPENFF_CHARGE_METHOD)
                 log.info("Charges assigned successfully")
             except Exception as e:
-                if self.charge_method == 'am1bcc':
+                if self.OPENFF_CHARGE_METHOD == 'am1bcc':
                     log.warning(f"AM1-BCC failed: {e}")
                     log.info("Retrying with 'gasteiger' charges as fallback...")
                     self.physics_assumptions.append("Ligand Parameterization: Standard AM1-BCC empirical mapping failed. Falling back to extreme basic 'gasteiger' approximations.")
@@ -2611,11 +2535,6 @@ class GBSACalculator(GBSAForceManager):
             log.error(f"Error refining GBSA forces for ligand: {e}")
             raise e
         
-        # Save to cache
-        if self.use_cache:
-            cache_file = self._get_cache_filename(ligand_mol, 'ligand', self.gb_model)
-            self._save_system_to_cache(ligand_gbsa_system, ligand_top, mol, cache_file)
-            
         total_time = time.time() - start_time
         log.result("Total ligand preparation time", f"{total_time:.1f}", "s")
         
@@ -2674,18 +2593,6 @@ class GBSACalculator(GBSAForceManager):
          traceback.print_exc()
          # Fallthrough to standard PDB parameterization if detection fails or Generic
          pass
-        """Parameterize protein with Amber (with caching)"""
-        
-        # Check cache first
-        if self.use_cache:
-            cache_file = self._get_cache_filename(complex_pdb, 'protein', self.gb_model)
-            if cache_file.exists():
-                log.process("Loading protein from cache...")
-                cached_system, cached_topology, cached_positions = self._load_protein_from_cache(cache_file)
-                if cached_system is not None:
-                    log.success(f"Protein loaded from cache ({cached_system.getNumParticles()} particles)")
-                    return cached_system, cached_topology, cached_positions
-        
         log.process("Parameterizing protein with Amber (using Modeller for robustness)...")
         start_time = time.time()
         
@@ -2863,12 +2770,12 @@ class GBSACalculator(GBSAForceManager):
                     log.process("Attempting on-the-fly parameterization (XML-only, preserving PDB)...")
                     
                     from .parameterizer import ResidueParameterizer
-                    param_engine = ResidueParameterizer("parameterization_work")
+                    param_engine = ResidueParameterizer(str(self._work_dir_path() / "parameterization_work"))
                     
                     for res_name in unique_missing:
                         log.process(f"Parameterizing {res_name}...")
                         xml_out = param_engine.work_dir / f"{res_name}.xml"
-                        xml_path, h_pdb_path = param_engine.simple_run(complex_pdb, res_name, xml_out, charge_method=self.charge_method)
+                        xml_path, h_pdb_path = param_engine.simple_run(complex_pdb, res_name, xml_out, charge_method=self.OPENFF_CHARGE_METHOD)
                         forcefield.loadFile(str(xml_path))
                         log.success(f"Generated XML parameters for {res_name} (PDB unchanged)")
                     
@@ -2908,59 +2815,10 @@ class GBSACalculator(GBSAForceManager):
         
         log.success(f"Protein parameterized with fixed enhanced GBSA ({protein_gbsa_system.getNumParticles()} particles)")
         
-        # Save to cache
-        if self.use_cache:
-            cache_file = self._get_cache_filename(complex_pdb, 'protein', self.gb_model)
-            self._save_protein_to_cache(protein_gbsa_system, protein_top, protein_pos, cache_file)
-        
         total_time = time.time() - start_time
         print(f"✓ Total protein preparation time: {total_time:.1f}s")
         
         return protein_gbsa_system, protein_top, protein_pos, complex_pdb
-
-    def _save_protein_to_cache(self, system, topology, positions, cache_file):
-        """Save protein system to cache"""
-        try:
-            cache_data = {
-                'system_xml': openmm.XmlSerializer.serialize(system),
-                'topology': topology,
-                'positions': positions,
-                'gb_model': self.gb_model,
-                'salt_concentration': self.salt_concentration
-            }
-            with open(cache_file, 'wb') as f:
-                pickle.dump(cache_data, f)
-            if self.verbose:
-                print(f"✓ Protein system saved to cache: {cache_file.name}")
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not save protein to cache: {e}")
-
-    def _load_protein_from_cache(self, cache_file):
-        """Load protein system from cache"""
-        try:
-            with open(cache_file, 'rb') as f:
-                cache_data = pickle.load(f)
-            
-            # Verify cache matches current parameters
-            if (cache_data['gb_model'] != self.gb_model or 
-                cache_data['salt_concentration'] != self.salt_concentration):
-                if self.verbose:
-                    print(f"Protein cache parameters don't match, will regenerate")
-                return None, None, None
-            
-            # Deserialize system
-            system = openmm.XmlSerializer.deserialize(cache_data['system_xml'])
-            
-            if self.verbose:
-                print(f"✓ Protein system loaded from cache: {cache_file.name}")
-            
-            return system, cache_data['topology'], cache_data['positions']
-            
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not load protein from cache: {e}")
-            return None, None, None
 
     def get_ligand_positions_openmm(self, ligand_mol_obj, ligand_pdb):
         """Get ligand positions, preferring PDB but falling back to Molecule conformer if atom count mismatches"""
@@ -3016,17 +2874,6 @@ class GBSACalculator(GBSAForceManager):
         
         If ligand_mol is None, assumes protein-only or protein-protein system (using Amber for all).
         """
-        
-        # Check cache first (skip if ligand_mol is None for now, or handle key differently)
-        if self.use_cache and ligand_mol is not None:
-            cache_key = f"{Path(protein_pdb).stem}_{Path(ligand_mol).stem}_complex"
-            cache_file = self._get_cache_filename(cache_key, 'complex', self.gb_model)
-            if cache_file.exists():
-                log.process("Loading complex system from cache...")
-                cached_system, cached_topology = self._load_complex_from_cache(cache_file)
-                if cached_system is not None:
-                    log.success(f"Complex system loaded from cache ({cached_system.getNumParticles()} particles)")
-                    return cached_system, cached_topology, None
         
         log.process('Building complex system...')
         start_time = time.time()
@@ -3096,13 +2943,12 @@ class GBSACalculator(GBSAForceManager):
                 
             molecules_list = [ligand_mol_obj]
             
-            # Explicitly assign charges to respect user config (e.g., gasteiger)
-            # This avoids SystemGenerator defaulting to AM1-BCC
+            # The ligand keeps the partial charges of its file. A file without charges
+            # gets MMFF94 charges (Gasteiger if MMFF94 fails), which avoids the slow
+            # AM1-BCC charges SystemGenerator would otherwise compute.
             if ligand_mol_obj.partial_charges is None:
-                log.process(f"Assigning partial charges ({self.charge_method}) for complex building...")
-                
-                # CRITICAL: Force MMFF94 to prevent Antechamber hang
-                log.info("Forcing MMFF94 charges (skipping Antechamber/SQM)...")
+                log.process("The ligand file has no partial charges; assigning MMFF94 charges "
+                            "(Gasteiger if MMFF94 fails)...")
                 try:
                     ligand_mol_obj.assign_partial_charges(partial_charge_method='mmff94')
                 except Exception as e:
@@ -3274,63 +3120,10 @@ class GBSACalculator(GBSAForceManager):
         
         log.success(f"System created ({gbsa_system.getNumParticles()} particles)")
         
-        # Save to cache
-        if self.use_cache and ligand_mol is not None:
-            cache_key = f"{Path(protein_pdb).stem}_{Path(ligand_mol).stem}_complex"
-            cache_file = self._get_cache_filename(cache_key, 'complex', self.gb_model)
-            self._save_complex_to_cache(gbsa_system, modeller.topology, cache_file)
-        
         total_time = time.time() - start_time
         log.result("Total complex system preparation time", f"{total_time:.1f}", "s")
         
         return gbsa_system, modeller.topology, modeller.positions
-
-    def _save_complex_to_cache(self, system, topology, cache_file):
-        """Save complex system to cache"""
-        try:
-            cache_data = {
-                'system_xml': openmm.XmlSerializer.serialize(system),
-                'topology': topology,
-                'gb_model': self.gb_model,
-                'salt_concentration': self.salt_concentration,
-                'nonbonded_cutoff': self.nonbonded_cutoff
-            }
-            with open(cache_file, 'wb') as f:
-                pickle.dump(cache_data, f)
-            if self.verbose:
-                print(f"✓ Complex system saved to cache: {cache_file.name}")
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not save complex to cache: {e}")
-
-    def _load_complex_from_cache(self, cache_file):
-        """Load complex system from cache"""
-        try:
-            with open(cache_file, 'rb') as f:
-                cache_data = pickle.load(f)
-            
-            # Verify cache matches current parameters
-            cached_cutoff = cache_data.get('nonbonded_cutoff', None)
-
-            if (cache_data['gb_model'] != self.gb_model or 
-                cache_data['salt_concentration'] != self.salt_concentration or
-                cached_cutoff != self.nonbonded_cutoff):
-                if self.verbose:
-                    print(f"Complex cache parameters don't match, will regenerate")
-                return None, None
-            
-            # Deserialize system
-            system = openmm.XmlSerializer.deserialize(cache_data['system_xml'])
-            
-            if self.verbose:
-                print(f"✓ Complex system loaded from cache: {cache_file.name}")
-            
-            return system, cache_data['topology']
-            
-        except Exception as e:
-            if self.verbose:
-                print(f"Warning: Could not load complex from cache: {e}")
-            return None, None
 
     def get_selection_indices(self, topology, selection_string, ref_pdb=None):
         """Get indices using MDTraj selection syntax
@@ -3938,10 +3731,6 @@ class GBSACalculator(GBSAForceManager):
             assumptions.extend(self.gbsa_manager.physics_assumptions)
             
         self.results = {'physics_assumptions': assumptions}
-        
-        if self.use_cache:
-            log.info(f"Cache enabled: {self.cache_dir}")
-            self.list_cache()
         
         analysis_start_time = time.time()
         
@@ -5209,19 +4998,17 @@ class GBSACalculator(GBSAForceManager):
         results = self.save_results(output_dir)
         
         # --- Visualization Section (Moved to end to capture final delta_g) ---
-        viz_config = self.visualization_settings
-        gen_pymol = viz_config.get('generate_pymol', True)
-        gen_heatmaps = viz_config.get('generate_heatmaps', True)
+        # energy_decomposition 'fast' always writes a PyMOL script of the residues
+        # below -0.5 kcal/mol within 5 A of the ligand, and the heat maps
+        # and report of AdvancedVisualization.
         
         # 1. PyMOL Script
-        if gen_pymol and df_fast is not None:
+        if df_fast is not None:
              try:
                   print("creating PyMOL visualization script...")
                   pymol_viz = PyMOLVisualizer(output_dir)
                   
-                  pymol_settings = viz_config.get('pymol', {})
-                  p_threshold = pymol_settings.get('energy_threshold', -0.5)
-                  p_distance = pymol_settings.get('distance_cutoff', 5.0)
+                  p_threshold, p_distance = -0.5, 5.0     # kcal/mol, A
                   
                   # Verify PDB
                   pdb_file = None
@@ -5258,7 +5045,7 @@ class GBSACalculator(GBSAForceManager):
                   print(f"⚠️  PyMOL generation failed: {e}")
 
         # 2. Advanced Visualization & HTML Report
-        if gen_heatmaps and df_fast is not None:
+        if df_fast is not None:
              try:
                   print("Generate Advanced Visualization (Heatmaps & Report)...")
                   viz_tool = AdvancedVisualization(output_dir)
@@ -5277,7 +5064,7 @@ class GBSACalculator(GBSAForceManager):
                   
 
 
-                  viz_tool.generate_comprehensive_plots(compound_name="Ligand", generate_report=viz_config.get('generate_report', True))
+                  viz_tool.generate_comprehensive_plots(compound_name="Ligand", generate_report=True)
                   print("✓ Advanced plots generated.")
              except Exception as e:
                   print(f"⚠️ Visualization failed: {e}")
@@ -5573,35 +5360,6 @@ class GBSACalculator(GBSAForceManager):
         except:
            return None
 
-
-    def clear_cache(self):
-        """Clear all cached systems"""
-        if self.cache_dir.exists():
-            import shutil
-            shutil.rmtree(self.cache_dir)
-            self.cache_dir.mkdir(exist_ok=True)
-            print(f"✓ Cache cleared: {self.cache_dir}")
-        else:
-            print("No cache directory found")
-
-    def list_cache(self):
-        """List cached systems"""
-        if not self.cache_dir.exists():
-            print("No cache directory found")
-            return
-        
-        cache_files = list(self.cache_dir.glob("*.pkl"))
-        if not cache_files:
-            print("No cached systems found")
-            return
-        
-        print(f"Cached systems in {self.cache_dir}:")
-        total_size = 0
-        for cache_file in cache_files:
-            size_mb = cache_file.stat().st_size / (1024 * 1024)
-            total_size += size_mb
-            print(f"  {cache_file.name} ({size_mb:.1f} MB)")
-        print(f"Total cache size: {total_size:.1f} MB")
 
     def create_combined_system(self, protein_system, ligand_system):
         """
