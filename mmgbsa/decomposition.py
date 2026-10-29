@@ -98,6 +98,8 @@ class PerResidueDecomposition:
         self.output_dir = output_dir
         self.n_jobs = n_jobs
         self.report_raw_energies = report_raw_energies
+        # residues in the hot-spot table, plots and heat map (plot_top_residues)
+        self.plot_top_residues = 10
         log.debug(f"PerResidueDecomposition init: report_raw_energies={self.report_raw_energies}")
         
         # Storage for decomposition results
@@ -133,6 +135,8 @@ class PerResidueDecomposition:
 
         if output_dir:
             self.report_dir = output_dir
+        if plot_top_residues:
+            self.plot_top_residues = int(plot_top_residues)
             
         log.section("MM/GBSA WITH PER-RESIDUE DECOMPOSITION")
         
@@ -827,8 +831,9 @@ class PerResidueDecomposition:
         
         df = pd.DataFrame(data)
         
-        # Identify hot spots (most favorable contributions)
-        hot_spots = df.nsmallest(10, 'total')  # Most negative = most favorable
+        # Identify hot spots (most favorable contributions): plot_top_residues of them
+        n_top = int(getattr(self, 'plot_top_residues', 10) or 10)
+        hot_spots = df.nsmallest(n_top, 'total')  # Most negative = most favorable
         
         # Identify key interaction types
         vdw_important = df.nsmallest(5, 'vdw')
@@ -869,14 +874,15 @@ class PerResidueDecomposition:
             
             # Plot 1: Hot spot contributions
             ax1 = axes[0, 0]
-            hot_spots = analysis_results['hot_spots'].head(10)
+            n_top = int(getattr(self, 'plot_top_residues', 10) or 10)
+            hot_spots = analysis_results['hot_spots'].head(n_top)
             bars = ax1.barh(range(len(hot_spots)), hot_spots['total'], 
                            color='red', alpha=0.7, edgecolor='black')
             ax1.set_yticks(range(len(hot_spots)))
             ax1.set_yticklabels([f"{row['residue_name']}{row['residue_number']}" 
                                for _, row in hot_spots.iterrows()])
             ax1.set_xlabel('Total Energy (kcal/mol)')
-            ax1.set_title('Top 10 Binding Hot Spots')
+            ax1.set_title(f'Top {n_top} Binding Hot Spots')
             ax1.grid(True, alpha=0.3)
             
             # Add value labels
@@ -1073,7 +1079,7 @@ class PerResidueDecomposition:
                   f"(MM/GBSA mean over its own frames: {total_binding:.2f}).")
         print()
         
-        print("TOP 10 BINDING HOT SPOTS:")
+        print(f"TOP {len(analysis['hot_spots'])} BINDING HOT SPOTS:")
         print("-" * 40)
         hot_spots = analysis['hot_spots']
         for i, (_, row) in enumerate(hot_spots.iterrows(), 1):
@@ -1320,60 +1326,6 @@ class PerResidueDecomposition:
             
         except Exception as e:
             print(f"  WARNING: Could not save frame-by-frame CSV: {e}")
-
-
-def test_per_residue_decomposition():
-    """
-    Test the per-residue decomposition with your existing MM/GBSA package
-    """
-    
-    print("="*60)
-    print("TESTING PER-RESIDUE DECOMPOSITION")
-    print("="*60)
-    print("This adds advanced per-residue analysis to your MM/GBSA package!")
-    
-    # Your existing MM/GBSA calculator
-    mmgbsa_calc = GBSACalculator(
-        temperature=300,
-        gb_model='OBC2',
-        salt_concentration=0.15,
-        use_cache=True,
-        verbose=1
-    )
-    
-    # Create per-residue decomposition analyzer
-    decomp_analyzer = PerResidueDecomposition(mmgbsa_calc, temperature=300)
-    
-    # Input files
-    ligand_mol = 'test/ligand.sdf'
-    complex_pdb = 'test/complex.pdb'
-    ligand_pdb = 'test/ligand.pdb'
-    xtc_file = 'test/complex.dcd'
-    
-    # Run complete analysis with per-residue decomposition
-    results = decomp_analyzer.run_per_residue_analysis(
-        ligand_mol, complex_pdb, xtc_file, ligand_pdb,
-        max_frames=20,      # For MM/GBSA
-        decomp_frames=5     # For decomposition (computationally expensive)
-    )
-    
-    if results:
-        print(f"\nSUCCESS! Per-residue decomposition completed!")
-        print(f"Your MM/GBSA package now has advanced per-residue analysis!")
-        
-        # Show key results
-        hot_spots = results['analysis_results']['hot_spots']
-        print(f"\nTOP 3 BINDING HOT SPOTS:")
-        for i, (_, row) in enumerate(hot_spots.head(3).iterrows(), 1):
-            print(f"{i}. {row['residue_name']}{row['residue_number']} = {row['total']:.2f} kcal/mol")
-        
-        return results
-    
-    else:
-        print(f"\nWARNING: Per-residue decomposition had issues")
-        print(f"But your core MM/GBSA package is still excellent!")
-        return None
-
 
 
 # ==============================================================================
@@ -1809,22 +1761,3 @@ def _calculate_pairwise_interactions_standalone(system, context, positions, resi
     e_res = np.bincount(atom_res[rows], weights=elec[rows], minlength=len(res_ids))
     v_res = np.bincount(atom_res[rows], weights=vdw[rows], minlength=len(res_ids))
     return {res_id: {'vdw': float(v_res[k]), 'elec': float(e_res[k])} for k, res_id in enumerate(res_ids)}
-
-
-if __name__ == '__main__':
-    # Test the per-residue decomposition
-    results = test_per_residue_decomposition()
-    
-    if results:
-        print(f"\nYOUR MM/GBSA PACKAGE NOW HAS:")
-        print(f"  • Complete MM/GBSA energy calculation")
-        print(f"  • Multiple GB models (HCT, OBC1, OBC2, GBn)")
-        print(f"  • Normal Mode Analysis entropy")
-        print(f"  • Per-residue energy decomposition")  # NEW!
-        print(f"  • Hot spot identification")            # NEW!
-        print(f"  • Advanced visualization")              # NEW!
-        print(f"")
-        print(f"This is now FULLY competitive with Schrödinger Prime!")
-    else:
-        print(f"\nYour MM/GBSA package is still outstanding!")
-        print(f"Per-residue decomposition is an advanced feature that can be refined")
