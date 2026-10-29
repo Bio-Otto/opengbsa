@@ -86,8 +86,7 @@ def build(struct, model="OBC2", salt=0.15, rgbmax=None, sa="LCPO", typing="eleme
         changeRadii(struct, StructureManager._GB_MODEL_RADII_SET[model]).execute()
     system = StructureManager.create_openmm_system(
         struct, implicitSolvent=manager.current_app_model,
-        implicitSolventSaltConc=salt * unit.molar, nonbondedMethod=app.NoCutoff,
-        nonbondedCutoff=None, solventDielectric=78.5)
+        implicitSolventKappa=manager.debye_kappa(), solventDielectric=78.5)
     system = manager.refine_gbsa_forces(system, struct)
     if own_gb_builder:
         for k in reversed(range(system.getNumForces())):

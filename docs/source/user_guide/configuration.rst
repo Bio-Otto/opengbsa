@@ -258,16 +258,16 @@ Equivalents in Amber MMPBSA.py
      - ``sa_model: LCPO``, which uses these values
    * - fixed ``intdiel`` 1, ``extdiel`` 80.0 or 78.3, ``rgbmax`` 25 Å
      - ``solute_dielectric``, ``solvent_dielectric``, ``rgbmax``; ``amber_compatible`` sets MMPBSA.py's values
-   * - ``&decomp``
-     - ``run_per_residue_decomposition`` (:doc:`decomposition`)
+   * - ``&decomp`` with ``idecomp`` 1 or 2
+     - ``run_per_residue_decomposition`` (:doc:`decomposition`); both
+       ``idecomp`` values give the same per-residue contributions, which
+       OpenGBSA reproduces
    * - ``&nmode`` ``nmstartframe``, ``nmendframe``, ``nminterval``
      - ``nmode_frames``
    * - ``&nmode`` ``drms``, ``maxcyc``
      - ``nmode_drms``, ``nmode_maxcyc``
    * - ``entropy = 1`` (quasi-harmonic)
      - ``entropy_method: quasiharmonic``
-
-.. TODO decomposition idecomp equivalence after the decomposition validation
 
 Unknown, renamed and removed options
 ------------------------------------
