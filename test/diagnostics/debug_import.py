@@ -8,10 +8,10 @@ print(f"Sys path: {sys.path}")
 
 try:
     sys.path.append(os.getcwd())
-    from mmgbsa.complete_runner import CompleteMMGBSARunner
-    print("Successfully imported CompleteMMGBSARunner")
+    from mmgbsa.runner import MMGBSARunner
+    print("Successfully imported MMGBSARunner")
 except ImportError as e:
-    print(f"Failed to import CompleteMMGBSARunner: {e}")
+    print(f"Failed to import MMGBSARunner: {e}")
     import traceback
     traceback.print_exc()
 except Exception as e:

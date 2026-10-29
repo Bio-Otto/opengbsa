@@ -215,7 +215,7 @@ def test_validate_wrong_type_is_rejected(tmp_path, existing_files):
     assert mgr.validate_config() is False
 
 
-@pytest.mark.parametrize("binding_mode", ["standard", "dimer_ligand", "ppi"])
+@pytest.mark.parametrize("binding_mode", ["standard", "ppi"])
 def test_validate_documented_binding_modes_are_accepted(tmp_path, existing_files, binding_mode):
     complex_pdb, trajectory = existing_files
     mgr = ConfigManager()
@@ -224,6 +224,17 @@ def test_validate_documented_binding_modes_are_accepted(tmp_path, existing_files
     mgr.config = cfg
     assert mgr.validate_config() is True
     assert mgr.get_analysis_settings()["binding_mode"] == binding_mode
+
+
+def test_validate_dimer_ligand_is_a_deprecated_alias_of_standard(tmp_path, existing_files):
+    complex_pdb, trajectory = existing_files
+    mgr = ConfigManager()
+    cfg = make_valid_config(tmp_path, complex_pdb, trajectory)
+    cfg["analysis_settings"]["binding_mode"] = "dimer_ligand"
+    mgr.config = cfg
+    assert mgr.validate_config() is True
+    assert mgr.get_analysis_settings()["binding_mode"] == "standard"
+    assert any("dimer_ligand" in w and "deprecated" in w for w in mgr.get_validation_warnings())
 
 
 def test_validate_unknown_binding_mode_is_rejected(tmp_path, existing_files):
@@ -279,14 +290,14 @@ def test_validate_decomp_frames_ignored_without_decomposition(tmp_path, existing
     assert mgr.validate_config() is True, mgr.get_validation_errors()
 
 
-def test_validate_random_frame_selection_requires_seed(tmp_path, existing_files):
+def test_validate_random_frame_selection_defaults_to_seed_42(tmp_path, existing_files):
     complex_pdb, trajectory = existing_files
     mgr = ConfigManager()
     cfg = make_valid_config(tmp_path, complex_pdb, trajectory)
     cfg["analysis_settings"]["frame_selection"] = "random"
     mgr.config = cfg
-    assert mgr.validate_config() is False
-    assert any("random_seed" in e for e in mgr.get_validation_errors())
+    assert mgr.validate_config() is True, mgr.get_validation_errors()
+    assert mgr.get_analysis_settings()["random_seed"] == 42
 
 
 def test_validate_random_frame_selection_with_seed_passes(tmp_path, existing_files):

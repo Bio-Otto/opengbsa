@@ -13,6 +13,26 @@ import logging
 log = logging.getLogger(__name__)
 
 
+def _lattice_shift(delta, box_vectors, inverse):
+    """Lattice vector nearest to `delta` (a vector or rows of vectors), for a
+    triclinic cell with box vectors as the rows of `box_vectors`.
+
+    Rounding the reduced (fractional) coordinates gives the right image for a
+    vector much shorter than the cell (a bond); for longer vectors (centres of
+    molecules) the 27 neighbouring lattice vectors are searched for the
+    shortest remainder, which is the true minimum image in a skewed cell such
+    as a rhombic dodecahedron.
+    """
+    import numpy as np
+    from itertools import product
+    delta = np.atleast_2d(np.asarray(delta, dtype=np.float64))
+    n0 = np.round(delta @ inverse)
+    offsets = np.array(list(product((-1, 0, 1), repeat=3)), dtype=np.float64)
+    candidates = (n0[:, None, :] + offsets[None, :, :]) @ box_vectors        # (k, 27, 3)
+    best = np.argmin(np.linalg.norm(delta[:, None, :] - candidates, axis=2), axis=1)
+    return candidates[np.arange(len(delta)), best]
+
+
 def reimage_molecules(traj):
     """
     Re-image a trajectory across periodic boundaries, equivalent to
@@ -64,6 +84,14 @@ def reimage_molecules(traj):
        complexes separated the antibody from PD-1 by 25-52 A in 2.5-7% of
        frames of trajectories that were intact before re-imaging.
 
+    5. **Triclinic cells.** GROMACS rhombic dodecahedra and truncated
+       octahedra are triclinic: their box vectors are not orthogonal. Earlier
+       versions read only the box lengths and imaged as if the cell were
+       rectangular. Triclinic cells are now imaged with the full box vectors
+       (reduced coordinates through the inverse box matrix, and the nearest of
+       the neighbouring images for molecule centres); rectangular cells keep
+       the original arithmetic exactly.
+
     Steps: rebuild a standard bond graph if the topology has none (the
     temporary PDB written by TprLoader carries no CONECT records); walk
     every molecule's bond tree to make it whole; bring the anchor molecules
@@ -103,10 +131,25 @@ def reimage_molecules(traj):
     box = traj.unitcell_lengths
     if box is None:
         raise ValueError("This trajectory does not define a periodic unit cell")
+    angles = traj.unitcell_angles
+    triclinic = angles is not None and not np.allclose(angles, 90.0, atol=1e-3)
+    vectors = traj.unitcell_vectors.astype(np.float64) if triclinic else None
 
     result = traj[:]
     xyz = result.xyz
     n_frames = xyz.shape[0]
+
+    def frame_shifts(f):
+        """(bond shift, nearest-image shift) functions of a displacement in frame f."""
+        if not triclinic:
+            L = box[f]
+            shift = lambda delta: np.round(delta / L) * L       # rectangular: as before
+            return shift, shift
+        B = vectors[f]
+        B_inv = np.linalg.inv(B)
+        bond = lambda delta: (np.round(delta @ B_inv) @ B).astype(xyz.dtype)
+        nearest = lambda delta: _lattice_shift(delta, B, B_inv)[0].astype(xyz.dtype)
+        return bond, nearest
 
     bonds = np.asarray([[b0.index, b1.index] for b0, b1 in top.bonds],
                        dtype=np.int64)
@@ -138,7 +181,7 @@ def reimage_molecules(traj):
         # into the primary image of its already-placed bonded neighbour.
         roots = [int(mi[0]) for mi in mol_indices]
         for f in range(n_frames):
-            L = box[f]
+            bond_shift, image_shift = frame_shifts(f)
             for root, mi in zip(roots, mol_indices):
                 visited = {root}
                 queue = deque([root])
@@ -149,7 +192,7 @@ def reimage_molecules(traj):
                         if j not in visited:
                             visited.add(j)
                             delta = xyz[f, j] - xi
-                            xyz[f, j] -= np.round(delta / L) * L
+                            xyz[f, j] -= bond_shift(delta)
                             queue.append(j)
 
             # 2b) Bring the ANCHORS into one image first. When a multi-chain
@@ -174,7 +217,7 @@ def reimage_molecules(traj):
             for mi in anchor_mols[1:]:
                 ref = xyz[f, np.concatenate(placed)].mean(axis=0)
                 com = xyz[f, mi].mean(axis=0)
-                xyz[f, mi] -= np.round((com - ref) / L) * L
+                xyz[f, mi] -= image_shift(com - ref)
                 placed.append(mi)
 
             # 2c) Place every remaining molecule in the image NEAREST the
@@ -191,11 +234,13 @@ def reimage_molecules(traj):
                 if int(mi[0]) in anchor_set:
                     continue
                 com = xyz[f, mi].mean(axis=0)
-                xyz[f, mi] -= np.round((com - anchor_com) / L) * L
+                xyz[f, mi] -= image_shift(com - anchor_com)
 
-    # 3) Center anchor COM in the box (the `-center` part of trjconv).
+    # 3) Center anchor COM in the box (the `-center` part of trjconv); the
+    # centre of a triclinic cell is half the sum of its box vectors.
     com = xyz[:, anchor_indices, :].mean(axis=1)
-    xyz += (box / 2.0 - com)[:, np.newaxis, :]
+    centre = 0.5 * vectors.sum(axis=1) if triclinic else box / 2.0
+    xyz += (centre - com).astype(xyz.dtype)[:, np.newaxis, :]
 
     return result
 
@@ -206,7 +251,7 @@ class TrajectoryProcessor:
     """
 
     @staticmethod
-    def resolve_mdtraj_loadable_path(trajectory_file):
+    def resolve_mdtraj_loadable_path(trajectory_file, alias_dir=None):
         """
         Returns a path mdtraj can load, aliasing a bare '.trj' extension to
         '.mdcrd' via a symlink if needed.
@@ -223,13 +268,24 @@ class TrajectoryProcessor:
         (not just `TrajectoryProcessor.load_and_process` itself) should
         route it through this first, or it will hit mdtraj's own opaque
         "no loader for filename=... (extension=.trj)" OSError.
+
+        The alias is created in `alias_dir` (the run folder), or in a new
+        temporary folder when none is given -- never next to the input.
         """
         if not str(trajectory_file).lower().endswith('.trj'):
             return str(trajectory_file)
-        alias_path = Path(str(trajectory_file)[:-4] + '.mdcrd')
+        if alias_dir is None:
+            import tempfile
+            alias_dir = tempfile.mkdtemp(prefix='opengbsa_trj_')
+        alias_dir = Path(alias_dir)
+        alias_dir.mkdir(parents=True, exist_ok=True)
+        alias_path = alias_dir / (Path(str(trajectory_file)).name[:-4] + '.mdcrd')
+        target = Path(trajectory_file).resolve()
+        if alias_path.is_symlink() and alias_path.resolve() != target:
+            alias_path.unlink()
         if not alias_path.exists():
             try:
-                alias_path.symlink_to(Path(trajectory_file).resolve())
+                alias_path.symlink_to(target)
             except OSError as e:
                 log.warning(f"Could not create .mdcrd alias for .trj trajectory ({e}); "
                             f"proceeding with the original path, which mdtraj may reject.")

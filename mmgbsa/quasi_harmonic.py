@@ -17,17 +17,22 @@ class QuasiHarmonicAnalysis:
     from a molecular dynamics trajectory.
     """
 
-    def __init__(self, trajectory, system, temperature=300.0, verbose=True):
+    def __init__(self, trajectory, system, temperature=300.0, verbose=True, masses=None):
         """
         Initialize QHA.
 
         Args:
             trajectory (mdtraj.Trajectory): Aligned trajectory of the solute (e.g., ligand).
-            system (openmm.System): OpenMM system object (to get masses).
+            system (openmm.System): OpenMM system object (masses, when `masses` is not given).
             temperature (float): Temperature in Kelvin.
+            masses (sequence of float, optional): Atomic masses (Da) in the atom order
+                of `trajectory`. Without them the System's particle masses are read
+                by index, which is only right when the System has the trajectory's
+                atom order and real (not repartitioned) masses.
         """
         self.trajectory = trajectory
         self.system = system
+        self.masses = None if masses is None else np.asarray(masses, dtype=float)
         self.temperature = temperature
         self.verbose = verbose
         
@@ -56,10 +61,13 @@ class QuasiHarmonicAnalysis:
         n_frames, n_atoms, _ = xyz.shape
         
         # 3. Get Masses (Daltons)
-        masses = []
-        for i in range(n_atoms):
-            masses.append(self.system.getParticleMass(i).value_in_unit(unit.dalton))
-        masses = np.array(masses)
+        if self.masses is not None:
+            if len(self.masses) != n_atoms:
+                raise ValueError(f"{len(self.masses)} masses for {n_atoms} atoms")
+            masses = self.masses
+        else:
+            masses = np.array([self.system.getParticleMass(i).value_in_unit(unit.dalton)
+                               for i in range(n_atoms)])
         
         # 4. Mass-Weighting coordinates
         # q_i = x_i * sqrt(m_i)
