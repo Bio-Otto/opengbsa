@@ -6,10 +6,6 @@ its meaning. ``opengbsa --create-complete-config`` writes the same options into
 a commented file. An option that is left out takes the default shown here.
 Only ``input_files`` and ``analysis_settings`` are required.
 
-.. contents:: Sections
-   :local:
-   :depth: 1
-
 input_files
 -----------
 
