@@ -670,8 +670,7 @@ class PerResidueDecomposition:
         platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
 
         def context(system):
-            integrator = openmm.VerletIntegrator(0.001 * unit.picosecond)
-            return openmm.Context(system, integrator, platform, properties)
+            return _check_context(system, platform, properties)
 
         systems = {
             'complex_system': complex_system,
@@ -710,7 +709,7 @@ class PerResidueDecomposition:
             if ctx is None:
                 decomp_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
                 platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
-                ctx = openmm.Context(systems[f'{key}_system'], openmm.VerletIntegrator(0.001), platform, properties)
+                ctx = _check_context(systems[f'{key}_system'], platform, properties)
                 systems[f'{key}_context'] = ctx
             contexts[name] = ctx
         nonpolar = self._nonpolar_convention()
@@ -1785,6 +1784,7 @@ class _FrameDecomposer:
         coords = {'complex': pos, 'receptor': pos[self.rec], 'ligand': pos[self.lig]}
         energies = {}
         worst = 0.0
+        rtol = max(_relative_tolerance(self.contexts[name]) for name in ('complex', 'receptor', 'ligand'))
         for name in ('complex', 'receptor', 'ligand'):
             ctx = self.contexts[name]
             ctx.setPositions(coords[name])
@@ -1797,7 +1797,7 @@ class _FrameDecomposer:
             for value, ref, label in compared:
                 dev = abs(value - ref)
                 worst = max(worst, dev)
-                if dev > 0.01 + 1e-5 * abs(ref):
+                if dev > 0.01 + rtol * abs(ref):
                     raise DecompositionError(
                         f"{name} {label} solvation: per-atom energies sum to {value:.6f} kcal/mol, "
                         f"OpenMM gives {ref:.6f} kcal/mol for the same coordinates")
@@ -1805,7 +1805,7 @@ class _FrameDecomposer:
                               polar_ref, nonpolar_ref)
         delta = [energies['complex'][k] - energies['receptor'][k] - energies['ligand'][k] for k in range(4)]
         dev_int = max(abs(elec_int - delta[0]), abs(vdw_int - delta[1]))
-        if dev_int > 0.01 + 1e-5 * (abs(delta[0]) + abs(delta[1])) and not self._warned_interaction:
+        if dev_int > 0.01 + rtol * (abs(delta[0]) + abs(delta[1])) and not self._warned_interaction:
             self._warned_interaction = True
             log.warning(f"Per-residue van der Waals/electrostatic interaction ({vdw_int:.4f}/{elec_int:.4f} "
                         f"kcal/mol) differs from OpenMM's complex-receptor-ligand difference "
@@ -1820,6 +1820,37 @@ class _FrameDecomposer:
 
 _CHECK_FIELDS = ('max_solvation_deviation', 'max_interaction_deviation', 'openmm_binding_energy',
                  'openmm_binding_energy_without_nonpolar', 'openmm_nonpolar')
+
+_PRECISION_PROPERTY = {'CUDA': 'CudaPrecision', 'OpenCL': 'OpenCLPrecision'}
+
+
+def _check_context(system, platform, properties):
+    """A Context for the per-frame check against OpenMM, in double precision on
+    CUDA and OpenCL. In mixed precision a GPU's GB energy differs from the exact
+    sum by up to about 1e-5 of its value (0.046 kcal/mol for the 3,400 kcal/mol
+    of an antibody Fv-PD-1 complex), which would hide errors of that size. A
+    device without double precision keeps the platform's precision, and the
+    check then allows 1e-4 of the energy (_relative_tolerance)."""
+    key = _PRECISION_PROPERTY.get(platform.getName())
+    if key and (properties or {}).get(key) != 'double':
+        try:
+            return openmm.Context(system, openmm.VerletIntegrator(0.001), platform,
+                                  dict(properties or {}, **{key: 'double'}))
+        except Exception as e:
+            log.warning(f"The decomposition check runs in {platform.getName()}'s "
+                        f"{(properties or {}).get(key, 'default')} precision: double precision "
+                        f"is not available ({e}).")
+    return openmm.Context(system, openmm.VerletIntegrator(0.001), platform, properties or {})
+
+
+def _relative_tolerance(ctx):
+    """Allowed deviation from OpenMM, as a fraction of the energy: 1e-5 for a
+    double-precision Context and the CPU platform (measured: up to 5e-7), 1e-4
+    for a GPU Context in mixed or single precision (measured: up to 1.4e-5)."""
+    key = _PRECISION_PROPERTY.get(ctx.getPlatform().getName())
+    if key and ctx.getPlatform().getPropertyValue(ctx, key) != 'double':
+        return 1e-4
+    return 1e-5
 
 
 # ==============================================================================

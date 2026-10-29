@@ -131,4 +131,3 @@ The run ends with a summary:
 
     Mean binding energy (Enthalpy): -24.99 ± 4.60 kcal/mol (Standard Deviation)
 
-.. TODO re-check this line against the 0.0.23 quickstart output

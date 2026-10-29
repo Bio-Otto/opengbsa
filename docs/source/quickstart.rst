@@ -3,7 +3,7 @@ Quickstart
 
 This page runs a complete calculation on a protein-ligand complex that ships
 with the repository: the OXA-family beta-lactamase 6T1H with the inhibitor
-1151. It takes a few minutes on a GPU and needs no download besides the
+1151. It takes about a minute on a GPU and needs no download besides the
 repository itself.
 
 1. Get the example
@@ -58,7 +58,7 @@ From the root of the repository:
 
 The log names each step. The first lines show the platform that was chosen,
 for example ``Running on OpenMM platform: CUDA``. On an NVIDIA RTX 2080 SUPER
-the whole run takes 4 to 6 minutes, most of it in the per-residue
+the whole run takes about 70 seconds, most of it in the per-residue
 decomposition, and longer when other programs keep the CPU busy. Without a GPU
 it runs on the CPU and takes longer.
 
@@ -82,13 +82,14 @@ because the interaction energy fluctuates too much. :doc:`theory/entropy_methods
 explains why. Small differences in the last digit between GPU and CPU runs are
 normal.
 
-The log also prints the sum of the receptor-residue contributions of the
-per-residue decomposition, -8.50 kcal/mol here. It is not expected to equal the
-binding enthalpy. As in Amber's per-residue decomposition, each van der Waals
-and electrostatic term between a receptor residue and the ligand is split
-equally between the two, so half of it belongs to the ligand. The ligand's own
-change in polar solvation and the non-polar term are not assigned to receptor
-residues either (:doc:`user_guide/outputs`).
+The log also shows how the per-residue decomposition divides the binding
+enthalpy. The receptor residues give -8.29 kcal/mol from van der Waals,
+electrostatic and polar solvation terms, their non-polar term gives -2.89
+kcal/mol and the ligand's share -13.81 kcal/mol. Together they give the binding
+enthalpy. The ligand's share is large because, as in Amber's per-residue
+decomposition, each van der Waals and electrostatic term between a receptor
+residue and the ligand is split equally between the two
+(:doc:`user_guide/decomposition`).
 
 All files are written to ``quickstart_results/analysis_<date>_<time>/``
 (:doc:`user_guide/outputs` describes each one). The most useful ones are:

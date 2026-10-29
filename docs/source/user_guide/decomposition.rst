@@ -45,14 +45,18 @@ of every pair term and its own change of solvation.
 
 *Validation.* For all five GB models, with and without ``rgbmax`` and salt, and
 for LCPO and ACE, the per-atom terms add up to OpenMM's energies of the complex,
-the receptor and the ligand to within 10⁻⁹ kcal/mol (``test/unit/test_decomposition_exactness.py``).
+the receptor and the ligand on the Reference platform to within 10⁻⁹ kcal/mol.
+``test/unit/test_decomposition_exactness.py`` checks this with a tolerance of
+10⁻³ kcal/mol.
 Against Amber MMPBSA.py's decomposition (``idecomp=2``) on 3CLpro with
 baicalein, 306 receptor residues over three frames, the van der Waals,
 electrostatic and polar terms of every model agree with a Pearson
 :math:`r` of 1.000 and differences of at most 0.008 kcal/mol, and with
-``amber_compatible`` the totals with :math:`r \geq 0.999998`.
-
-.. TODO OXA Table S2 numbers with 0.0.23 after the rerun
+``amber_compatible`` the totals with :math:`r \geq 0.999998`. On 18 runs of nine
+OXA-48 complexes, 4,320 receptor residues averaged over 200 frames each,
+OpenGBSA with ``amber_compatible`` and MMPBSA.py's ``idecomp=2`` agree with
+:math:`r > 0.9999` for every term. The per-residue totals differ by a median of
+3.9 × 10⁻⁵ kcal/mol and by at most 0.0034 kcal/mol.
 
 .. _opt-run_per_residue_decomposition:
 
@@ -125,7 +129,19 @@ results use ``run_per_residue_decomposition``.
 Platforms
 ---------
 
-``platform_settings.decomposition_platform`` sets the platform of the
-decomposition (:ref:`opt-decomposition_platform`). With ``CPU`` it runs in
-``advanced_settings.n_jobs`` processes (:ref:`opt-n_jobs`). Serial and parallel
-runs give the same contributions.
+The per-atom energies are computed with NumPy from the parameters of the run's
+forces. ``platform_settings.decomposition_platform``
+(:ref:`opt-decomposition_platform`) sets the OpenMM platform that computes the
+complex, receptor and ligand energies of every decomposed frame for the check
+in ``decomposition_energy_check.csv``. With ``CPU`` the frames are divided among
+``advanced_settings.n_jobs`` processes (:ref:`opt-n_jobs`); with a GPU platform
+they are decomposed one after another. Serial and parallel runs give the same
+contributions.
+
+On CUDA and OpenCL the check computes in double precision, whatever precision
+the run uses. In mixed precision a GPU's GB energy of a large complex differs
+from the exact sum by up to about 10⁻⁵ of its value: 0.046 kcal/mol for the
+3,400 kcal/mol of an antibody Fv bound to PD-1, against 4 × 10⁻⁴ kcal/mol in
+double precision. A frame fails the check when a per-atom sum differs from
+OpenMM's energy by more than 0.01 kcal/mol plus 10⁻⁵ of the energy, or 10⁻⁴ on
+a GPU without double precision.

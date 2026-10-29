@@ -441,3 +441,25 @@ def test_failed_decomposition_raises():
     with pytest.raises(DecompositionError):
         decomp.run_per_residue_analysis(None, None, None, None, skip_baseline=True,
                                          baseline_results={"mean_binding_energy": 0.0})
+
+
+def test_check_contexts_compute_in_double_precision():
+    """The per-frame check against OpenMM runs in double precision on CUDA and
+    OpenCL: in mixed precision the GB energy of an antibody Fv-PD-1 complex
+    (3,400 kcal/mol) differs from the exact sum by up to 0.046 kcal/mol."""
+    from mmgbsa.decomposition import _check_context, _relative_tolerance
+
+    system = openmm.System()
+    system.addParticle(1.0)
+    ctx = _check_context(system, openmm.Platform.getPlatformByName("Reference"), {})
+    assert _relative_tolerance(ctx) == 1e-5
+    for name, key in (("CUDA", "CudaPrecision"), ("OpenCL", "OpenCLPrecision")):
+        try:
+            platform = openmm.Platform.getPlatformByName(name)
+            ctx = _check_context(system, platform, {key: "mixed"})
+        except Exception:
+            continue  # platform or device not usable here
+        precision = platform.getPropertyValue(ctx, key)
+        if name == "CUDA":
+            assert precision == "double"
+        assert _relative_tolerance(ctx) == (1e-5 if precision == "double" else 1e-4)

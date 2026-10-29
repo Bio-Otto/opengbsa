@@ -70,9 +70,12 @@ example ``CUDA_VISIBLE_DEVICES=1 opengbsa config.yaml``.
 :Default: the platform of the calculation
 :Values: as ``preferred_platform``
 
-The platform of the per-residue decomposition. With ``CPU`` the decomposition
-runs in ``advanced_settings.n_jobs`` processes, which can be faster than a GPU
-for small systems.
+The platform of the per-residue decomposition. The per-atom energies are
+computed with NumPy; this platform computes each decomposed frame's complex,
+receptor and ligand energies, against which OpenGBSA checks them
+(:doc:`decomposition`). With ``CPU`` the frames are divided among
+``advanced_settings.n_jobs`` processes; with a GPU platform they are decomposed
+one after another in one process.
 
 .. _opt-strict_platform:
 
