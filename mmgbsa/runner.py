@@ -238,7 +238,6 @@ class MMGBSARunner:
                             if analysis_settings.get('run_entropy_analysis', False) else 'none'),
             decomposition_method=analysis_settings.get('decomposition_method', 'full'),
             sa_model=analysis_settings.get('sa_model', None),                       # LCPO
-            nonbonded_cutoff=analysis_settings.get('nonbonded_cutoff', None),
             reimage_trajectory=analysis_settings.get('reimage_trajectory', True),
             charmm_params=forcefield_settings.get('charmm_params', None),
             charmm_coordinates=forcefield_settings.get('charmm_coordinates', None),

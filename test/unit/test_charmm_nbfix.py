@@ -65,7 +65,7 @@ WITHOUT_NBFIX = EXPECTED - _lj(NBFIX_EPS, NBFIX_RMIN, 3.2) + _lb(0.20, 1.85, 0.1
 def test_nbfix_is_applied():
     s = _structure()
     assert s.has_NBFIX()
-    system = StructureManager.create_openmm_system(s, nonbondedMethod=app.NoCutoff)
+    system = StructureManager.create_openmm_system(s)
     got = _vdw_energy(system, s.coordinates)
     assert got == pytest.approx(EXPECTED, abs=1e-6)
     assert abs(got - WITHOUT_NBFIX) > 1e-3     # the test can tell the two apart
@@ -76,7 +76,7 @@ def test_amber_prmtop_keeps_its_own_table():
     s = _structure()
     amber = pmd.amber.AmberParm.from_structure(s)
     assert amber.has_NBFIX()
-    system = StructureManager.create_openmm_system(amber, nonbondedMethod=app.NoCutoff)
+    system = StructureManager.create_openmm_system(amber)
     assert _vdw_energy(system, s.coordinates) == pytest.approx(EXPECTED, abs=1e-6)
 
 
@@ -84,7 +84,7 @@ def test_parmed_alone_drops_it():
     """Documents the upstream behaviour the fix works around (ParmEd 4.3.1)."""
     s = _structure()
     got = _vdw_energy(s.createSystem(nonbondedMethod=app.NoCutoff), s.coordinates)
-    fixed = _vdw_energy(StructureManager.create_openmm_system(_structure(), nonbondedMethod=app.NoCutoff),
+    fixed = _vdw_energy(StructureManager.create_openmm_system(_structure()),
                         s.coordinates)
     if abs(got - fixed) < 1e-9:
         pytest.skip("this ParmEd version keeps NBFIX on its own")

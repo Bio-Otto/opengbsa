@@ -450,37 +450,25 @@ class StructureManager:
         return receptor, ligand
 
     @staticmethod
-    def create_openmm_system(structure, implicitSolvent=None, 
-                           implicitSolventSaltConc=0.0*unit.molar,
-                           nonbondedMethod=app.NoCutoff, 
-                           nonbondedCutoff=None,
+    def create_openmm_system(structure, implicitSolvent=None,
+                           implicitSolventKappa=0.0,
                            constraints=None,
                            solventDielectric=None):
         """
-        Create an OpenMM System from a ParmEd Structure.
-        """
-        # WORKAROUND: ParmEd createSystem can hang with Cutoff + Implicit Solvent.
-        # If Cutoff is requested, we create a Vacuum system first, then let refine_gbsa_forces 
-        # add the GBSA force manually.
-        pass_implicit = implicitSolvent
-        pass_salt = implicitSolventSaltConc
-        
-        if nonbondedCutoff is not None and implicitSolvent is not None:
-             pass_implicit = None
-             pass_salt = None
-             # We rely on GBSAForceManager.refine_gbsa_forces to add the GB force later.
+        Create an OpenMM System from a ParmEd Structure, without a cutoff.
 
-        # Prepare kwargs
+        GBSAForceManager.refine_gbsa_forces replaces ParmEd's GB force by one with
+        the configured dielectrics and screening parameter (1/nm, debye_kappa) and
+        then divides the Coulomb term by the solute dielectric. The solute
+        dielectric is therefore not passed on: ParmEd would scale the charges of the
+        NonbondedForce, from which the GB force takes its charges.
+        """
         kwargs = {
-            'nonbondedMethod': nonbondedMethod,
-            'nonbondedCutoff': nonbondedCutoff,
+            'nonbondedMethod': app.NoCutoff,
             'constraints': constraints,
-            'implicitSolvent': pass_implicit,
-            'implicitSolventSaltConc': pass_salt,
-            # ParmEd builds the HCT/GBn/GBn2 force itself (OBC1/OBC2 are rebuilt in
-            # refine_gbsa_forces); without this it used its default 78.5 whatever
-            # solvent_dielectric was configured.
-            'solventDielectric': solventDielectric if pass_implicit is not None else None,
+            'implicitSolvent': implicitSolvent,
+            'implicitSolventKappa': implicitSolventKappa if implicitSolvent is not None else None,
+            'solventDielectric': solventDielectric if implicitSolvent is not None else None,
         }
         # Filter None to let defaults handle it or avoid errors
         kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -680,6 +668,20 @@ class StructureManager:
         log.info(f"Rebuilt the NBFIX Lennard-Jones table ({n} LJ classes).")
 
 
+# Residues that get GBn2's nucleic-acid parameters: Amber's RNA and DNA names with
+# their 5', 3' and single-nucleotide (N) variants, as sander does (OpenMM's own list
+# lacks the variants, which gave the terminal residues of a DNA strand 131 kcal/mol
+# of GB energy too much), and the CHARMM names.
+_NUCLEIC_RESIDUES = frozenset(
+    [b + t for b in ('A', 'C', 'G', 'U', 'RA', 'RC', 'RG', 'RU', 'DA', 'DC', 'DG', 'DT')
+     for t in ('', '5', '3', 'N')] + ['ADE', 'CYT', 'GUA', 'THY', 'URA'])
+
+
+def _is_nucleic_residue(name):
+    """Whether GBn2 gives this residue its nucleic-acid parameters."""
+    return name in _NUCLEIC_RESIDUES
+
+
 class GBSAForceManager:
     """
     Advanced GBSA force implementation that refines OpenMM-generated forces.
@@ -687,13 +689,16 @@ class GBSAForceManager:
     then refines it (separating SA, adding salt if needed).
     """
     
-    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5, sa_model='LCPO', nonbonded_cutoff=None):
+    def __init__(self, gb_model='OBC2', salt_concentration=0.15, solute_dielectric=1.0, solvent_dielectric=78.5,
+                 sa_model='LCPO', temperature=300.0):
         self.gb_model = gb_model
         self.salt_concentration = salt_concentration
         self.solute_dielectric = solute_dielectric
         self.solvent_dielectric = solvent_dielectric
         self.sa_model = sa_model
-        self.nonbonded_cutoff = nonbonded_cutoff
+        self.temperature = temperature
+        # amber_compatible: salt screening with sander's constant kappa (debye_kappa)
+        self.amber_salt = False
         # Born-radius cutoff (A) as in Amber's rgbmax; None = every pair (default).
         self.rgbmax = None
         # amber_compatible: pick MMPBSA.py's solvent dielectric from the topology
@@ -876,67 +881,21 @@ class GBSAForceManager:
             else:
                 log.info("  ℹ️ No 1-4 VDW interactions found to move.")
 
-        if gb_force is None:
-             # Try to find by index if not found (debugging safety)
-             # But loop covers it. If not found, create fallback logic handles it later?
-             # No, this function refines EXISTING forces.
-             log.warning("No GB Force found in system to refine!")
-        else:
-             log.info(f"Identified GB Force: {type(gb_force).__name__}")
-        # FIX: For OBC models, we MUST ensure we use the Prmtop radii (mbondi2/3).
-        # ParmEd's createSystem often creates a CustomGBForce with default/wrong radii for OBC.
-        # So for OBC, we force a rebuild using our Prmtop parameters.
-        if self.gb_model in ['OBC1', 'OBC2']:
-            if gb_force is not None:
-                log.info(f"Replace existing GB force ({gb_force.__class__.__name__}) to enforce Prmtop radii.")
-                system.removeForce(gb_force_index)
-            
-            gb_force = self._create_fallback_obc_force(system, struct_for_obc)
-            system.addForce(gb_force)
-            log.info(f"Created new GBSAOBCForce using Prmtop parameters.")
-        elif gb_force is None:
-            log.warning("No GB force found in system. Was it created with implicitSolvent? Attempting to add manual OBC2 fallback.")
-            # Fallback for systems created without GB
-            gb_force = self._create_fallback_obc_force(system, struct_for_obc)
-            system.addForce(gb_force)
-        
-        # 2. Configure GB Force
-        if isinstance(gb_force, openmm.GBSAOBCForce):
-             log.info(f"Existing GBSAOBCForce found. Inspecting parameters...")
-             # Check particle 0 for radius
-             q, rad, scale = gb_force.getParticleParameters(0)
-             log.info(f"Particle 0: Radius={rad.value_in_unit(unit.angstroms):.4f} A, Scale={scale}")
-             
-             # Zero out SA to separate it
-             gb_force.setSurfaceAreaEnergy(0.0)
-             gb_force.setSoluteDielectric(self.solute_dielectric)
-             gb_force.setSolventDielectric(self.solvent_dielectric)
-             gb_force.setForceGroup(1) # Group 1 for Standard GB
-             log.info("Configured GBSAOBCForce: SA=0, Dielectrics set, Group=1.")
-             
-        elif isinstance(gb_force, openmm.CustomGBForce):
-             # For CustomGBForce (GBn), assume params are set by factory.
-             # We might need to manually set dielectrics if global params allow.
-             for i in range(gb_force.getNumGlobalParameters()):
-                 name = gb_force.getGlobalParameterName(i)
-                 if name == 'soluteDielectric':
-                     gb_force.setGlobalParameterDefaultValue(i, self.solute_dielectric)
-                 elif name == 'solventDielectric':
-                     gb_force.setGlobalParameterDefaultValue(i, self.solvent_dielectric)
-             
-             gb_force.setForceGroup(2) # Group 2 for Custom GB
-             gb_force.setForceGroup(2) # Group 2 for Custom GB
-             log.info("Configured CustomGBForce dielectrics, Group=2.")
-             
-             # Log particle 0 parameters to check radii
-             if gb_force.getNumParticles() > 0:
-                 params = gb_force.getParticleParameters(0)
-                 # CustomGBForce params structure depends on definition. Usually (charge, radius, scale, ...) or similar.
-                 # We simply print what we get.
-                 log.info(f"CustomGBForce Particle 0 params: {params}")
-
+        # Every GB model is rebuilt here, whoever built the system: ParmEd (Native
+        # Mode) fixes the dielectrics and the salt screening in the energy expression
+        # with its own defaults, and OpenMM's ForceField (Coordinate Mode) builds no
+        # GB force. One builder gives every model and path the configured solute and
+        # solvent dielectrics, the screening of debye_kappa and the topology's radii.
         if gb_force is not None:
-            self._apply_rgbmax(gb_force)
+            system.removeForce(gb_force_index)
+        gb_force = self._create_fallback_obc_force(system, struct_for_obc)
+        system.addForce(gb_force)
+        log.info(f"GB force ({self.gb_model}) built with the topology's radii.")
+        
+        # 2. The polar GB term is force group 2
+        gb_force.setForceGroup(2)
+        self._apply_rgbmax(gb_force)
+        self._scale_coulomb(system)
 
         # 3. Add Separate Surface Area Force
         sa_force = self._setup_surface_area_force(system, omm_topology, lcpo_type_names)
@@ -976,6 +935,48 @@ class GBSAForceManager:
         self._preset_dielectric_resolved = True
         log.info(f"amber_compatible: solvent dielectric {self.solvent_dielectric} "
                  f"({'CHARMM/chamber topology, MMPBSA.py sander path' if charmm else 'MMPBSA.py NAB path'}).")
+
+    def _scale_coulomb(self, system):
+        """Divide the Coulomb energy, 1-4 pairs included, by the solute dielectric.
+
+        As sander's intdiel, the solute dielectric acts on the gas-phase
+        electrostatics as well as on the GB term. The GB force already holds the
+        unscaled charges, so this must follow it.
+        """
+        eps_in = float(self.solute_dielectric)
+        if eps_in == 1.0:
+            return
+        f = 1.0 / eps_in
+        for force in system.getForces():
+            if not isinstance(force, openmm.NonbondedForce):
+                continue
+            for i in range(force.getNumParticles()):
+                q, sigma, eps = force.getParticleParameters(i)
+                force.setParticleParameters(i, q * f ** 0.5, sigma, eps)
+            for i in range(force.getNumExceptions()):
+                p1, p2, qq, sigma, eps = force.getExceptionParameters(i)
+                force.setExceptionParameters(i, p1, p2, qq * f, sigma, eps)
+
+    def debye_kappa(self):
+        """Debye-Hueckel screening parameter (1/nm) of the GB force; 0 without salt.
+
+        By default it follows from the ionic strength I, the solvent dielectric and
+        the temperature, kappa = 0.73 * 50.33355 * sqrt(I / (eps_out T)) 1/A, as OpenMM
+        and ParmEd compute it (0.73 accounts for ion exclusion). With amber_compatible
+        it is sander's constant, kappa = 0.73 * sqrt(0.10806 I) 1/A, which depends on
+        neither the temperature nor extdiel (checked against sander's EGB).
+        """
+        conc = self.salt_concentration
+        if unit.is_quantity(conc):
+            conc = conc.value_in_unit(unit.molar)
+        if not conc or conc <= 0:
+            return 0.0
+        if self.amber_salt:
+            return 7.3 * (0.10806 * conc) ** 0.5
+        temp_k = self.temperature
+        if unit.is_quantity(temp_k):
+            temp_k = temp_k.value_in_unit(unit.kelvin)
+        return 7.3 * 50.33355 * (conc / (self.solvent_dielectric * temp_k)) ** 0.5
 
     def _apply_rgbmax(self, gb_force):
         """Restrict the effective-Born-radius integral to pairs within rgbmax.
@@ -1046,27 +1047,12 @@ class GBSAForceManager:
             atoms_iterable = topology.atoms
         atoms_list = list(atoms_iterable)
 
-        conc = self.salt_concentration
-        if unit.is_quantity(conc):
-            conc = conc.value_in_unit(unit.molar)
-        use_salt = bool(conc) and conc > 0
-
-        kappa = 0.0
-        if use_salt:
-            temp_k = getattr(self, 'temperature', 300.0)
-            if unit.is_quantity(temp_k):
-                temp_k = temp_k.value_in_unit(unit.kelvin)
-            kappa = 50.33355 * (conc / (self.solvent_dielectric * temp_k)) ** 0.5 * 7.3  # nm^-1
-
-        cutoff_nm = (self.nonbonded_cutoff * unit.angstroms).value_in_unit(unit.nanometer) \
-            if self.nonbonded_cutoff is not None else None
-
         force_class_name = self._GB_MODEL_FORCE_CLASS_NAME.get(self.gb_model, 'GBSAOBC2Force')
         force_class = getattr(customgbforces, force_class_name)
         gb_force = force_class(
             solventDielectric=self.solvent_dielectric,
             soluteDielectric=self.solute_dielectric,
-            SA=None, cutoff=cutoff_nm, kappa=kappa,
+            SA=None, cutoff=None, kappa=self.debye_kappa(),
         )
         # NOTE: every customgbforces addParticle (inherited from
         # CustomAmberGBForceBase) already subtracts the 0.009 nm OBC offset
@@ -1116,15 +1102,20 @@ class GBSAForceManager:
             charge = charges[i]
             raw_radius_nm = (radii[i] if radii else self._get_gb_radius(atom)) * 0.1
             if is_gbn or is_gbn2:
+                # OpenMM's tables are keyed by Element objects; a ParmEd atom
+                # (Native Mode) gives the atomic number instead
+                element = getattr(atom, 'element', None)
+                if isinstance(element, int):
+                    element = app.element.Element.getByAtomicNumber(element) if element > 0 else None
                 residue_name = getattr(getattr(atom, 'residue', None), 'name', None)
-                is_nucleic = residue_name in customgbforces._NUCLEIC_ACID_RESIDUES
+                is_nucleic = _is_nucleic_residue(residue_name)
                 screen_index = 1 if is_gbn else (3 if is_nucleic else 2)
-                raw_scale = customgbforces._screen_parameter(atom)[screen_index]
+                screens_of = customgbforces._SCREEN_PARAMETERS
+                raw_scale = screens_of.get(element, screens_of[None])[screen_index]
             else:
                 raw_scale = screens[i] if screens else self._get_gb_scale(atom)
             params = [charge, raw_radius_nm, raw_scale]
             if is_gbn2:
-                element = getattr(atom, 'element', None)
                 table = (customgbforces.GBSAGBn2Force._atom_params_nucleic if is_nucleic
                          else customgbforces.GBSAGBn2Force._atom_params)
                 params += list(table.get(element, customgbforces.GBSAGBn2Force._default_atom_params))
@@ -1133,9 +1124,8 @@ class GBSAForceManager:
             gb_force.finalize()
         except AttributeError:
             pass
-        log.info(f"Built GB force ({force_class_name}, matching gb_model='{self.gb_model}'"
-                 f"{f', kappa={kappa:.4f} nm^-1' if use_salt else ''}) "
-                 f"for salt_concentration={conc} M.")
+        log.info(f"Built GB force ({force_class_name}): solute dielectric {self.solute_dielectric}, solvent "
+                 f"dielectric {self.solvent_dielectric}, kappa {self.debye_kappa():.4f} 1/nm.")
         return gb_force
 
     def _assigned_radii(self, topology, atoms_list):
@@ -1585,7 +1575,7 @@ class GBSACalculator(GBSAForceManager):
     def __init__(self, temperature=300, verbose=1, gb_model='OBC2', salt_concentration=0.15,
                  use_cache=True, parallel_processing=False, max_workers=None, protein_forcefield='amber',
              charge_method='am1bcc', solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
-             visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None, nonbonded_cutoff=None,
+             visualization_settings=None, platform=None, reporting_settings=None, sa_model=None, cache_dir=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
              gb_radii_set='auto', amber_compatible=False, rgbmax=None, lcpo_typing=None,
              nmode_frames=10, nmode_drms=0.001, nmode_maxcyc=10000, nmode_precision='mixed'):
@@ -1640,9 +1630,6 @@ class GBSACalculator(GBSAForceManager):
              Settings for HTML report generation (charts, entropy viz, etc.)
         sa_model : str
              Surface Area model ('ACE' or 'LCPO')
-        nonbonded_cutoff : float, optional
-             Cutoff distance in Angstroms for nonbonded interactions.
-             If None (default) or >= 999.0, NoCutoff is used.
         reimage_trajectory : bool, default True
              Re-image molecules across periodic boundaries (PBC re-wrapping)
              before computing any energy. A raw MD trajectory has no
@@ -1733,11 +1720,9 @@ class GBSACalculator(GBSAForceManager):
         self.parameterized_residues = [] # Track any dynamic residues
         self.physics_assumptions = []
 
-        # Cutoff Support
-        self.nonbonded_cutoff = nonbonded_cutoff
-        if self.nonbonded_cutoff is not None and self.nonbonded_cutoff >= 999.0:
-            self.nonbonded_cutoff = None # Treat large cutoff as NoCutoff explicitly
-        
+        self.amber_salt = self.amber_compatible
+        self.nonbonded_cutoff = None   # removed option; still part of the system-cache key
+
         # Surface Area Model
         self.sa_model = sa_model
         if self.sa_model == 'LCPO' and not HAS_LCPO_PARAMS:
@@ -1746,7 +1731,11 @@ class GBSACalculator(GBSAForceManager):
         
 
         # Initialize fixed enhanced GBSA manager
-        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration, solute_dielectric=solute_dielectric, solvent_dielectric=solvent_dielectric, sa_model=self.sa_model, nonbonded_cutoff=self.nonbonded_cutoff)
+        self.gbsa_manager = GBSAForceManager(gb_model=gb_model, salt_concentration=salt_concentration,
+                                             solute_dielectric=solute_dielectric,
+                                             solvent_dielectric=solvent_dielectric, sa_model=self.sa_model,
+                                             temperature=self.temperature)
+        self.gbsa_manager.amber_salt = self.amber_salt
         self.gbsa_manager.gb_radii_set = self.gb_radii_set
         self.gbsa_manager.rgbmax = self.rgbmax
         self.gbsa_manager.dielectric_from_preset = self._dielectric_from_preset
@@ -2576,11 +2565,7 @@ class GBSACalculator(GBSAForceManager):
                 'implicitSolvent': self.gbsa_manager.current_app_model,
                 'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
             }
-            
-            if self.nonbonded_cutoff is not None:
-                nonperiodic_kwargs['nonbondedMethod'] = app.CutoffNonPeriodic
-                nonperiodic_kwargs['nonbondedCutoff'] = self.nonbonded_cutoff * unit.angstroms
-            
+
             sm_ff = 'openff-2.1.0'
             if self.ligand_forcefield == 'gaff':
                 sm_ff = 'gaff-2.11'
@@ -2643,11 +2628,7 @@ class GBSACalculator(GBSAForceManager):
                       if self.charmm_coordinates:
                           loader_kwargs['charmm_coordinates'] = self.charmm_coordinates
 
-                  if self.nonbonded_cutoff is not None:
-                      loader_kwargs['nonbondedMethod'] = app.CutoffNonPeriodic
-                      loader_kwargs['nonbondedCutoff'] = self.nonbonded_cutoff * unit.angstroms
-                      log.info(f"Native Mode: Using CutoffNonPeriodic with {self.nonbonded_cutoff} A cutoff")
-                  
+
                   # Pass implicit solvent args to TopologyLoader (prmtop support)
                   system, topology, positions = TopologyLoader.load_system(
                       complex_pdb, mode, 
@@ -2762,12 +2743,7 @@ class GBSACalculator(GBSAForceManager):
                 'nonbondedMethod': app.NoCutoff,
                 'constraints': app.HBonds
             }
-            
-            if self.nonbonded_cutoff is not None:
-                sys_kwargs['nonbondedMethod'] = app.CutoffNonPeriodic
-                sys_kwargs['nonbondedCutoff'] = self.nonbonded_cutoff * unit.angstroms
-                log.info(f"Using CutoffNonPeriodic with {self.nonbonded_cutoff} A cutoff")
-            
+
             protein_system = forcefield.createSystem(
                 protein_top,
                 **sys_kwargs
@@ -2814,11 +2790,7 @@ class GBSACalculator(GBSAForceManager):
                                 'implicitSolvent': self.gbsa_manager.current_app_model,
                                 'implicitSolventSaltConc': self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar
                             }
-                            
-                            if self.nonbonded_cutoff is not None:
-                                pdb_sys_kwargs['nonbondedMethod'] = app.CutoffNonPeriodic
-                                pdb_sys_kwargs['nonbondedCutoff'] = self.nonbonded_cutoff * unit.angstroms
-                            
+
                             protein_system = forcefield.createSystem(
                                 protein_top,
                                 **pdb_sys_kwargs
@@ -4211,13 +4183,6 @@ class GBSACalculator(GBSAForceManager):
                  # 4. CREATE OPENMM SYSTEMS
                  log.process("Creating and Enhancing OpenMM Systems from Unified Topology...")
                  def make_gbsa_system(struct, name):
-                     # Prepare Cutoff args
-                     nb_method = app.NoCutoff
-                     nb_cutoff = None
-                     if self.nonbonded_cutoff is not None:
-                         nb_method = app.CutoffNonPeriodic
-                         nb_cutoff = self.nonbonded_cutoff * unit.angstroms
-
                      # Ensure this struct's GB radii match self.gb_model,
                      # independent of whatever radius set its own source
                      # prmtop happened to be built with. This matters
@@ -4252,13 +4217,11 @@ class GBSACalculator(GBSAForceManager):
                      self.gbsa_manager.resolve_mmpbsa_dielectric(struct)
                      self.solvent_dielectric = self.gbsa_manager.solvent_dielectric
                      sys = StructureManager.create_openmm_system(
-                         struct, 
+                         struct,
                          implicitSolvent=self.gbsa_manager.current_app_model,
-                         implicitSolventSaltConc=self.salt_concentration * unit.molar if self.salt_concentration > 0 else 0.0*unit.molar,
-                         nonbondedMethod=nb_method,
-                         nonbondedCutoff=nb_cutoff,
-                         solventDielectric=self.gbsa_manager.solvent_dielectric
-                     ) 
+                         implicitSolventKappa=self.gbsa_manager.debye_kappa(),
+                         solventDielectric=self.gbsa_manager.solvent_dielectric,
+                     )
                      sys = self.gbsa_manager.refine_gbsa_forces(sys, struct)
                      return sys
 
