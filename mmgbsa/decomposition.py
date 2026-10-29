@@ -1662,13 +1662,14 @@ class _FrameDecomposer:
         return np.bincount(self.atom_res[self.rows], weights=values[self.rows], minlength=len(self.res_ids))
 
     def _numerical_surface(self, xyz32):
-        """Per-atom Shrake-Rupley areas (A^2) of the complex and of the receptor
-        and ligand alone, as the 0.0.22 decomposition computed them."""
+        """Per-atom Shrake-Rupley areas (A^2, mdtraj's float32) of the complex
+        and of the receptor and ligand alone, as the 0.0.22 decomposition
+        computed them."""
         frame = md.Trajectory(xyz32.reshape(1, self.n, 3), self.md_topology)
         complex_a2 = md.shrake_rupley(frame, mode='atom')[0] * 100.0
         receptor_a2 = md.shrake_rupley(frame.atom_slice(self.rec), mode='atom')[0] * 100.0
         ligand_a2 = md.shrake_rupley(frame.atom_slice(self.lig), mode='atom')[0] * 100.0
-        return complex_a2.astype(np.float64), receptor_a2.astype(np.float64), ligand_a2.astype(np.float64)
+        return complex_a2, receptor_a2, ligand_a2
 
     def decompose(self, xyz_nm, verify=True):
         """Returns ({res_id: energies}, check) for one frame (positions in nm).
@@ -1699,9 +1700,10 @@ class _FrameDecomposer:
             # areas (A^2) summed per residue, then times the surface tension,
             # in the order of the 0.0.22 code
             c_area, r_area, l_area = self._numerical_surface(np.asarray(xyz_nm, dtype=np.float32))
-            d_area = c_area.copy()
-            d_area[rec] -= r_area
-            d_area[lig] -= l_area
+            d_area = np.zeros(self.n)             # float32 differences, float64 sums, as in 0.0.22
+            d_area[rec] = c_area[rec] - r_area
+            d_area[lig] = c_area[lig] - l_area
+            c_area = c_area.astype(np.float64)
             np_r = self._per_residue(d_area) * NUMERICAL_SURFACE_TENSION
             dn = d_area * NUMERICAL_SURFACE_TENSION
             c_np_area = c_area

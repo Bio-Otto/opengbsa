@@ -14,6 +14,8 @@ Checked here, against OpenMM's Reference platform:
   rgbmax 25 A, at salt 0 and 0.15 M (and GBn2 with nucleic-acid parameters);
 - per-atom non-polar energies sum to the surface-area group energy for LCPO
   (element and amber typing) and ACE;
+- amber_compatible selects MMPBSA.py's decomposition convention for the
+  per-residue non-polar term (numerical surface, as sander gbsa=2);
 - the per-residue van der Waals and electrostatic halves add up to OpenMM's
   interaction energy, also when the run divides the Coulomb term by the
   solute dielectric, and residues plus the ligand's share give the binding
@@ -357,6 +359,55 @@ def test_electrostatics_follow_the_runs_coulomb_scaling(dna):
             _openmm_delta(systems, pos, lig, POLAR_GROUPS), abs=TOL)
     assert abs(elec[1.0]) > 1.0
     assert elec[2.0] == pytest.approx(elec[1.0] / 2.0, rel=1e-9)
+
+
+@pytest.mark.parametrize("amber_compatible", [False, True])
+def test_amber_compatible_selects_the_numerical_surface_nonpolar_term(dna, amber_compatible):
+    """Default: the per-residue non-polar term is the run's own LCPO term per
+    atom and sums to it. amber_compatible: MMPBSA.py's decomposition
+    convention (sander gbsa=2, a numerical surface), computed as up to 0.0.22:
+    Shrake-Rupley areas of the complex minus the receptor alone, x 0.0072."""
+    import mdtraj as md
+    from mmgbsa.decomposition import (NONPOLAR_FORCE, NONPOLAR_NUMERICAL_SURFACE,
+                                      PerResidueDecomposition)
+
+    class Calculator:
+        decomposition_platform = None
+
+    Calculator.amber_compatible = amber_compatible
+    systems = _systems(dna, model="OBC2", salt=0.15, sa="LCPO", typing="element")
+    pos, lig = dna["complex"][1], dna["lig"]
+    residue_map = _residue_map(dna["complex"][0](), lig)
+    rec = np.setdiff1d(np.arange(len(pos)), lig)
+    plat = openmm.Platform.getPlatformByName("Reference")
+    sys_dict = {"complex_system": systems[0], "protein_system": systems[1], "ligand_system": systems[2]}
+    for key, system in zip(("complex", "protein", "ligand"), systems):
+        sys_dict[f"{key}_context"] = openmm.Context(system, openmm.VerletIntegrator(1e-3), plat)
+    top = md.load_prmtop(os.path.join(DNA, "complex.prmtop"))
+    decomposer = PerResidueDecomposition(Calculator())._make_decomposer(sys_dict, residue_map, lig, md_topology=top)
+    result, check = decomposer.decompose(pos)
+    nonpolar = np.array([result[r]["nonpolar_solvation"] for r in residue_map])
+
+    # polar, vdW and electrostatic follow the run's forces in both modes
+    assert check["decomposed_binding_energy_without_nonpolar"] == pytest.approx(
+        check["openmm_binding_energy_without_nonpolar"], abs=TOL)
+    if amber_compatible:
+        assert decomposer.nonpolar == NONPOLAR_NUMERICAL_SURFACE
+        frame = md.Trajectory(pos.astype(np.float32)[None], top)
+        # b61ec93 _sa_decomposition, line by line
+        complex_a2 = md.shrake_rupley(frame, mode="atom")[0] * 100.0
+        receptor_a2 = md.shrake_rupley(frame.atom_slice(rec), mode="atom")[0] * 100.0
+        correction = np.zeros(frame.n_atoms)
+        correction[rec] = complex_a2[rec] - receptor_a2
+        expected = np.array([np.sum(correction[atoms]) * 0.0072 for atoms in residue_map.values()])
+        np.testing.assert_allclose(nonpolar, expected, rtol=0, atol=1e-12)
+        assert np.abs(expected).max() > 0.05
+        # not the LCPO term, as in Amber
+        assert abs(check["decomposed_nonpolar"] - check["openmm_nonpolar"]) > 0.01
+    else:
+        assert decomposer.nonpolar == NONPOLAR_FORCE
+        assert check["decomposed_nonpolar"] == pytest.approx(check["openmm_nonpolar"], abs=TOL)
+        assert check["decomposed_binding_energy"] == pytest.approx(check["openmm_binding_energy"], abs=TOL)
 
 
 # ---------------------------------------------------------------------------

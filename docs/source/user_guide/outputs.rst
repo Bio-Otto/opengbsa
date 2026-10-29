@@ -122,24 +122,33 @@ over the decomposed frames and its standard deviation (``_std`` columns):
 ``nonpolar_solvation`` gives the residue's full share including the surface
 term. Negative values favour binding.
 
-Every term comes from the OpenMM systems of the MM/GBSA calculation itself, so
-it follows the run's GB model, ``rgbmax``, salt concentration, dielectric
-constants, ``sa_model`` and ``lcpo_typing``. The van der Waals and electrostatic
-terms are half of each pair energy between the residue and the ligand. The
-polar and non-polar terms are the change of the residue's atoms between the
-complex and the receptor; an atom's GB energy is its self term plus half of
-each of its pair terms. Amber MMPBSA.py splits the terms the same way, but it
-decomposes the non-polar term with a numerical surface (sander ``gbsa=2``)
-instead of LCPO, so that column differs from Amber's.
+The van der Waals, electrostatic and polar terms come from the OpenMM systems
+of the MM/GBSA calculation itself, so they follow the run's GB model,
+``rgbmax``, salt concentration and dielectric constants. The van der Waals and
+electrostatic terms are half of each pair energy between the residue and the
+ligand. The polar term is the change of the residue's atoms between the complex
+and the receptor; an atom's GB energy is its self term plus half of each of its
+pair terms. Amber MMPBSA.py splits the terms the same way.
+
+The non-polar term depends on ``amber_compatible``. By default it is the change
+of the residue's atoms in the run's own surface-area energy (``sa_model``,
+``lcpo_typing``). With ``amber_compatible: true`` it follows MMPBSA.py's
+decomposition instead: MMPBSA.py always decomposes the non-polar term with a
+numerical surface (sander ``gbsa=2``), not with LCPO. OpenGBSA then uses the
+change of each atom's numerical (Shrake-Rupley) surface area between the
+complex and the receptor, times 0.0072 kcal/mol/Å². As in Amber, these terms do
+not add up to the LCPO term of the binding energy.
 
 The sum over the receptor residues is not the binding enthalpy: the ligand
 keeps the other half of each pair term and its own solvation change. With the
 ligand's share added, the decomposition gives the binding energy of every
-decomposed frame term by term. ``decomposition_energy_check.csv`` lists, per
-frame, the receptor and ligand sums, the decomposed binding energy, OpenMM's
-binding energy for the same coordinates and the largest difference between
-the per-atom solvation energies and OpenMM's GB and surface-area energies. A
-failed decomposition is reported as an error and writes no per-residue files.
+decomposed frame term by term (without ``amber_compatible``; with it, all terms
+except the non-polar one). ``decomposition_energy_check.csv`` lists, per frame,
+the receptor and ligand sums, the decomposed binding energy, OpenMM's binding
+energy for the same coordinates, both with and without the non-polar term, and
+the largest difference between the per-atom solvation energies and OpenMM's GB
+and surface-area energies. A failed decomposition is reported as an error and
+writes no per-residue files.
 ``frame_by_frame_decomposition.csv`` gives the same terms for every frame, in
 columns named ``<NAME><NUMBER>_<CHAIN>_<term>``.
 ``binding_hot_spots.csv`` lists the residues with the largest contributions,
