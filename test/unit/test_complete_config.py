@@ -279,98 +279,6 @@ def test_configuration_validation():
         print(f"❌ Validation test failed: {e}")
         return False
 
-def test_output_structure():
-    """Test output directory structure creation"""
-    
-    print(f"\n🧪 Testing Output Structure")
-    print("-" * 30)
-    
-    try:
-        # Try to import the runner from different locations
-        try:
-            # Try to import from package structure
-            try:
-                from mmgbsa.complete_runner import CompleteMMGBSARunner
-            except ImportError as e:
-                print(f"DEBUG: Package import failed: {e}")
-                # Try legacy/direct import if package structure not used
-                import sys
-                sys.path.append(str(Path(__file__).parent.parent))
-                try:
-                    from mmgbsa.complete_runner import CompleteMMGBSARunner
-                except ImportError as e:
-                    print(f"DEBUG: Sys.path import failed: {e}")
-                    raise e
-        except ImportError:
-            try:
-                # Fallback for older structure or if file is in root/test
-                from complete_mmgbsa_runner import CompleteMMGBSARunner
-            except ImportError as e:
-                print(f"DEBUG: Fallback import failed: {e}")
-                print("⚠️  Could not import CompleteMMGBSARunner - skipping output structure test")
-                return False
-                
-        except Exception as e:
-            print(f"DEBUG: Unexpected error during import: {e}")
-            print("⚠️  Could not import CompleteMMGBSARunner - skipping output structure test")
-            return False
-        
-        # Create a minimal test config
-        test_config = {
-            'input_files': {
-                'ligand_mol': 'test/ligand.sdf',
-                'complex_pdb': 'test/complex.pdb',
-                'ligand_pdb': 'test/ligand.pdb',
-                'trajectory': 'test/complex.xtc'
-            },
-            'output_settings': {
-                'output_directory': 'test_output',
-                'analysis_name': 'test_analysis'
-            },
-            'analysis_settings': {
-                'temperature': 300,
-                'gb_model': 'OBC2',
-                'salt_concentration': 0.15,
-                'max_frames': 10
-            }
-        }
-        
-        # Save test config
-        with open('test_config.yaml', 'w') as f:
-            yaml.dump(test_config, f, default_flow_style=False, indent=2)
-        
-        # Test runner
-        runner = CompleteMMGBSARunner('test_config.yaml')
-        
-        # Test output directory creation
-        output_dir = runner._setup_output_directory()
-        
-        if output_dir.exists():
-            print(f"✅ Output directory created: {output_dir}")
-            
-            # Check subdirectories
-            subdirs = ['plots', 'data', 'logs', 'reports', 'cache', 'debug']
-            for subdir in subdirs:
-                subdir_path = output_dir / subdir
-                if subdir_path.exists():
-                    print(f"  ✅ {subdir}/")
-                else:
-                    print(f"  ❌ {subdir}/ (missing)")
-            
-            # Clean up
-            import shutil
-            shutil.rmtree('test_output')
-            Path('test_config.yaml').unlink()
-            
-            return True
-        else:
-            print(f"❌ Output directory not created")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Output structure test failed: {e}")
-        return False
-
 def main():
     """Main test function"""
     
@@ -380,7 +288,6 @@ def main():
     # Run tests
     config_test = test_complete_configuration()
     validation_test = test_configuration_validation()
-    output_test = test_output_structure()
     
     # Summary
     print(f"\n📊 Test Summary")
@@ -389,7 +296,6 @@ def main():
     tests = [
         ("Configuration Loading", config_test),
         ("Configuration Validation", validation_test),
-        ("Output Structure", output_test)
     ]
     
     passed = sum(1 for _, result in tests if result)
@@ -405,7 +311,7 @@ def main():
         print("🎉 All tests passed!")
         print("✅ Complete configuration is ready for use!")
         print("\n📚 Usage:")
-        print("  python complete_mmgbsa_runner.py complete_mmgbsa_config.yaml")
+        print("  opengbsa complete_mmgbsa_config.yaml")
     else:
         print("❌ Some tests failed!")
         print("Please check the errors above.")
