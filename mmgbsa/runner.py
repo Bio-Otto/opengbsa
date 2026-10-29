@@ -171,14 +171,17 @@ class MMGBSARunner:
         Translate `binding_mode` config option into receptor/ligand MDTraj selections.
         
         Modes:
-          standard / dimer_ligand — all protein chains = receptor, small molecule = ligand.
-            This is the default behaviour. Both modes are identical; `dimer_ligand` is
-            provided as a self-documenting alias when the binding site spans both chains.
-          ppi — chain 0 = receptor, chain 1 = ligand.
-            For protein-protein interaction analysis. No small-molecule ligand_mol needed.
+          standard -- receptor = everything but the ligand, ligand detected (or
+            ligand_selection). (The deprecated 'dimer_ligand' is mapped to it by
+            mmgbsa.config.)
+          ppi -- chain 0 = receptor, chain 1 = ligand; the complex must then have
+            exactly two chains (checked by run_comprehensive).
+        Explicit receptor_selection/ligand_selection always win. With only
+        receptor_selection the ligand is every other atom.
         
         Returns:
-            (receptor_selection, ligand_selection) — both may be None (= auto-detect).
+            (receptor_selection, ligand_selection, require_two_chains); the
+            selections may be None (= auto-detect).
         """
         analysis_settings = self.config.get('analysis_settings', {})
         binding_mode = analysis_settings.get('binding_mode', 'standard')
@@ -186,19 +189,29 @@ class MMGBSARunner:
         # Manual overrides always win
         manual_rec = analysis_settings.get('receptor_selection')
         manual_lig = analysis_settings.get('ligand_selection')
+        require_two_chains = False
         
         if binding_mode == 'ppi':
             receptor_selection = manual_rec if manual_rec else 'chainid 0'
             ligand_selection   = manual_lig if manual_lig else 'chainid 1'
+            require_two_chains = not (manual_rec and manual_lig)
             log.info(f"Binding mode: ppi  (receptor='{receptor_selection}', ligand='{ligand_selection}')")
         else:
-            # standard / dimer_ligand — small molecule auto-detected, all protein = receptor
             receptor_selection = manual_rec  # None = auto (all non-ligand)
             ligand_selection   = manual_lig  # None = auto (detect by resname)
-            label = 'dimer_ligand' if binding_mode == 'dimer_ligand' else 'standard'
-            log.info(f"Binding mode: {label}  (receptor=all protein chains, ligand=small molecule)")
+            if receptor_selection and not ligand_selection:
+                ligand_selection = f"not ({receptor_selection})"
+                receptor_selection = None
+                log.info(f"Binding mode: standard  (ligand = every atom not in receptor_selection "
+                         f"'{manual_rec}')")
+            elif ligand_selection and not receptor_selection:
+                log.info(f"Binding mode: standard  (ligand='{ligand_selection}', receptor = every other atom)")
+            elif ligand_selection:
+                log.info(f"Binding mode: standard  (receptor='{receptor_selection}', ligand='{ligand_selection}')")
+            else:
+                log.info("Binding mode: standard  (receptor = everything but the ligand, ligand detected)")
         
-        return receptor_selection, ligand_selection
+        return receptor_selection, ligand_selection, require_two_chains
 
     def run_analysis(self):
         """Run complete MM/GBSA analysis pipeline"""
@@ -257,7 +270,8 @@ class MMGBSARunner:
                 if coord_file:
                     log.info(f"Found GROMACS coordinate file: {coord_file}")
                     conversion_results = GromacsPreprocessor.convert_to_amber(
-                        top_path, coord_file, gb_model=analysis_settings.get('gb_model', 'OBC2')
+                        top_path, coord_file, output_dir=Path(self.output_dir) / "gromacs_conversion",
+                        gb_model=analysis_settings.get('gb_model', 'OBC2')
                     )
                     
                     # UPDATE INPUT FILES WITH CONVERTED TOPOLOGIES
@@ -304,7 +318,7 @@ class MMGBSARunner:
         }
         
         # Resolve receptor/ligand selections from binding_mode (or manual overrides)
-        resolved_receptor_sel, resolved_ligand_sel = self._resolve_binding_mode_selections()
+        resolved_receptor_sel, resolved_ligand_sel, require_two_chains = self._resolve_binding_mode_selections()
         
         mmgbsa_results = calculator.run_comprehensive(
             ligand_mol=input_files.get('ligand_mol'),
@@ -325,7 +339,8 @@ class MMGBSARunner:
             receptor_topology=input_files.get('receptor_topology'),
             ligand_topology=input_files.get('ligand_topology'),
             solvated_topology=input_files.get('solvated_topology'),
-            print_interval=analysis_settings.get('print_interval', 10)
+            print_interval=analysis_settings.get('print_interval', 10),
+            require_two_chains=require_two_chains,
         )
         
         if not mmgbsa_results:
@@ -512,6 +527,14 @@ class MMGBSARunner:
             decomp_xtc_file    = getattr(calculator, 'distilled_xtc_file',    None) or input_files['trajectory']
             if hasattr(calculator, 'distilled_complex_pdb'):
                 log.info(f"Decomposition: using distilled complex PDB: {decomp_complex_pdb}")
+            # Files reduced to the selected atoms (distilled.xtc) hold no solvent, so the
+            # solvated topology no longer matches them; a Native-Mode complex reduced to
+            # the selected atoms takes its parameters from the reduced files, since the
+            # input topology's atom indices no longer apply
+            distilled = bool(getattr(calculator, 'distilled_files', None))
+            decomp_solvated = None if distilled else input_files.get('solvated_topology')
+            decomp_parameters = (decomp_complex_pdb if getattr(calculator, 'native_reduced', False)
+                                 else input_files.get('complex_pdb'))
 
             decomp_results = decomp_analyzer.run_per_residue_analysis(
                 ligand_mol=input_files.get('ligand_mol'),
@@ -525,11 +548,11 @@ class MMGBSARunner:
                 frame_stride=frame_params.get('frame_stride'),
                 frame_selection=frame_params.get('frame_selection', 'sequential'),
                 random_seed=frame_params.get('random_seed', 42),
-                solvated_topology=input_files.get('solvated_topology'),
+                solvated_topology=decomp_solvated,
                 receptor_topology=input_files.get('receptor_topology'),
                 ligand_topology=input_files.get('ligand_topology'),
                 ligand_resname=getattr(calculator, 'ligand_resname', input_files.get('ligand_resname')),
-                decomposition_topology_file=input_files.get('complex_pdb'),
+                decomposition_topology_file=decomp_parameters,
                 output_dir=output_dir,
                 plot_top_residues=analysis_settings.get('plot_top_residues', 10),
                 receptor_selection=getattr(calculator, 'receptor_selection', receptor_selection),

@@ -127,6 +127,22 @@ log = ToolLogger()
 # Solvent and ion residue names stripped before the calculation, in the
 # Amber/GROMACS and the CHARMM conventions (the per-residue decomposition
 # strips its trajectory with the same set).
+def index_selection(indices):
+    """An MDTraj selection of exactly these atom indices ('index 0 to 9 or index 12')."""
+    indices = sorted(int(i) for i in indices)
+    if not indices:
+        raise ValueError("index_selection needs at least one atom")
+    parts, start, prev = [], indices[0], indices[0]
+    for i in indices[1:] + [None]:
+        if i is not None and i == prev + 1:
+            prev = i
+            continue
+        parts.append(f"index {start}" if start == prev else f"index {start} to {prev}")
+        if i is not None:
+            start = prev = i
+    return " or ".join(parts)
+
+
 SOLVENT_ION_RESNAMES = ("WAT", "HOH", "H2O", "SOL", "TIP3", "TIP", "SPC",
                         "NA", "CL", "K", "MG", "ZN", "CA",
                         "Na+", "Cl-", "K+", "Mg2+", "Ca2+", "Zn2+",
@@ -1941,7 +1957,8 @@ class GBSACalculator(GBSAForceManager):
                     # again defensively in case this is ever called directly
                     # with a raw '.trj' path.
                     from .trajectory import TrajectoryProcessor
-                    loadable_xtc = TrajectoryProcessor.resolve_mdtraj_loadable_path(xtc_file)
+                    loadable_xtc = TrajectoryProcessor.resolve_mdtraj_loadable_path(
+                        xtc_file, self._work_dir_path())
                     traj_test = md.load(loadable_xtc, top=top_to_use, frame=0)
                     if len(traj_test) == 0:
                         validation_errors.append("Trajectory file contains no frames")
@@ -2547,7 +2564,6 @@ class GBSACalculator(GBSAForceManager):
         return ligand_gbsa_system, ligand_top, mol
 
     def parameterize_protein_amber(self, complex_pdb, ligand_resname=None, ignore_ligand_check=False):
-        from pathlib import Path
         
         # Native Prmtop Support (Inserted)
         # Native Topology Support (Universal)
@@ -2642,13 +2658,11 @@ class GBSACalculator(GBSAForceManager):
         # Select force field based on protein_forcefield parameter
         if self.protein_forcefield.lower() == 'charmm':
             log.info("Using CHARMM36 force field (with KCX support)...")
-            from pathlib import Path
             kcx_template = Path(__file__).parent / 'forcefields' / 'kcx_charmm36.xml'
             forcefield_files = [str(kcx_template), 'charmm36.xml']
             log.info("  ✓ Loaded custom KCX template + CHARMM36")
         elif self.protein_forcefield.lower() == 'charmm_gromacs':
             log.info("Using GROMACS-compatible CHARMM36 force field...")
-            from pathlib import Path
             ff_dir = Path(__file__).parent / 'forcefields'
             kcx_xml = ff_dir / 'kcx_charmm36_gromacs.xml'
             charmm_xml = ff_dir / 'charmm36_gromacs_final.xml'
@@ -2964,7 +2978,8 @@ class GBSACalculator(GBSAForceManager):
             
             # Auto-convert Mol2 to SDF if needed
             if str(ligand_mol).endswith('.mol2'):
-                sdf_path = str(ligand_mol).replace('.mol2', '.sdf')
+                # converted into the run folder, never next to (or over) an input file
+                sdf_path = str(self._work_dir_path() / (Path(str(ligand_mol)).stem + '.sdf'))
                 log.process(f"Auto-converting {ligand_mol} to {sdf_path} for processing...")
                 if convert_mol2_to_sdf(ligand_mol, sdf_path):
                     ligand_mol = sdf_path
@@ -3154,6 +3169,96 @@ class GBSACalculator(GBSAForceManager):
         log.result("Total complex system preparation time", f"{total_time:.1f}", "s")
         
         return gbsa_system, modeller.topology, modeller.positions
+
+    @staticmethod
+    def _solute_atoms(md_topology):
+        return [a.index for a in md_topology.atoms
+                if not (a.residue.is_water or a.residue.name in SOLVENT_ION_RESNAMES)]
+
+    @staticmethod
+    def _as_mdtraj(topology):
+        return topology if hasattr(topology, 'select') else md.Topology.from_openmm(topology)
+
+    def check_two_chains(self, topology, where):
+        """binding_mode ppi: the complex must have exactly two chains with solute atoms."""
+        top = self._as_mdtraj(topology)
+        solute = set(self._solute_atoms(top))
+        chains = [c for c in top.chains if any(a.index in solute for a in c.atoms)]
+        if len(chains) == 1:
+            raise ValueError(
+                f"binding_mode ppi splits the complex by chain (receptor = chainid 0, ligand = "
+                f"chainid 1), but {where} has a single chain (no chain records). Give "
+                f"analysis_settings.receptor_selection and ligand_selection instead, e.g. "
+                f"receptor_selection: 'resid 0 to 120' and ligand_selection: 'resid 121 to 230' "
+                f"(MDTraj selections).")
+        if len(chains) > 2:
+            raise ValueError(
+                f"binding_mode ppi uses chainid 0 as the receptor and chainid 1 as the ligand, but "
+                f"{where} has {len(chains)} chains with solute atoms, so chains 2 to "
+                f"{len(chains) - 1} would be left out. Give analysis_settings.receptor_selection and "
+                f"ligand_selection, e.g. receptor_selection: 'chainid 0 to 1' and ligand_selection: "
+                f"'chainid 2'.")
+
+    def split_by_selections(self, topology, ligand_selection, receptor_selection, where):
+        """Ligand and receptor atom indices of two MDTraj selections.
+
+        Each must match atoms and they must not overlap (ValueError). Solute atoms
+        in neither selection are reported, since they are left out of the
+        calculation. Returns (ligand_indices, receptor_indices, left_out).
+        """
+        top = self._as_mdtraj(topology)
+        hint = (" A topology converted from a .tpr may have lost its chain records; select by "
+                "residue or atom index instead, or give a solvated_topology with chains."
+                if '.tpr' in where else "")
+        lig = sorted(int(i) for i in self.get_selection_indices(top, ligand_selection))
+        rec = sorted(int(i) for i in self.get_selection_indices(top, receptor_selection))
+        log.info(f"  Ligand selection '{ligand_selection}' matched {len(lig)} atoms")
+        log.info(f"  Receptor selection '{receptor_selection}' matched {len(rec)} atoms")
+        if not lig:
+            raise ValueError(f"ligand_selection '{ligand_selection}' matches no atom of {where}.{hint}")
+        if not rec:
+            raise ValueError(f"receptor_selection '{receptor_selection}' matches no atom of {where}.{hint}")
+        overlap = sorted(set(lig) & set(rec))
+        if overlap:
+            res = top.atom(overlap[0]).residue
+            raise ValueError(
+                f"receptor_selection '{receptor_selection}' and ligand_selection '{ligand_selection}' "
+                f"overlap in {len(overlap)} atoms of {where} (e.g. residue {res.name}{res.resSeq} "
+                f"of chain {res.chain.index}); an atom cannot be in both.")
+        chosen = set(lig) | set(rec)
+        left_out = [i for i in self._solute_atoms(top) if i not in chosen]
+        if left_out:
+            per_chain = defaultdict(set)
+            for i in left_out:
+                res = top.atom(i).residue
+                per_chain[res.chain.index].add(res.resSeq)
+            detail = "; ".join(f"chain {c}: {len(r)} residues ({min(r)}-{max(r)})"
+                               for c, r in sorted(per_chain.items()))
+            log.warning(f"{len(left_out)} solute atoms of {where} are in neither receptor_selection "
+                        f"nor ligand_selection and are LEFT OUT of the calculation ({detail}).")
+            self.physics_assumptions.append(
+                f"Selections: {len(left_out)} solute atoms in neither receptor_selection nor "
+                f"ligand_selection were left out ({detail}).")
+        return lig, rec, left_out
+
+    @staticmethod
+    def explicit_amber_topology(path, key):
+        """An Amber receptor/ligand topology (.prmtop, .parm7, .new), or None.
+
+        Any other file is an error: before, a .parm7 (or any other name) was
+        silently ignored.
+        """
+        if not path:
+            return None
+        suffix = Path(str(path)).suffix.lower()
+        if suffix in ('.prmtop', '.parm7', '.new'):
+            return str(path)
+        if suffix == '.top':
+            raise ValueError(f"{key} {path} is a GROMACS topology; {key} must be an Amber "
+                             f".prmtop or .parm7. A GROMACS .top complex is converted together with "
+                             f"its receptor and ligand; leave {key} out.")
+        raise ValueError(f"{key} {path} is not an Amber topology; give a .prmtop or .parm7 file, "
+                         f"or leave {key} out.")
 
     def get_selection_indices(self, topology, selection_string, ref_pdb=None):
         """Get indices using MDTraj selection syntax
@@ -3346,7 +3451,8 @@ class GBSACalculator(GBSAForceManager):
                     energy_decomposition=False, frame_start=None, frame_end=None, 
                     frame_stride=None, frame_selection='sequential', random_seed=42,
                     qha_analyze_complex=False, output_dir=None, ligand_selection=None, receptor_selection=None,
-                    receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10):
+                    receptor_topology=None, ligand_topology=None, solvated_topology=None, print_interval=10,
+                    require_two_chains=False):
         """
         Enhanced run method with comprehensive validation and analysis
         
@@ -3378,6 +3484,9 @@ class GBSACalculator(GBSAForceManager):
             Custom selection string for ligand
         receptor_selection : str, optional
             Custom selection string for receptor
+        require_two_chains : bool, optional
+            binding_mode ppi with chainid 0/1 defaults: stop unless the complex has
+            exactly two chains with solute atoms
             
         Returns:
         --------
@@ -3386,6 +3495,9 @@ class GBSACalculator(GBSAForceManager):
         
         # Preserve original path before any potential fallback replacement
         original_input_complex_pdb = complex_pdb
+        if output_dir:
+            self.work_dir = Path(output_dir)
+        self.distilled_files = None
 
         # mdtraj has no registered loader for a bare '.trj' extension --
         # normalize once, up front, so every downstream md.load(xtc_file, ...)
@@ -3396,7 +3508,7 @@ class GBSACalculator(GBSAForceManager):
         # Zenodo 17926575, whose Amber trajectories use this extension).
         if xtc_file:
             from .trajectory import TrajectoryProcessor
-            xtc_file = TrajectoryProcessor.resolve_mdtraj_loadable_path(xtc_file)
+            xtc_file = TrajectoryProcessor.resolve_mdtraj_loadable_path(xtc_file, self._work_dir_path())
 
         # Pre-run validation
         print("Validating input files...")
@@ -3466,11 +3578,13 @@ class GBSACalculator(GBSAForceManager):
                         "package so that opengbsa can convert the file itself."
                     )
         
-        # Handle custom selection / Protein-Protein splitting
-        skip_distillation = False
+        # Receptor/ligand selections (binding_mode ppi or explicit selections).
+        # With both selections the two must not overlap; atoms in neither are left
+        # out of the calculation (Coordinate Mode: distilled files; Native Mode:
+        # run() drops them from the topology and the trajectory).
         if ligand_selection and receptor_selection:
             log.info("Processing custom selections for Protein-Protein/Refined analysis...")
-            
+
             # Load reference topology (use converted path when available).
             # For Amber topology-only inputs (.prmtop/.parm7), load first frame from trajectory.
             if str(mdtraj_topology).lower().endswith(('.prmtop', '.parm7')):
@@ -3498,74 +3612,45 @@ class GBSACalculator(GBSAForceManager):
                     ref_traj = md.load(ref_top)
             else:
                 ref_traj = md.load(mdtraj_topology)
-            
-            # Get indices
-            lig_idx = self.get_selection_indices(ref_traj.topology, ligand_selection)
-            rec_idx = self.get_selection_indices(ref_traj.topology, receptor_selection)
 
-            # regardless of whether they succeed, log the counts so user can inspect
-            log.info(f"  Ligand selection '{ligand_selection}' matched {len(lig_idx)} atoms")
-            log.info(f"  Receptor selection '{receptor_selection}' matched {len(rec_idx)} atoms")
-            
-            if not lig_idx or not rec_idx:
-                # Custom selections failed. This often occurs with converted TPR files
-                # which may lose chain/residue information during conversion.
-                # use original_input_complex_pdb because complex_pdb may have been
-                # updated to a fallback (.pdb/.gro) above when TPR conversion failed.
-                if str(original_input_complex_pdb).lower().endswith('.tpr'):
-                    log.warning(f"Custom selections failed for converted TPR file.")
-                    log.warning(f"  Ligand selection '{ligand_selection}' found {len(lig_idx)} atoms")
-                    log.warning(f"  Receptor selection '{receptor_selection}' found {len(rec_idx)} atoms")
-                    log.warning("TPR conversions may lose chain ID and residue information.")
-                    log.warning("Skipping custom distillation and continuing with standard flow.")
-                    log.warning("  -> Custom selections have been cleared; subsequent analysis will use the full complex.")
-                    # Don't fail; continue with original complex_pdb in standard flow below
-                    skip_distillation = True
-                    ligand_selection = None
-                    receptor_selection = None
-                else:
-                    log.error("Selection failed to find atoms!")
-                    return None
-            
-            if not skip_distillation:
-                native_topology_input = str(original_input_complex_pdb).lower().endswith(
-                    ('.prmtop', '.parm7', '.tpr', '.top', '.psf')
-                )
-                if native_topology_input:
-                    log.info("Native topology input detected; skipping distillation and using selection masks directly.")
-                    skip_distillation = True
+            where = Path(str(mdtraj_topology)).name
+            if str(original_input_complex_pdb).lower().endswith('.tpr'):
+                where += f" (converted from {Path(str(original_input_complex_pdb)).name})"
+            if require_two_chains:
+                self.check_two_chains(ref_traj.topology, where)
+            lig_idx, rec_idx, left_out = self.split_by_selections(
+                ref_traj.topology, ligand_selection, receptor_selection, where)
 
-            if not skip_distillation:
+            native_topology_input = str(original_input_complex_pdb).lower().endswith(
+                ('.prmtop', '.parm7', '.tpr', '.top', '.psf')
+            )
+            if native_topology_input:
+                log.info("Native topology input detected; skipping distillation and using selection masks directly.")
+            else:
                 # Combine and sort indices
-                clean_indices = np.sort(np.concatenate([rec_idx, lig_idx]))
-            
+                clean_indices = np.sort(np.concatenate([rec_idx, lig_idx])).astype(int)
+
                 # Create Clean Complex PDB
-                clean_pdb_path = str(output_dir / 'distilled_complex.pdb' if output_dir else Path('distilled_complex.pdb'))
+                clean_pdb_path = str(self._work_dir_path() / 'distilled_complex.pdb')
                 clean_pdb_traj = ref_traj.atom_slice(clean_indices)
                 clean_pdb_traj.save(clean_pdb_path)
                 log.info(f"Created distilled complex PDB: {clean_pdb_path}")
-                
-                # Create Clean Trajectory
-                # For efficiency, we shouldn't load entire XTC if huge, but for now assuming it fits or using md.load frame args
-                # Actually, `run` handles framing. But `run` expects XTC matching PDB.
-                # So we MUST create a matching XTC.
-                clean_xtc_path = str(output_dir / 'distilled.xtc' if output_dir else Path('distilled.xtc'))
-                
+
+                # The distilled trajectory keeps every frame (frame selection
+                # happens in run()) and only the selected atoms.
+                clean_xtc_path = str(self._work_dir_path() / 'distilled.xtc')
+
                 log.process("Distilling trajectory to match selection...")
-                # We iterate to avoid memory issues? Or just load?
-                # Using md.load on xtc with original pdb top
                 # Use solvated topology for XTC loading when available to avoid atom-count mismatch.
                 load_top = solvated_topology if solvated_topology else complex_pdb
-                if str(complex_pdb).endswith('.prmtop') and not solvated_topology:
+                if str(complex_pdb).endswith(('.prmtop', '.parm7')) and not solvated_topology:
                     # Convert prmtop to PDB for MDTraj
                     prmtop = app.AmberPrmtopFile(str(complex_pdb))
-                    # Save to cache dir if possible or same dir
-                    temp_pdb = str(Path(complex_pdb).parent / "temp_topology_load.pdb")
-                    if not Path(temp_pdb).exists():
-                        with open(temp_pdb, 'w') as f:
-                            app.PDBFile.writeFile(prmtop.topology, prmtop.positions if prmtop.positions is not None else [openmm.Vec3(0,0,0)]*prmtop.topology.getNumAtoms(), f)
+                    temp_pdb = str(self._work_dir_path() / "temp_topology_load.pdb")
+                    with open(temp_pdb, 'w') as f:
+                        app.PDBFile.writeFile(prmtop.topology, prmtop.positions if prmtop.positions is not None else [openmm.Vec3(0,0,0)]*prmtop.topology.getNumAtoms(), f)
                     load_top = temp_pdb
-                
+
                 full_xtc = md.load(xtc_file, top=load_top)
                 clean_xtc = full_xtc.atom_slice(clean_indices)
                 # Re-image across periodic boundaries -- see
@@ -3582,16 +3667,19 @@ class GBSACalculator(GBSAForceManager):
                                     f"proceeding with un-imaged coordinates.")
                 clean_xtc.save(clean_xtc_path)
                 log.info(f"Created distilled trajectory: {clean_xtc_path}")
-                
+
                 # Update paths for run
                 complex_pdb = clean_pdb_path
                 xtc_file = clean_xtc_path
                 # Distillation actually changes the effective analysis topology.
                 # Keep run() aligned with distilled files to avoid atom-count mismatches.
                 original_input_complex_pdb = complex_pdb
-                
-                log.info(f"DEBUG: run_comprehensive calling run() with complex_pdb={complex_pdb}")
-
+                self.distilled_files = (clean_pdb_path, clean_xtc_path)
+                # The selections, as atom indices of the distilled complex: a chain
+                # or index selection would no longer match once atoms are left out
+                position = {int(old): new for new, old in enumerate(clean_indices)}
+                ligand_selection = index_selection(sorted(position[int(i)] for i in lig_idx))
+                receptor_selection = index_selection(sorted(position[int(i)] for i in rec_idx))
 
         # Run the core analysis with frame selection
         # pass the original input path separately to preserve native-mode detection
@@ -3748,6 +3836,8 @@ class GBSACalculator(GBSAForceManager):
         # a .tpr or other native topology.
         if original_complex_pdb is None:
             original_complex_pdb = complex_pdb
+        if output_dir:
+            self.work_dir = Path(output_dir)
 
         log.section("Advanced MM/GBSA Analysis")
         log.info("Starting fixed enhanced MM/GBSA analysis with GBSA forces...")
@@ -3779,7 +3869,6 @@ class GBSACalculator(GBSAForceManager):
             prmtop = app.AmberPrmtopFile(complex_pdb)
             
             # Look for coordinate file
-            from pathlib import Path
             pdb_base = Path(complex_pdb).stem
             pdb_dir = Path(complex_pdb).parent
             
@@ -3832,7 +3921,6 @@ class GBSACalculator(GBSAForceManager):
             except ImportError:
                 log.warning("TPR file supplied but TprParser is not installed.")
                 # look for .pdb/.gro with same stem
-                from pathlib import Path
                 tpr_path = Path(original_complex_pdb)
                 fb = None
                 for ext in ['.pdb', '.gro']:
@@ -3874,9 +3962,21 @@ class GBSACalculator(GBSAForceManager):
         # "IDENTIFY COMPONENTS" fallback further down (ligand_indices/
         # protein_indices) can check it regardless of which branch ran.
         ligand_atom_indices = None
+        # Native Mode with receptor_selection and ligand_selection that leave atoms
+        # out: the atoms of the stripped complex that are kept, and its full size
+        kept_atoms = None
+        n_full_complex = None
+        self.native_reduced = False
 
         # 1. OBTAIN MASTER COMPLEX STRUCTURE
         complex_struct = None
+
+        if is_native_mode:
+            receptor_topology = self.explicit_amber_topology(receptor_topology, 'receptor_topology')
+            ligand_topology = self.explicit_amber_topology(ligand_topology, 'ligand_topology')
+        elif receptor_topology or ligand_topology:
+            log.warning("receptor_topology and ligand_topology are used only in Native Mode; "
+                        "Coordinate Mode builds receptor and ligand from the complex and ignores them.")
 
         if is_native_mode:
              # NATIVE MODE: Use Unified Splitting (Robust for prmtop, tpr, and psf)
@@ -3947,15 +4047,46 @@ class GBSACalculator(GBSAForceManager):
                  # single-residue-name assumption, which cannot represent a
                  # multi-residue peptide "ligand" at all.
                  ligand_atom_indices = None
-                 if ligand_selection:
+                 if ligand_selection and receptor_selection:
+                     # Both selections on the solvent-stripped complex; atoms in
+                     # neither are dropped from the topology here and from the
+                     # trajectory after it is loaded (kept_atoms)
+                     lig_sel, rec_sel, left_out = self.split_by_selections(
+                         complex_struct.topology, ligand_selection, receptor_selection,
+                         "the solvent-stripped complex")
+                     if left_out:
+                         n_full_complex = len(complex_struct.atoms)
+                         kept_atoms = sorted(set(lig_sel) | set(rec_sel))
+                         keep = set(kept_atoms)
+                         complex_struct.strip([i not in keep for i in range(n_full_complex)])
+                         # ParmEd keeps its cached OpenMM Topology after an Amber
+                         # strip; drop it so the reduced complex is used
+                         if hasattr(complex_struct, '_topology'):
+                             del complex_struct._topology
+                         position = {old: new for new, old in enumerate(kept_atoms)}
+                         lig_sel = sorted(position[i] for i in lig_sel)
+                         rec_sel = sorted(position[i] for i in rec_sel)
+                         # as indices of the reduced complex (chain numbers may shift)
+                         ligand_selection = index_selection(lig_sel)
+                         receptor_selection = index_selection(rec_sel)
+                         log.info(f"Complex reduced to the {len(kept_atoms)} selected atoms")
+                     ligand_atom_indices = list(lig_sel)
+                     log.info(f"Resolved ligand_selection to {len(lig_sel)} atoms and receptor_selection "
+                              f"to {len(rec_sel)} atoms (post-solvent-strip complex)")
+                 elif ligand_selection:
                      # complex_struct.topology here is a ParmEd Structure's
                      # own .topology (an OpenMM Topology) post-solvent-strip;
                      # get_selection_indices already accepts an OpenMM
                      # Topology directly (see get_ligand_indices/
                      # get_protein_indices's own dual OpenMM/MDTraj handling).
                      ligand_atom_indices = self.get_selection_indices(complex_struct.topology, ligand_selection)
-                     log.info(f"Resolved ligand_selection '{ligand_selection}' to {len(ligand_atom_indices)} atoms (post-solvent-strip complex)")
-                 elif receptor_topology and str(receptor_topology).endswith(('.prmtop', '.new', '.7')):
+                     if not ligand_atom_indices:
+                         raise ValueError(f"ligand_selection '{ligand_selection}' matches no atom of the "
+                                          f"solvent-stripped complex.")
+                     log.info(f"Resolved ligand_selection '{ligand_selection}' to {len(ligand_atom_indices)} "
+                              f"atoms (post-solvent-strip complex); the receptor is every other atom "
+                              f"({len(complex_struct.atoms) - len(ligand_atom_indices)} atoms)")
+                 elif receptor_topology:
                      # An explicit receptor_topology (with a known atom
                      # count) tells us exactly how to split the complex
                      # WITHOUT guessing a ligand_resname -- required for any
@@ -3994,7 +4125,7 @@ class GBSACalculator(GBSAForceManager):
                  )
 
                  # Handle Receptor
-                 if receptor_topology and str(receptor_topology).endswith(('.prmtop', '.new', '.7')):
+                 if receptor_topology:
                      log.info(f"Using Explicit Receptor Topology: {receptor_topology}")
                      # Load bare topology
                      import parmed as pmd
@@ -4012,7 +4143,7 @@ class GBSACalculator(GBSAForceManager):
                      receptor_struct = receptor_derived
                  
                  # Handle Ligand
-                 if ligand_topology and str(ligand_topology).endswith(('.prmtop', '.new', '.7')):
+                 if ligand_topology:
                      log.info(f"Using Explicit Ligand Topology: {ligand_topology}")
                      # Load bare topology
                      ligand_explicit = pmd.load_file(ligand_topology)
@@ -4120,6 +4251,9 @@ class GBSACalculator(GBSAForceManager):
                  ligand_atom_indices = None
                  if ligand_selection:
                      ligand_atom_indices = self.get_selection_indices(c_struct.topology, ligand_selection)
+                     if not ligand_atom_indices:
+                         raise ValueError(f"ligand_selection '{ligand_selection}' matches no atom of "
+                                          f"{Path(str(original_complex_pdb)).name}.")
                      log.info(f"Resolved ligand_selection '{ligand_selection}' to {len(ligand_atom_indices)} atoms (Coordinate Mode)")
                  elif not ligand_resname and ligand_mol:
                      # Detect Ligand
@@ -4258,7 +4392,15 @@ class GBSACalculator(GBSAForceManager):
                 self.report_ligand_resname = names.pop()
         else:
             ligand_indices = self.get_ligand_indices(complex_top, ligand_resname, selection=final_lig_selection)
-            protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
+            if final_lig_selection and not final_rec_selection:
+                # ligand_selection alone: the receptor is every other atom of the
+                # (solvent-free) complex, as its receptor System is
+                lig_set = set(ligand_indices)
+                n_complex = len(list(complex_top.atoms() if callable(getattr(complex_top, 'atoms', None))
+                                     else complex_top.atoms))
+                protein_indices = [i for i in range(n_complex) if i not in lig_set]
+            else:
+                protein_indices = self.get_protein_indices(complex_top, ligand_resname, selection=final_rec_selection)
 
         # ===== Diagnostic warnings for custom selections =====
         # If the user supplied a custom selection but it ended up selecting the
@@ -4291,7 +4433,7 @@ class GBSACalculator(GBSAForceManager):
         skip_merge = True
         final_pdb_path = complex_pdb
         self.distilled_complex_pdb = final_pdb_path
-        self.distilled_xtc_file = locals().get('clean_xtc_path', xtc_file)
+        self.distilled_xtc_file = xtc_file
 
         prep_time = time.time() - prep_start_time
         print(f"✓ Total preparation time: {prep_time:.1f}s")
@@ -4422,7 +4564,9 @@ class GBSACalculator(GBSAForceManager):
                 traj = TrajectoryProcessor.load_and_process(
                     trajectory_file=xtc_file,
                     topology_file=final_pdb_path if 'final_pdb_path' in locals() else complex_pdb,
-                    target_atoms=complex_system.getNumParticles(), # Use system count as truth
+                    # the System's atom count is the truth (before atoms in neither
+                    # selection were dropped, see kept_atoms)
+                    target_atoms=n_full_complex or complex_system.getNumParticles(),
                     solvated_topology=solvated_topology,
                     reimage=self.reimage_trajectory
                 )
@@ -4440,6 +4584,20 @@ class GBSACalculator(GBSAForceManager):
                     except Exception as e2:
                         log.warning(f"image_molecules() failed on fallback trajectory load ({e2}); "
                                     f"proceeding with un-imaged coordinates.")
+
+            if kept_atoms is not None:
+                # Native Mode: drop the atoms in neither selection, as from the topology,
+                # and keep files of the reduced complex for the per-residue decomposition
+                traj = traj.atom_slice(kept_atoms)
+                work = self._work_dir_path()
+                reduced_pdb, reduced_xtc = str(work / 'distilled_complex.pdb'), str(work / 'distilled.xtc')
+                traj[0].save_pdb(reduced_pdb)
+                traj.save(reduced_xtc)
+                self.distilled_complex_pdb, self.distilled_xtc_file = reduced_pdb, reduced_xtc
+                self.distilled_files = (reduced_pdb, reduced_xtc)
+                self.native_reduced = True
+                log.info(f"Trajectory reduced to the {len(kept_atoms)} selected atoms "
+                         f"({reduced_pdb}, {reduced_xtc})")
 
             # Verification handled by Processor, but double check
             if traj.n_atoms != complex_system.getNumParticles():
@@ -4992,6 +5150,10 @@ class GBSACalculator(GBSAForceManager):
                      
                      # Instantiate Decomposer
                      decomp_tool = PerResidueDecomposition(self, temperature=self.temperature, output_dir=str(output_dir))
+                     # its plots go to the run folder (report_dir is otherwise set only
+                     # by run_per_residue_analysis, and the plot then lands in the
+                     # current working directory)
+                     decomp_tool.report_dir = str(self._work_dir_path())
                      
                      # Prepare Systems Dict for the tool
                      # Reuse the context/system we already have active
@@ -5215,7 +5377,6 @@ class GBSACalculator(GBSAForceManager):
         summary.update(precision=precision, drms=self.nmode_drms, amber_compatible=self.amber_compatible,
                        rows=rows)
         if output_dir:
-            from pathlib import Path
             path = Path(output_dir) / 'nmode_entropy.csv'
             pd.DataFrame(rows).to_csv(path, index=False)
             summary['csv'] = str(path)
@@ -5274,7 +5435,6 @@ class GBSACalculator(GBSAForceManager):
         
         output_file = f'fixed_enhanced_mmgbsa_results_{self.gb_model.lower()}.csv'
         if output_dir:
-            from pathlib import Path
             output_file = str(Path(output_dir) / output_file)
             
         df.to_csv(output_file, index=False)

@@ -206,7 +206,7 @@ class TrajectoryProcessor:
     """
 
     @staticmethod
-    def resolve_mdtraj_loadable_path(trajectory_file):
+    def resolve_mdtraj_loadable_path(trajectory_file, alias_dir=None):
         """
         Returns a path mdtraj can load, aliasing a bare '.trj' extension to
         '.mdcrd' via a symlink if needed.
@@ -223,13 +223,24 @@ class TrajectoryProcessor:
         (not just `TrajectoryProcessor.load_and_process` itself) should
         route it through this first, or it will hit mdtraj's own opaque
         "no loader for filename=... (extension=.trj)" OSError.
+
+        The alias is created in `alias_dir` (the run folder), or in a new
+        temporary folder when none is given -- never next to the input.
         """
         if not str(trajectory_file).lower().endswith('.trj'):
             return str(trajectory_file)
-        alias_path = Path(str(trajectory_file)[:-4] + '.mdcrd')
+        if alias_dir is None:
+            import tempfile
+            alias_dir = tempfile.mkdtemp(prefix='opengbsa_trj_')
+        alias_dir = Path(alias_dir)
+        alias_dir.mkdir(parents=True, exist_ok=True)
+        alias_path = alias_dir / (Path(str(trajectory_file)).name[:-4] + '.mdcrd')
+        target = Path(trajectory_file).resolve()
+        if alias_path.is_symlink() and alias_path.resolve() != target:
+            alias_path.unlink()
         if not alias_path.exists():
             try:
-                alias_path.symlink_to(Path(trajectory_file).resolve())
+                alias_path.symlink_to(target)
             except OSError as e:
                 log.warning(f"Could not create .mdcrd alias for .trj trajectory ({e}); "
                             f"proceeding with the original path, which mdtraj may reject.")
