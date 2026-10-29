@@ -1,10 +1,17 @@
 Output files
 ============
 
+.. _opt-output_directory:
+
 Every run writes its results to a new folder,
 ``<output_directory>/analysis_<date>_<time>/`` (or
 ``<DIR>/mmgbsa_analysis_<date>_<time>/`` with ``--output-dir DIR``), so runs
-never overwrite each other. The files below are those of the
+never overwrite each other. ``output_directory`` is the only option of
+``output_settings``; its default is ``mmgbsa_results``, relative to the folder
+from which ``opengbsa`` is started. Two runs started in the same second get
+folders ending in ``_2``, ``_3`` and so on.
+
+The files below are those of the
 :doc:`../quickstart`, which uses the OBC2 model, the per-residue decomposition
 and the entropy estimate.
 
@@ -133,6 +140,30 @@ Plots and reports
 
 The plots, the interactive HTML report and the PyMOL view are shown in
 :doc:`visualization`.
+
+.. _opt-reporting:
+
+The options of ``reporting_settings`` shape the interactive report
+``interactive_report.html``, which the per-residue decomposition writes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 16 56
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``include_all_plots``
+     - ``true``
+     - ``false`` keeps only the heat map of the top residues and leaves out
+       the time series, the distributions and the bar charts.
+   * - ``export_format``
+     - ``png``
+     - The format of the plots' download button, any image format of Plotly
+       (``png``, ``svg``, ``jpeg``, ``webp``).
+   * - ``export_width``, ``export_height``
+     - ``4200``, ``2800``
+     - The size of a downloaded plot in pixels.
 
 Intermediate files
 ------------------

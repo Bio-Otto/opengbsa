@@ -800,6 +800,17 @@ class ConfigManager:
                                           f"max_frames ({max_frames}): the decomposed frames are a "
                                           f"subset of the analysed frames")
 
+        # Coordinate Mode builds a ligand chosen by a selection with the protein force
+        # field, so a small molecule from ligand_mol would get no parameters
+        input_files = self.config.get('input_files') or {}
+        complex_pdb = str(input_files.get('complex_pdb') or '').lower()
+        if (complex_pdb.endswith(('.pdb', '.gro')) and input_files.get('ligand_mol')
+                and settings.get('ligand_selection')):
+            self.validation_errors.append(
+                "ligand_mol and ligand_selection cannot be combined in Coordinate Mode: a selected "
+                "ligand is built with the protein force field. Leave out ligand_selection; the "
+                "small-molecule ligand is then found by its residue name (LIG, UNL, UNK, DRUG, MOL)")
+
     def _validate_file_path(self, file_path: str, file_key: str) -> bool:
         """Validate file path."""
         if not file_path:

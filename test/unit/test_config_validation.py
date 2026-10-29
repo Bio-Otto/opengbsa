@@ -58,3 +58,25 @@ def test_unknown_option_value_is_an_error(make_config, key, value):
     manager, ok = make_config(f"  {key}: {value}\n")
     assert not ok
     assert any(key in error for error in manager.get_validation_errors())
+
+
+def test_ligand_mol_with_ligand_selection_in_coordinate_mode_is_an_error(tmp_path):
+    """Coordinate Mode builds a selected ligand with the protein force field, so a small
+    molecule from ligand_mol would get no parameters."""
+    for name in ("complex.pdb", "complex.prmtop", "traj.xtc", "ligand.sdf"):
+        (tmp_path / name).write_text("placeholder\n")
+
+    def check(complex_file):
+        path = tmp_path / "config.yaml"
+        path.write_text(
+            "input_files:\n"
+            f"  complex_pdb: {tmp_path / complex_file}\n"
+            f"  trajectory: {tmp_path / 'traj.xtc'}\n"
+            f"  ligand_mol: {tmp_path / 'ligand.sdf'}\n"
+            "analysis_settings:\n  ligand_selection: resname LIG\n")
+        manager = ConfigManager(str(path))
+        manager.validate_config()
+        return [e for e in manager.get_validation_errors() if "ligand_mol and ligand_selection" in e]
+
+    assert check("complex.pdb")
+    assert not check("complex.prmtop")       # Native Mode takes the parameters from the topology
