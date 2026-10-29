@@ -59,10 +59,10 @@ _AVOGADRO = 6.02214076e23
 _EPSILON0 = 1e-6 * 8.8541878128e-12 / (_E_CHARGE * _E_CHARGE * _AVOGADRO)
 ONE_4PI_EPS0 = 1.0 / (4.0 * math.pi * _EPSILON0)
 
-# Elements per block in the pair loops (rows x columns). Each numpy temporary of
-# a block is CHUNK_ELEMENTS doubles (2 MB), so memory stays bounded for any
-# system size.
-CHUNK_ELEMENTS = 1 << 18
+# Elements per block in the pair loops (rows x columns); 65536 was fastest on a
+# 4000-atom complex. Each numpy temporary of a block is 0.5 MB, so memory stays
+# bounded for any system size.
+CHUNK_ELEMENTS = 1 << 16
 
 
 class SolvationDecompositionError(RuntimeError):

@@ -29,56 +29,51 @@ import parmed
 from .mmgbsa_core import GBSACalculator, SOLVENT_ION_RESNAMES
 from .trajectory import reimage_molecules
 from .pymol_viz import write_hotspot_pymol
+from .solvation_peratom import (
+    SolvationEnergies, group_energy, POLAR_GROUPS, NONPOLAR_GROUPS, ONE_4PI_EPS0, KJ_TO_KCAL,
+    CHUNK_ELEMENTS, _map_blocks, _discrete_function,
+    _Expression as _LeptonExpression, _BUILTINS as _LEPTON_BUILTINS,
+)
 
 from .logger import ToolLogger
 
 # Initialize logger
 log = ToolLogger()
 
+
+class DecompositionError(RuntimeError):
+    """The per-residue decomposition failed; no per-residue results exist."""
+
+
 class PerResidueDecomposition:
     """
     Advanced per-residue energy decomposition for MM/GBSA analysis.
     Integrates seamlessly with your existing GBSACalculator class.
 
-    Per-residue contributions are the sum of three terms:
-      - vdw / electrostatic: exact pairwise MM interaction energy between
-        each residue's atoms and the target atom set, HALVED (Gohlke-Kollman
-        50/50 convention, see `_calculate_pairwise_interactions_standalone`)
-        -- confirmed against Amber MMPBSA.py idecomp's own `decomp.F90`
-        (`decpair` subroutine): every pairwise contribution is accumulated
-        as `hfval = 0.5*fval` into both residues' buckets, with no special
-        case for cross-molecule (protein-ligand) pairs. Validated: r>0.99,
-        RMSE<0.06 kcal/mol against Amber's own (also-halved) sum.
-      - solvation: exact per-atom OBC2 GB polar solvation energy, derived
-        analytically from each atom's Born radius (see
-        `_gb_solvation_decomposition`), attributed to residues via the
-        Gohlke-Kollman convention (self-energy to the owning residue in
-        full, pairwise GB energy ALWAYS split 50/50 between the two
-        residues -- confirmed against Amber's real `sander/decomp.F90`
-        source: `decpair` halves every pairwise GB call unconditionally,
-        including protein-ligand cross-terms, with no special case for
-        cross-molecule pairs; a protein atom's self-energy separately uses a
-        complex-vs-receptor Born-radius correction, since Born radii depend
-        on the whole system -- see that method's Case 1/Case 2 docstring).
-        Summing this term over ALL residues (if residue_map covered every
-        atom) reproduces the system's total GB energy exactly (to
-        floating-point precision). Validated pooled across 18 production
-        replicas (pre-halving-fix): solvation alone r=0.978 against Amber
-        idecomp=2. Residues in very close ligand contact (e.g. a
-        salt-bridged ARG guanidinium hydrogen 1.8-2.4 A from a ligand
-        oxygen) previously showed much higher frame-to-frame variance in
-        this correction than Amber shows for the same residue, traced to an
-        un-halved ligand cross-term (fixed); some residual variance above
-        Amber's own remains, likely from the complex-vs-receptor self-energy
-        correction being a different (delta-based) mechanism than Amber's
-        fully independent receptor-alone decomp run -- treat single-residue
-        'total' hot-spot values for such residues with some caution in
-        isolation from pooled/aggregate statistics.
+    Every term is decomposed from the OpenMM Systems the MM/GBSA calculation
+    itself evaluates (complex, receptor and ligand), so the per-residue values
+    follow the run's settings (GB model, rgbmax, salt, dielectrics, surface-area
+    model and LCPO typing) and, with the ligand's share, add up to the frame's
+    binding energy term by term:
 
-    This does NOT include the nonpolar (surface-area) solvation term, and is
-    a different quantity than the `decomposition_method='fast'` path (see
-    `mmgbsa.energy_decomp.EnergyDecomposer`), which reports vdW+electrostatic
-    only with no solvation term at all.
+      - vdw / electrostatic: pairwise interaction energy between each
+        residue's atoms and the ligand atoms from the complex System's own
+        nonbonded forces, HALVED (Gohlke-Kollman 50/50 convention, as Amber's
+        `decpair` in sander decomp.F90: hfval = 0.5*fval into both residues'
+        buckets, with no special case for cross-molecule pairs).
+      - solvation (polar): each atom's GB energy in the complex minus its GB
+        energy in the receptor System, summed per residue. An atom's GB
+        energy is its self term plus half of each of its pair terms, read
+        from the run's GB force (mmgbsa.solvation_peratom).
+      - nonpolar_solvation: the same complex-minus-receptor difference of the
+        per-atom surface-area energy of the run's non-polar force (LCPO or
+        ACE). Amber MMPBSA.py decomposes this term with sander gbsa=2 instead
+        (a numerical surface), so it does not sum to Amber's LCPO total.
+
+    'total' is vdw + electrostatic + polar solvation (the non-polar term is
+    reported separately, as before). This is a different quantity than the
+    `decomposition_method='fast'` path (see `mmgbsa.energy_decomp.EnergyDecomposer`),
+    which reports vdW+electrostatic only with no solvation term at all.
     """
     
     def __init__(self, mmgbsa_calculator, temperature=300.0, output_dir=None, n_jobs=1, report_raw_energies=False):
@@ -130,8 +125,12 @@ class PerResidueDecomposition:
             MDTraj selection string for receptor atoms (e.g. 'chainid 0')
         ligand_selection : str, optional
             MDTraj selection string for ligand atoms (e.g. 'resname UNK')
+
+        Returns the results dict (with 'status': 'completed'). Raises
+        DecompositionError when the decomposition fails, so a failure is
+        never reported or stored as a result.
         """
-        
+
         if output_dir:
             self.report_dir = output_dir
             
@@ -155,8 +154,7 @@ class PerResidueDecomposition:
             )
             
             if not mmgbsa_results:
-                log.error("MM/GBSA analysis failed!")
-                return None
+                raise DecompositionError("The MM/GBSA analysis the decomposition builds on failed")
             
             log.result("Baseline MM/GBSA Binding", f"{mmgbsa_results['mean_binding_energy']:.2f} ± {mmgbsa_results['std_error']:.2f}", "kcal/mol")
         else:
@@ -181,91 +179,89 @@ class PerResidueDecomposition:
             ligand_selection=ligand_selection
         )
         
-        if decomp_results:
-            # Step 3: Analyze and visualize results
-            log.section("Analysis and Visualization")
-            
-            analysis_results = self._analyze_decomposition_results(decomp_results)
-            self._generate_decomposition_plots(analysis_results)
-            
-            # Combine results
-            complete_results = {
-                'mmgbsa_results': mmgbsa_results,
-                'decomposition_results': decomp_results,
-                'analysis_results': analysis_results,
-                'n_decomp_frames': decomp_frames
-            }
-            
-            self._print_decomposition_summary(complete_results)
-            self._save_decomposition_results(complete_results)
-            self._write_hotspot_pymol(decomp_results)
-            
-            return complete_results
-        
-        else:
-            print("ERROR: Per-residue decomposition failed")
-            return mmgbsa_results
+        # _perform_per_residue_decomposition raises DecompositionError on
+        # failure; an empty result is a failure too, never a "completed" run.
+        if not decomp_results:
+            raise DecompositionError("Per-residue decomposition produced no results")
+
+        # Step 3: Analyze and visualize results
+        log.section("Analysis and Visualization")
+
+        analysis_results = self._analyze_decomposition_results(decomp_results)
+        self._generate_decomposition_plots(analysis_results)
+
+        # Combine results
+        complete_results = {
+            'status': 'completed',
+            'mmgbsa_results': mmgbsa_results,
+            'decomposition_results': decomp_results,
+            'analysis_results': analysis_results,
+            'n_decomp_frames': decomp_frames,
+            'energy_check': getattr(self, 'energy_check', []),
+        }
+
+        self._print_decomposition_summary(complete_results)
+        self._save_decomposition_results(complete_results)
+        self._write_hotspot_pymol(decomp_results)
+
+        return complete_results
 
     def execute_decomposition(self, trajectory, systems_dict):
         """
-        Execute decomposition on an already loaded trajectory and system
+        Decompose an already loaded trajectory with the run's own Systems.
+
+        `systems_dict` holds the complex System, Context and topology; the
+        receptor and ligand Systems are taken from the calculator
+        (`GBSACalculator.systems`) when the dict does not carry them.
+        Raises DecompositionError when the decomposition fails.
         """
         try:
             log.process("Executing Decomposition on provided trajectory...")
-            
-            # Build residue map
-            complex_topology = systems_dict['complex_topology'] # OpenMM Topology
+
+            complex_topology = systems_dict['complex_topology']  # OpenMM Topology
             ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
             residue_map, ligand_indices = self._build_residue_mapping(complex_topology, ligand_resname)
-            
             log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
-            
+
+            systems = dict(systems_dict)
+            calc_systems = getattr(self.mmgbsa_calculator, 'systems', None) or {}
+            for key in ('protein_system', 'ligand_system'):
+                if systems.get(key) is None and calc_systems.get(key) is not None:
+                    systems[key] = calc_systems[key]
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+
             residue_energies = []
-            frame_by_frame_data = [] 
-            
+            frame_by_frame_data = []
             for i, frame in enumerate(trajectory):
                 if i % 10 == 0:
                     log.process(f"Decomposing frame {i+1}/{len(trajectory)}...")
-                
-                frame_result = self._decompose_single_frame(
-                    frame, systems_dict, residue_map, ligand_indices, ligand_resname
-                )
-                
-                if frame_result:
-                    residue_energies.append(frame_result)
-                    
-                    # Store frame-by-frame data
-                    frame_data = {'frame_index': i, 'frame_number': i + 1}
-                    for res_id, energies in frame_result.items():
-                        parts = res_id.split('_')
-                        res_key = f"{parts[0]}{parts[1]}"
-                        frame_data[f'{res_key}_total'] = energies['total']
-                    frame_by_frame_data.append(frame_data)
+                frame_result, _ = decomposer.decompose(frame.xyz[0])
+                residue_energies.append(frame_result)
+                frame_by_frame_data.append(_frame_row(frame_result, i, i + 1, len(trajectory)))
 
             if not residue_energies:
-                return None
-                
+                raise DecompositionError("The trajectory has no frames to decompose")
+
             averaged = self._average_residue_energies(residue_energies)
-            
+            self.frame_data = frame_by_frame_data
+
             # Visualization/Saving
             analysis = self._analyze_decomposition_results(averaged)
             self._generate_decomposition_plots(analysis)
-            
-            # Save CSV
+
             if self.output_dir:
-                 df = analysis['dataframe']
-                 df.to_csv(os.path.join(self.output_dir, "final_decomposition.csv"), index=False)
-                 print(f"✓ Decomposition saved to: final_decomposition.csv")
-                 
+                df = analysis['dataframe']
+                df.to_csv(os.path.join(self.output_dir, "final_decomposition.csv"), index=False)
+                print(f"✓ Decomposition saved to: final_decomposition.csv")
+
             return averaged
 
+        except DecompositionError:
+            raise
         except Exception as e:
-            log.error(f"Decomposition execution failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-    
-    def _perform_per_residue_decomposition(self, ligand_mol, complex_pdb, 
+            raise DecompositionError(f"Decomposition execution failed: {e}") from e
+
+    def _perform_per_residue_decomposition(self, ligand_mol, complex_pdb,
                                          xtc_file, ligand_pdb, n_frames,
                                          frame_start=None, frame_end=None, frame_stride=None,
                                          frame_selection='sequential', random_seed=42, solvated_topology=None,
@@ -274,12 +270,15 @@ class PerResidueDecomposition:
                                          plot_top_residues=10, receptor_selection=None, ligand_selection=None):
         """
         Perform detailed per-residue energy decomposition.
-        
+
         receptor_selection / ligand_selection mirror the same parameters in GBSACalculator.run().
         When provided they restrict which atoms are treated as receptor vs ligand during
         the residue-level energy decomposition, consistent with the main MM/GBSA calculation.
+
+        Returns the per-residue averages; raises DecompositionError on any
+        failure (no frame is skipped silently).
         """
-        
+
         try:
             log.debug(f"perform_decomposition: report_raw_energies={self.report_raw_energies}")
             # Load trajectory and get frames for decomposition
@@ -289,64 +288,41 @@ class PerResidueDecomposition:
                  if os.path.exists(temp_pdb):
                       log.info(f"Intercepting dynamic Native TPR metadata in Decomposition module: {temp_pdb}")
                       complex_pdb = temp_pdb
-            
+
             # Load trajectory (Use solvated_topology if available to avoid atom mismatch)
             load_top = solvated_topology if solvated_topology else complex_pdb
-            
-            # Check if loading might fail (if dry topology used with solvated xtc)
-            # This is critical for GROMACS/Native mode where complex_pdb is dry but xtc is solvated.
-            if not solvated_topology and str(complex_pdb).endswith('.prmtop'):
-                 # Heuristic: try loading, if fails, user needs solvated_topology (which we should have passed)
-                 pass
 
             traj = md.load(xtc_file, top=load_top)
-            
+
             if n_frames is None or len(traj) < n_frames:
                 n_frames = len(traj)
-            
+
             # Select frames based on parameters
             selected_frames = self._select_frames(len(traj), n_frames, frame_start, frame_end,
                                                 frame_stride, frame_selection, random_seed)
             decomp_traj = traj[selected_frames]
-            
+
             print(f"  Selected {len(decomp_traj)} frames for decomposition")
-            
-            # FIX: Strip solvent/ions from trajectory to match OpenMM system (Dry)
-            # The system builder removes these, so the trajectory must match.
+
+            # Strip solvent/ions from trajectory to match the (dry) OpenMM System.
             topology = decomp_traj.topology
-            
-            # If we loaded using solvated_topology, we MUST strip down to the dry complex
-            # If we loaded using complex_pdb (dry), we might already match, or mismatch (and likely crashed above if mismatch).
-            
+
             # Same solvent/ion residue names as the system builder's strip
             # (mmgbsa_core solvent_mask), CHARMM's included: with only the
             # Amber/GROMACS names, CHARMM SOD/CLA ions stayed in the trajectory
             # and every frame had more atoms than the system.
             keep_indices = np.array([a.index for a in topology.atoms
                                      if not (a.residue.is_water or a.residue.name in SOLVENT_ION_RESNAMES)])
-            
+
             # Optimization: Only strip if we actually have solvent atoms or if explicit solvated top was used
             if solvated_topology or len(keep_indices) < topology.n_atoms:
                 log.process(f"Stripping solvent/ion atoms (keeping {len(keep_indices)}) from trajectory to match system...")
                 decomp_traj = decomp_traj.atom_slice(keep_indices)
 
-            # Re-image across periodic boundaries -- confirmed on real
-            # production data that skipping this step (as this trajectory
-            # load path previously did) reproduces a systematic ~11% bias in
-            # vdW/electrostatic energies that grows across the trajectory
-            # (frames later in the run have accumulated more drift), because
-            # a molecule that wraps to the box's opposite side mid-trajectory
-            # corrupts inter-atomic distances without changing the true
-            # physics. See TrajectoryProcessor.load_and_process's own
-            # image_molecules() call (mmgbsa_core.py's main energy loop) for
-            # the full numerical verification (-39.41 un-imaged vs -44.37
-            # correctly-imaged vs Amber's own -44.37 on one benchmark
-            # replica's delta_vdw). Per-residue decomposition uses this same
-            # trajectory, so it inherited the identical bias. Gated on the
-            # same reimage_trajectory setting as the main energy loop (see
-            # GBSACalculator.__init__'s docstring) for consistency -- a run
-            # that disabled re-imaging for the main analysis should not have
-            # decomposition silently re-image the same trajectory anyway.
+            # Re-image across periodic boundaries, gated on the same
+            # reimage_trajectory setting as the main energy loop
+            # (TrajectoryProcessor.load_and_process): a molecule that wraps to
+            # the far side of the box corrupts inter-atomic distances.
             if getattr(self.mmgbsa_calculator, 'reimage_trajectory', True):
                 try:
                     decomp_traj = reimage_molecules(decomp_traj)
@@ -356,30 +332,22 @@ class PerResidueDecomposition:
                                 f"biased if any molecule crosses a periodic boundary "
                                 f"during the trajectory.")
 
-
-
-            # Prepare systems for decomposition
-            # Use complex_pdb for ParmEd (contains ALL atoms including ligand)
-            # Use a native topology/parameter file for robust LJ (vdW) recovery when available.
-            # In many workflows `complex_pdb` here is a distilled/temporary PDB without full FF params.
+            # The run's own Systems (complex, receptor, ligand) and Contexts.
             topology_for_params = decomposition_topology_file or complex_pdb
             systems = self._prepare_decomposition_systems(
                 ligand_mol, complex_pdb, ligand_pdb, topology_for_params,
                 ligand_selection=ligand_selection
             )
-            
-            if not systems:
-                return None
-            
+
             log.process("Building residue mapping from prepared system...")
             # Use the topology from the prepared system (stripped of solvent/ions)
             # to ensure indices match the OpenMM system and stripped trajectory
             complex_topology = systems['complex_topology']
-            
+
             if not ligand_resname:
                 log.info("Searching for ligand residue name...")
                 ligand_resname = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
-            
+
             log.info(f"Using Ligand Residue Name: {ligand_resname}")
             if ligand_selection:
                 log.info(f"Using custom ligand_selection for decomposition: '{ligand_selection}'")
@@ -393,228 +361,101 @@ class PerResidueDecomposition:
                 receptor_selection=receptor_selection,
                 reference_topology=decomp_traj.topology
             )
-            
+
             log.info(f"Found {len(residue_map)} protein residues, {len(ligand_indices)} ligand atoms")
+            if len(ligand_indices) == 0:
+                res_found = set(r.name for r in complex_topology.residues())
+                raise DecompositionError(
+                    f"No ligand atoms found for resname '{ligand_resname}' "
+                    f"(residues in the topology: {sorted(res_found)[:20]})")
+            if decomp_traj.n_atoms != systems['complex_system'].getNumParticles():
+                raise DecompositionError(
+                    f"The decomposition trajectory has {decomp_traj.n_atoms} atoms, the complex "
+                    f"System {systems['complex_system'].getNumParticles()}")
             # structure for the PyMOL hot-spot script: the middle decomposed frame, in the
             # atom order of the evaluated complex
             self._hotspot_inputs = dict(topology=complex_topology, residue_map=residue_map,
                                         ligand_indices=ligand_indices,
                                         positions=decomp_traj.xyz[len(decomp_traj) // 2])
-            if len(ligand_indices) == 0:
-                 log.error(f"CRITICAL: No ligand atoms found for resname '{ligand_resname}'. Energies will be zero.")
-                 # Provide debugging dump
-                 res_found = set(r.name for r in complex_topology.residues())
-                 log.info(f"Available residues in topology: {list(res_found)[:20]}")
-            
-            if not systems:
-                return None
-            
-            # Perform frame-by-frame decomposition
-            residue_energies = []
-            frame_by_frame_data = []  # Store frame-by-frame data for CSV output
-            
+
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+
             # Determine number of cores
             n_cores = self.n_jobs
             if n_cores == -1:
-                import multiprocessing
                 n_cores = multiprocessing.cpu_count()
-            
-            # Prepare for Parallel Execution
-            # NOTE: Parallel decomposition is disabled for OpenCL/CUDA as GPU contexts
-            # cannot be safely shared across multiple worker processes.
-            # However, it can be safely enabled for CPU-based calculations.
+
+            # Parallel decomposition only on the CPU platform: GPU contexts
+            # cannot be shared safely across worker processes.
             decomposition_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
             run_parallel = (n_cores > 1 and len(decomp_traj) > 1 and decomposition_platform == 'CPU')
-            
+
+            outputs = None
             if run_parallel:
-                log.info(f"✓ Running parallel decomposition on {n_cores} cores (CPU platform)")
-                
-                # 1. Serialize System for Workers
-                system_xml = openmm.XmlSerializer.serialize(systems['complex_system'])
-                
-                # 2. Extract pdb_params (Pre-calculate so workers don't need ParmEd)
-                pdb_params = None
-                if 'parmed_structure' in systems:
-                    pdb_params = {}
-                    struct = systems['parmed_structure']
-                    for i, atom in enumerate(struct.atoms):
-                         sigma = atom.rmin * 1.781797697 * 0.1 # Angstrom -> nm
-                         epsilon = atom.epsilon 
-                         charge = atom.charge
-                         pdb_params[i] = (charge, sigma, epsilon)
-                
-                # 3. Prepare Tasks
-                tasks = []
-                for i, frame in enumerate(decomp_traj):
-                    pos = frame.xyz[0] 
-                    # Note: We must strip unit from pos if it has it, but mdtraj returns numpy
-                    # We pass frame index to sort results
-                    tasks.append((selected_frames[i], pos, residue_map, ligand_indices, salt_concentration, ligand_resname, self.report_raw_energies))
-                
-                # 4. Run Parallel Pool
-                import multiprocessing
-                pool_results = []
+                n_workers = min(n_cores, len(decomp_traj))
+                log.info(f"✓ Running parallel decomposition on {n_workers} cores (CPU platform)")
+                payload = {
+                    'complex_xml': openmm.XmlSerializer.serialize(systems['complex_system']),
+                    'protein_xml': openmm.XmlSerializer.serialize(systems['protein_system']),
+                    'ligand_xml': openmm.XmlSerializer.serialize(systems['ligand_system']),
+                    'residue_map': residue_map,
+                    'ligand_indices': list(ligand_indices),
+                    'report_raw_energies': self.report_raw_energies,
+                }
+                tasks = [(i, decomp_traj.xyz[i]) for i in range(len(decomp_traj))]
                 try:
-                    with multiprocessing.Pool(processes=n_cores, initializer=_worker_init, initargs=(system_xml, pdb_params)) as pool:
-                        # Use imap to get results as they complete
-                        # worker returns (idx, binding, complex)
-                        for i, (frame_idx, interactions, complex_interactions) in enumerate(pool.imap(_worker_analyze_frame, tasks)):
-                            if (i+1) % 5 == 0:
-                                log.process(f"Processed {i+1}/{len(tasks)} frames (Parallel)...")
-                            
-                            if interactions:
-                                pool_results.append((i, interactions, complex_interactions)) # Store with loop index 'i' to match decomp_traj[i]
+                    outputs = [None] * len(tasks)
+                    with multiprocessing.Pool(processes=n_workers, initializer=_worker_init,
+                                              initargs=(payload,)) as pool:
+                        for done, (i, out, error) in enumerate(pool.imap(_worker_decompose, tasks)):
+                            if error is not None:
+                                raise DecompositionError(f"frame {selected_frames[i]}: {error}")
+                            outputs[i] = out
+                            if (done + 1) % 5 == 0:
+                                log.process(f"Processed {done+1}/{len(tasks)} frames (Parallel)...")
+                except DecompositionError:
+                    raise
                 except Exception as e:
                     log.error(f"Parallel execution failed: {e}. Falling back to serial.")
-                    run_parallel = False
+                    outputs = None
             else:
                 if decomposition_platform and decomposition_platform != 'CPU':
                     log.info(f"• Serial decomposition (decomposition_platform={decomposition_platform} incompatible with GPU-unsafe parallelization)")
                 else:
                     log.info(f"• Serial decomposition (no explicit CPU platform set; GPU parallelization disabled for safety)")
-            
-            # Processing Loop (Parallel Collection or Serial Execution)
-            if run_parallel:
-                 # Sort by original index to ensure order matches decomp_traj
-                 pool_results.sort(key=lambda x: x[0])
-                 
-                 for i, interactions, complex_interactions in pool_results:
-                     frame = decomp_traj[i]
-                     positions = frame.xyz[0] * unit.nanometer
-                     
-                     # Calculate Solvation (Approximate) - locally
-                     solvation_contributions = self._approximate_solvation_decomposition(
-                        systems, positions, residue_map, ligand_indices
-                     )
-                     # Per-residue non-polar (surface-area) term, as in the serial path
-                     # (_decompose_single_frame); without it the parallel path reported
-                     # polar-only solvation.
-                     nonpolar_solvation_contributions = self._sa_decomposition(
-                        frame, systems, residue_map, ligand_indices
-                     )
 
-                     # Calculate Complex Solvation if needed
-                     complex_solv = {}
-                     if self.report_raw_energies:
-                         n_particles = systems['complex_system'].getNumParticles()
-                         all_indices = list(range(n_particles))
-                         complex_solv = self._approximate_solvation_decomposition(
-                             systems, positions, residue_map, all_indices
-                         )
-
-                     # Combine and Format Results
-                     frame_result = {}
-                     for res_id in interactions:
-                         inter = interactions[res_id]
-                         
-                         # Standard Binding
-                         vdw = inter.get('vdw', 0.0)
-                         ele = inter.get('elec', 0.0)
-                         sol = solvation_contributions.get(res_id, 0.0)
-                         
-                         frame_result[res_id] = {
-                             'vdw': vdw,
-                             'electrostatic': ele,
-                             'solvation': sol,
-                             'nonpolar_solvation': nonpolar_solvation_contributions.get(res_id, 0.0),
-                             'total': vdw + ele + sol
-                         }
-                         
-                         # Amber-like Raw Energies
-                         if self.report_raw_energies and complex_interactions:
-                             c_int = complex_interactions.get(res_id, {})
-                             c_vdw = c_int.get('vdw', 0.0)
-                             c_ele = c_int.get('elec', 0.0)
-                             c_sol = complex_solv.get(res_id, 0.0)
-                             
-                             frame_result[res_id]['complex_vdw'] = c_vdw
-                             frame_result[res_id]['complex_electrostatic'] = c_ele
-                             frame_result[res_id]['complex_solvation'] = c_sol
-                             frame_result[res_id]['complex_total'] = c_vdw + c_ele + c_sol
-                             
-                             # Receptor = Complex - Ligand
-                             l_vdw = vdw
-                             l_ele = ele
-                             l_sol = sol
-                             
-                             r_vdw = c_vdw - l_vdw
-                             r_ele = c_ele - l_ele
-                             r_sol = c_sol - l_sol
-                             
-                             frame_result[res_id]['receptor_vdw'] = r_vdw
-                             frame_result[res_id]['receptor_electrostatic'] = r_ele
-                             frame_result[res_id]['receptor_solvation'] = r_sol
-                             frame_result[res_id]['receptor_total'] = r_vdw + r_ele + r_sol
-
-                     residue_energies.append(frame_result)
-                     
-                     # DataFrame Data
-                     frame_data = {'frame_index': i, 'frame_number': i + 1}
-                     for res_id, energies in frame_result.items():
-                        parts = res_id.split('_')
-                        res_key = f"{parts[0]}{parts[1]}"
-                        frame_data[f'{res_key}_total'] = energies['total']
-                     frame_by_frame_data.append(frame_data)
-            
-            else:
-                # Serial Execution (Legacy Loop)
+            if outputs is None:
                 log.info("Running serial decomposition...")
-                for i, frame in enumerate(decomp_traj):
+                outputs = []
+                for i in range(len(decomp_traj)):
                     if i % 5 == 0:
                         log.process(f"Processing frame {i+1}/{len(decomp_traj)}...")
-                    
-                    frame_result = self._decompose_single_frame(
-                        frame, systems, residue_map, ligand_indices, ligand_resname,
-                        salt_concentration=salt_concentration
-                    )
-                    
-                    if frame_result:
-                        residue_energies.append(frame_result)
-                        
-                        frame_data = {
-                            'frame_index': selected_frames[i],
-                            'frame_number': i + 1,
-                            'total_frames': len(decomp_traj)
-                        }
-                        
-                        for res_id, energies in frame_result.items():
-                            parts = res_id.split('_')
-                            if len(parts) >= 3:
-                                res_name = parts[0]
-                                res_number = parts[1]
-                                chain_id = parts[2]
-                            else:
-                                res_name = res_id
-                                res_number = "0"
-                                chain_id = "A"
-                            
-                            frame_data[f'{res_name}{res_number}_{chain_id}_vdw'] = energies['vdw']
-                            # Note: Key in Serial result is 'electrostatic' but my standalone uses 'elec'.
-                            # decompose_single_frame normalizes this?
-                            # _calculate_pairwise returns 'elec'. 
-                            # _decompose_single_frame (line 488) logic?
-                            # Needs check. I'll assume standard keys.
-                            frame_data[f'{res_name}{res_number}_{chain_id}_electrostatic'] = energies.get('electrostatic', energies.get('elec', 0.0))
-                            frame_data[f'{res_name}{res_number}_{chain_id}_solvation'] = energies['solvation']
-                            # Per-residue non-polar (surface-area) term of this frame; the
-                            # per-frame 'total' stays vdW + electrostatic + polar, as in
-                            # per_residue_detailed.csv.
-                            frame_data[f'{res_name}{res_number}_{chain_id}_nonpolar_solvation'] = energies.get('nonpolar_solvation', 0.0)
-                            frame_data[f'{res_name}{res_number}_{chain_id}_total'] = energies['total']
-                        
-                        frame_by_frame_data.append(frame_data)
-            
-            if not residue_energies:
-                log.error("No successful frame decompositions")
-                return None
-            
+                    try:
+                        outputs.append(decomposer.decompose(decomp_traj.xyz[i]))
+                    except DecompositionError as e:
+                        raise DecompositionError(f"frame {selected_frames[i]}: {e}") from e
+                    except Exception as e:
+                        raise DecompositionError(f"frame {selected_frames[i]}: {e}") from e
+
+            # Same assembly for both paths: per-residue energies, the
+            # frame-by-frame rows and the energy check.
+            residue_energies = []
+            frame_by_frame_data = []
+            energy_check = []
+            for i, (frame_result, info) in enumerate(outputs):
+                residue_energies.append(frame_result)
+                frame_by_frame_data.append(_frame_row(frame_result, selected_frames[i], i + 1, len(decomp_traj)))
+                energy_check.append({'frame_index': selected_frames[i], **info})
+
             log.success(f"Decomposed {len(residue_energies)} frames successfully")
-            
+            self._log_energy_check(energy_check)
+
             # Save frame-by-frame output
             self._save_frame_by_frame_csv(frame_by_frame_data, residue_map)
-            
+
             # Store for reporting
             self.frame_data = frame_by_frame_data
+            self.energy_check = energy_check
 
             # Average across frames
             averaged_results = self._average_residue_energies(residue_energies)
@@ -625,9 +466,10 @@ class PerResidueDecomposition:
 
             return averaged_results
 
+        except DecompositionError:
+            raise
         except Exception as e:
-            log.error(f"Decomposition failed: {e}")
-            return None
+            raise DecompositionError(f"Decomposition failed: {e}") from e
 
     def _write_hotspot_pymol(self, averaged_results):
         """Write hotspots.pdb and view_binding.pml into the output folder: the
@@ -799,743 +641,113 @@ class PerResidueDecomposition:
     def _prepare_decomposition_systems(self, ligand_mol, complex_pdb, ligand_pdb, topology_file=None,
                                        ligand_selection=None):
         """
-        Prepare OpenMM systems for energy decomposition
+        Collect the OpenMM Systems the MM/GBSA calculation evaluated (complex,
+        receptor, ligand) and create a Context for each on the decomposition
+        platform. The Contexts only serve to check, frame by frame, that the
+        decomposed energies sum to the energies OpenMM computes.
+
+        Raises DecompositionError when the receptor or ligand System is missing:
+        the solvation terms cannot be decomposed exactly without them.
         """
-        try:
-            print("  Preparing systems for decomposition...")
-            
-            # Use pre-built native systems if caller already instantiated them
-            protein_system = None
-            protein_indices_in_complex = None
-            if getattr(self.mmgbsa_calculator, 'systems', None) and 'complex_system' in self.mmgbsa_calculator.systems:
-                log.info("  Reusing pre-built native MM/GBSA OpenMM systems for decomposition...")
-                complex_system = self.mmgbsa_calculator.systems['complex_system']
-                complex_topology = self.mmgbsa_calculator.systems['complex_topology']
-                protein_system = self.mmgbsa_calculator.systems.get('protein_system')
-            else:
-                # Use standard system building methods
-                complex_system, complex_topology, _ = self.mmgbsa_calculator.build_complex_system(
-                    complex_pdb, ligand_mol, ligand_pdb
-                )
-            # Create contexts for energy evaluation
-            integrator = openmm.LangevinMiddleIntegrator(
-                self.temperature, 1/unit.picosecond, 0.001*unit.picosecond
+        print("  Preparing systems for decomposition...")
+
+        calc_systems = getattr(self.mmgbsa_calculator, 'systems', None) or {}
+        if calc_systems.get('complex_system') is not None:
+            log.info("  Reusing pre-built native MM/GBSA OpenMM systems for decomposition...")
+            complex_system = calc_systems['complex_system']
+            complex_topology = calc_systems['complex_topology']
+        else:
+            complex_system, complex_topology, _ = self.mmgbsa_calculator.build_complex_system(
+                complex_pdb, ligand_mol, ligand_pdb
             )
+        protein_system = calc_systems.get('protein_system')
+        ligand_system = calc_systems.get('ligand_system')
+        if protein_system is None or ligand_system is None:
+            raise DecompositionError(
+                "The receptor and ligand Systems of the MM/GBSA run are not available. The "
+                "per-residue polar and non-polar terms are the complex-minus-receptor/ligand "
+                "per-atom energies of those Systems; run the MM/GBSA calculation first.")
 
-            # Setup platform
-            decomp_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
-            platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
+        decomp_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
+        platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
 
-            context = openmm.Context(complex_system, integrator, platform, properties)
+        def context(system):
+            integrator = openmm.VerletIntegrator(0.001 * unit.picosecond)
+            return openmm.Context(system, integrator, platform, properties)
 
-            # Load ParmEd structure for correct VdW parameters (Amber stores epsilon in exceptions)
-            parmed_structure = None
-            if topology_file and not str(topology_file).lower().endswith('.pdb'):
-                try:
-                    parmed_structure = parmed.load_file(topology_file)
-                    print(f"  ✓ Loaded ParmEd structure from {topology_file}")
-                except Exception as e:
-                    print(f"  WARNING: Could not load ParmEd structure: {e}")
+        systems = {
+            'complex_system': complex_system,
+            'complex_topology': complex_topology,
+            'complex_context': context(complex_system),
+            'protein_system': protein_system,
+            'protein_context': context(protein_system),
+            'ligand_system': ligand_system,
+            'ligand_context': context(ligand_system),
+        }
+        log.info(f"  ✓ Protein-only GB context prepared ({protein_system.getNumParticles()} atoms) "
+                 f"for per-residue GB self-energy correction")
+        print("  Systems prepared for decomposition")
+        return systems
 
-            systems = {
-                'complex_system': complex_system,
-                'complex_topology': complex_topology,
-                'complex_context': context
-            }
+    def _make_decomposer(self, systems, residue_map, ligand_indices):
+        """The per-frame decomposer for these Systems and this residue mapping.
 
-            if parmed_structure:
-                systems['parmed_structure'] = parmed_structure
-
-            # Protein-only (receptor) context, used by _gb_solvation_decomposition
-            # to compute each protein atom's true complex-vs-receptor GB
-            # self-energy shift (see that method's docstring for why raw,
-            # un-corrected self-energy cannot be used directly). Built from
-            # the SAME pre-parameterized protein_system the main MM/GBSA
-            # energy loop already constructs (mmgbsa_core.py), so it carries
-            # identical GB parameters (radii/scale/offset/kappa) to the
-            # complex -- only positions and atom count differ.
-            # `protein_indices_in_complex` maps protein_system's atom order
-            # (0..n_protein-1) to complex_system's atom indices;
-            # get_protein_indices() and _build_residue_mapping() both
-            # iterate "every non-ligand/solvent/ion atom in topology order",
-            # so the two orderings are guaranteed identical without an
-            # explicit index-matching step.
-            if protein_system is not None:
-                try:
-                    if ligand_selection:
-                        # A selection-defined ligand (e.g. a protein chain):
-                        # the receptor is every other atom of the dry complex.
-                        # find_ligand_resname would guess one residue name
-                        # (a CHARMM 'HSD', say) and miscount the receptor.
-                        lig = set(self.mmgbsa_calculator.get_selection_indices(complex_topology, ligand_selection))
-                        protein_indices_in_complex = [i for i in range(complex_system.getNumParticles())
-                                                      if i not in lig]
-                    else:
-                        ligand_resname_for_protein = self.mmgbsa_calculator.find_ligand_resname(complex_topology)
-                        protein_indices_in_complex = self.mmgbsa_calculator.get_protein_indices(
-                            complex_topology, ligand_resname_for_protein
-                        )
-                    if protein_system.getNumParticles() != len(protein_indices_in_complex):
-                        log.warning(
-                            f"  Protein system has {protein_system.getNumParticles()} particles but "
-                            f"{len(protein_indices_in_complex)} non-ligand atoms found in complex "
-                            f"topology -- skipping GB self-energy correction (falling back to the "
-                            f"complex-only approximation)."
-                        )
-                    else:
-                        protein_integrator = openmm.LangevinMiddleIntegrator(
-                            self.temperature, 1/unit.picosecond, 0.001*unit.picosecond
-                        )
-                        protein_context = openmm.Context(protein_system, protein_integrator, platform, properties)
-                        systems['protein_system'] = protein_system
-                        systems['protein_context'] = protein_context
-                        systems['protein_indices_in_complex'] = protein_indices_in_complex
-                        log.info(f"  ✓ Protein-only GB context prepared ({protein_system.getNumParticles()} atoms) "
-                                 f"for per-residue GB self-energy correction")
-                except Exception as e:
-                    log.warning(f"  Could not prepare protein-only GB context ({e}); per-residue solvation "
-                                f"will use the complex-only approximation (known to under-count delta_gb).")
-
-            print("  Systems prepared for decomposition")
-            return systems
-            
-        except Exception as e:
-            print(f"  ERROR: System preparation failed: {e}")
-            return None
-    
-    def _decompose_single_frame(self, frame, systems, residue_map, ligand_indices, ligand_resname, salt_concentration=None):
+        Missing receptor/ligand Contexts (execute_decomposition) are created on
+        the decomposition platform.
         """
-        Decompose energy for a single frame into per-residue contributions
+        for key in ('protein_system', 'ligand_system'):
+            if systems.get(key) is None:
+                raise DecompositionError(
+                    f"No {key.split('_')[0]} System: the solvation terms cannot be decomposed exactly")
+        contexts = {}
+        for name, key in (('complex', 'complex'), ('receptor', 'protein'), ('ligand', 'ligand')):
+            ctx = systems.get(f'{key}_context')
+            if ctx is None:
+                decomp_platform = getattr(self.mmgbsa_calculator, 'decomposition_platform', None)
+                platform, properties = self.mmgbsa_calculator.setup_optimized_platform(platform_name=decomp_platform)
+                ctx = openmm.Context(systems[f'{key}_system'], openmm.VerletIntegrator(0.001), platform, properties)
+                systems[f'{key}_context'] = ctx
+            contexts[name] = ctx
+        decomposer = _FrameDecomposer(systems['complex_system'], systems['protein_system'],
+                                      systems['ligand_system'], residue_map, ligand_indices,
+                                      report_raw_energies=self.report_raw_energies, contexts=contexts)
+        log.info(f"  Per-atom solvation terms from the run's own forces: "
+                 f"complex {decomposer.solvation['complex'].describe()}")
+        return decomposer
+
+    def _log_energy_check(self, energy_check):
+        """Report how closely the decomposed energies reproduce OpenMM's."""
+        if not energy_check:
+            return
+        solv = max(c['max_solvation_deviation'] for c in energy_check)
+        inter = max(c['max_interaction_deviation'] for c in energy_check)
+        mean_sum = np.mean([c['decomposed_binding_energy'] for c in energy_check])
+        mean_ref = np.mean([c['openmm_binding_energy'] for c in energy_check])
+        log.info(f"Per-atom polar and non-polar energies reproduce OpenMM's force-group energies of the "
+                 f"complex, receptor and ligand to {solv:.2e} kcal/mol (largest deviation, all frames).")
+        log.info(f"Receptor residues plus the ligand's share: {mean_sum:.4f} kcal/mol; OpenMM binding "
+                 f"energy (vdW + electrostatic + polar + non-polar) on the same frames: {mean_ref:.4f} "
+                 f"kcal/mol (largest per-frame vdW/electrostatic deviation {inter:.2e}).")
+
+    def _decompose_single_frame(self, frame, systems, residue_map, ligand_indices, ligand_resname,
+                                salt_concentration=None):
         """
-        
-        try:
-            # Set positions
-            positions = frame.xyz[0] * unit.nanometer
-            systems['complex_context'].setPositions(positions)
-            
-            # Get state for force evaluation
-            state = systems['complex_context'].getState(getEnergy=True, getForces=True)
-            total_energy = state.getPotentialEnergy().value_in_unit(unit.kilocalories_per_mole)
-            
-            # Decompose energy by residue-ligand interactions
-            residue_contributions = {}
-            
-            # Get all forces for decomposition
-            system = systems['complex_system']
-            
-            # Method 1: Pairwise interaction decomposition (Standard Binding)
-            interaction_energies = self._calculate_pairwise_interactions(
-                systems, positions, residue_map, ligand_indices,
-                salt_concentration=salt_concentration
-            )
-            
-            # Method 2: GB/SA decomposition (approximate Binding Solvation)
-            solvation_contributions = self._approximate_solvation_decomposition(
-                systems, positions, residue_map, ligand_indices
-            )
+        Decompose one MDTraj frame into per-residue contributions (kept for
+        callers of the former API). Raises DecompositionError on failure.
+        """
+        decomposer = systems.get('_decomposer')
+        if decomposer is None:
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+            systems['_decomposer'] = decomposer
+        frame_result, _ = decomposer.decompose(frame.xyz[0])
+        return frame_result
 
-            # Method 3: nonpolar (surface-area) solvation decomposition.
-            # Kept as a SEPARATE column from 'solvation' (which remains
-            # GB/polar-only, matching this class's existing documented
-            # semantics and every other consumer of that column) rather
-            # than folded into 'total', so this addition cannot silently
-            # change the meaning of any existing output column -- see
-            # _sa_decomposition's docstring for why this was added
-            # (comparability with Amber's combined polar+nonpolar
-            # 'amber_solvation').
-            nonpolar_solvation_contributions = self._sa_decomposition(
-                frame, systems, residue_map, ligand_indices
-            )
-
-            # Pre-calculate complex interactions if needed (once per frame, not per residue!)
-            complex_int = None
-            complex_solv = None
-            if self.report_raw_energies:
-                n_particles = system.getNumParticles()
-                all_indices = list(range(n_particles))
-                complex_int = self._calculate_pairwise_interactions(
-                    systems, positions, residue_map, all_indices,
-                    salt_concentration=salt_concentration
-                )
-                complex_solv = self._approximate_solvation_decomposition(
-                    systems, positions, residue_map, all_indices
-                )
-            
-            # Combine contributions
-            for res_id in residue_map:
-                residue_contributions[res_id] = {
-                    'vdw': interaction_energies.get(res_id, {}).get('vdw', 0.0),
-                    'electrostatic': interaction_energies.get(res_id, {}).get('elec', 0.0),
-                    'solvation': solvation_contributions.get(res_id, 0.0),
-                    'nonpolar_solvation': nonpolar_solvation_contributions.get(res_id, 0.0),
-                    'total': 0.0
-                }
-                
-                # Calculate total binding
-                residue_contributions[res_id]['total'] = (
-                    residue_contributions[res_id]['vdw'] + 
-                    residue_contributions[res_id]['electrostatic'] + 
-                    residue_contributions[res_id]['solvation']
-                )
-
-                # --- AMBER-LIKE RAW ENERGIES ---
-                if self.report_raw_energies and complex_int is not None:
-                    # Use pre-calculated complex interactions (computed once per frame above)
-                    c_vdw = complex_int.get(res_id, {}).get('vdw', 0.0)
-                    c_ele = complex_int.get(res_id, {}).get('elec', 0.0)
-                    c_sol = complex_solv.get(res_id, 0.0)
-                    
-                    residue_contributions[res_id]['complex_vdw'] = c_vdw
-                    residue_contributions[res_id]['complex_electrostatic'] = c_ele
-                    residue_contributions[res_id]['complex_solvation'] = c_sol
-                    residue_contributions[res_id]['complex_total'] = c_vdw + c_ele + c_sol
-                    
-                    # Receptor (Or "Rest of Complex without Ligand")
-                    # If Residue is Part of Receptor: Rec_Int = Complex_Int - Ligand_Int
-                    # If Residue is Part of Ligand: Rec_Int = Interaction with Receptor Atoms
-                    # We can simply subtract: Receptor = Complex - Ligand
-                    # (Assuming "Ligand Interaction" captures all ligand atoms)
-                    
-                    l_vdw = residue_contributions[res_id]['vdw']
-                    l_ele = residue_contributions[res_id]['electrostatic']
-                    l_sol = residue_contributions[res_id]['solvation']
-                    
-                    r_vdw = c_vdw - l_vdw
-                    r_ele = c_ele - l_ele
-                    r_sol = c_sol - l_sol
-                    
-                    residue_contributions[res_id]['receptor_vdw'] = r_vdw
-                    residue_contributions[res_id]['receptor_electrostatic'] = r_ele
-                    residue_contributions[res_id]['receptor_solvation'] = r_sol
-                    residue_contributions[res_id]['receptor_total'] = r_vdw + r_ele + r_sol
-            
-            return residue_contributions
-            
-        except Exception as e:
-            print(f"    WARNING: Frame decomposition failed: {e}")
-            return None
-    
     def _calculate_pairwise_interactions(self, systems, positions, residue_map, ligand_indices, salt_concentration=None):
-        """
-        Calculate pairwise interactions (Wrapper for standalone function)
-        """
-        try:
-            system = systems['complex_system']
-            context = systems['complex_context']
-            
-            # Extract pdb_params if available (for ParmEd-based parameters)
-            pdb_params = None
-            if 'parmed_structure' in systems:
-                pdb_params = {}
-                struct = systems['parmed_structure']
-                for i, atom in enumerate(struct.atoms):
-                    sigma = atom.rmin * 1.781797697 * 0.1 # Angstrom -> nm
-                    epsilon = atom.epsilon # kcal/mol
-                    charge = atom.charge
-                    pdb_params[i] = (charge, sigma, epsilon)
-            
-            # Extract exclusions if not already available
-            exclusions = {}
-            if self.report_raw_energies: # Only expense if needed (though it helps correctness of standard too)
-                 # Wait, for standard ligand-residue, assume no exclusions.
-                 # But for complex total, we need them.
-                 for force in system.getForces():
-                    if isinstance(force, openmm.NonbondedForce):
-                        for i in range(force.getNumExceptions()):
-                            p1, p2, q, sig, eps = force.getExceptionParameters(i)
-                            p1, p2 = min(p1, p2), max(p1, p2)
-                            if unit.is_quantity(q): q = q.value_in_unit(unit.elementary_charge**2)
-                            if unit.is_quantity(sig): sig = sig.value_in_unit(unit.nanometer)
-                            if unit.is_quantity(eps): eps = eps.value_in_unit(unit.kilojoule_per_mole)
-                            exclusions[(p1, p2)] = (q, sig, eps)
-            
-            # Call standalone logic
-            return _calculate_pairwise_interactions_standalone(
-                system, context, positions, residue_map, ligand_indices, 
-                salt_concentration=salt_concentration, pdb_params=pdb_params,
-                exclusions=exclusions
-            )
-            
-        except Exception as e:
-            print(f"    WARNING: Interaction calculation failed: {e}")
-            return {}
-    
-    def _approximate_solvation_decomposition(self, systems, positions, residue_map, ligand_indices):
-        """
-        Per-residue polar (GB) solvation energy decomposition.
+        """Per-residue van der Waals and electrostatic interaction with
+        `ligand_indices` (halved), from the complex System's own nonbonded forces."""
+        return _calculate_pairwise_interactions_standalone(
+            systems['complex_system'], None, positions, residue_map, ligand_indices)
 
-        Computes the exact OBC2 (Amber igb=5-equivalent) GB reaction-field
-        energy analytically from each atom's Born radius and charge, then
-        attributes it to residues using the standard Gohlke-Kollman
-        convention also used by Amber's MMPBSA.py idecomp: each atom pair's
-        interaction energy is split 50/50 between the residues owning the
-        two atoms, and each atom's GB self-energy is assigned in full to its
-        own residue. `ligand_indices` selects which atoms' contributions
-        (self + pairs touching them) are summed per residue -- i.e. this
-        returns each residue's GB-solvation contribution to binding against
-        that atom set, matching how `_calculate_pairwise_interactions` uses
-        the same argument for the MM (vdW/electrostatic) terms.
-
-        Falls back to the legacy distance-based heuristic (an unphysical
-        proxy, kept only so decomposition does not hard-fail) if the GB
-        force parameters cannot be located on the provided system, e.g. for
-        an input system built without any GBSAOBCForce.
-        """
-        try:
-            return self._gb_solvation_decomposition(systems, positions, residue_map, ligand_indices)
-        except Exception as e:
-            print(f"      WARNING: Rigorous GB decomposition failed ({e}); "
-                  f"falling back to the unphysical distance-heuristic approximation. "
-                  f"Per-residue solvation numbers from this frame are NOT derived "
-                  f"from the actual GB model and should not be trusted quantitatively.")
-            return self._approximate_solvation_decomposition_heuristic(
-                positions, residue_map, ligand_indices
-            )
-
-    def _gb_solvation_decomposition(self, systems, positions, residue_map, ligand_indices):
-        """
-        Exact per-atom OBC2 GB energy, decomposed to residues.
-
-        OBC2 (Cramer-Truhlar tanh) formalism. This codebase builds the
-        production GB force one of two ways depending on code path, and both
-        are handled here:
-          - Plain `openmm.GBSAOBCForce` (the manual-construction fallback,
-            `GBSACalculator._create_fallback_obc_force`) -- used only when no
-            salt screening is requested; per-particle params are raw
-            (charge, radius, scale) and it applies no kappa term at all
-            (OpenMM's built-in GBSAOBCForce has no salt/kappa support).
-          - `CustomGBForce`-based `GBSAOBC2Force` (ParmEd's
-            `Structure.createSystem`, used for the native .prmtop/.tpr path
-            via `StructureManager.create_openmm_system`, and also OpenMM's
-            own `AmberPrmtopFile.createSystem` whenever salt concentration is
-            nonzero) -- per-particle params are already offset-adjusted
-            (charge, or, sr) and, when kappa > 0, BOTH the self term and the
-            pair term carry an exp(-kappa*B) / exp(-kappa*f) screening
-            factor (unlike a naive Debye-Huckel treatment that only screens
-            the pair term).
-
-            or_i = radius_i - offset                      (offset = 0.009 nm; already applied for CustomGBForce)
-            sr_i = scale_i * or_i                          (already applied for CustomGBForce)
-            I_i  = sum_{j!=i} pairwise integral term(r_ij, or_i, sr_j)
-            psi_i = I_i * or_i
-            B_i  = 1 / (1/or_i - tanh(psi_i - 0.8*psi_i^2 + 4.85*psi_i^3) / (or_i+offset))
-
-            E_self_i  = -0.5*k*(1/eps_in - exp(-kappa*B_i)/eps_out) * q_i^2 / B_i
-            E_pair_ij = -k*(1/eps_in - exp(-kappa*f_GB)/eps_out) * q_i*q_j / f_GB(r_ij, B_i, B_j)
-            f_GB = sqrt(r_ij^2 + B_i*B_j*exp(-r_ij^2/(4*B_i*B_j)))
-
-        (k = 138.935485 kJ*nm/(mol*e^2); dielectrics and salt concentration
-        are read from the calculator's own configuration, not reverse-parsed
-        from the force object, since CustomGBForce bakes them as literal
-        constants into its energy expression strings rather than exposing
-        them as queryable global parameters.)
-
-        E_self is assigned wholly to the atom's residue; E_pair is ALWAYS
-        split 50/50 between the two atoms' residues (Gohlke-Kollman
-        convention). This matches Amber sander's real `decpair` subroutine
-        (confirmed by reading AmberTools' actual `sander/decomp.F90` source,
-        not the dead-code AmberClassic subset -- see git history for this
-        line): `decpair` does `hfval = 0.5d0 * fval` unconditionally, before
-        any branching on which residues are involved, for EVERY pairwise GB
-        polar call including protein-ligand cross-terms
-        (`egb.F90:1206-1210`, `call decpair(1,i,j,e)` where `e` is the raw,
-        un-halved pair energy). There is no special case for cross-molecule
-        pairs: Amber writes `hfval` into both residues' buckets, including
-        the ligand's own bucket (attributed via a sign-flipped residue index
-        since it isn't "protein"). MMPBSA.py's DELTAS report simply never
-        prints that ligand-side bucket -- it doesn't mean Amber left it
-        un-halved on the protein side.
-        Returns {res_id: solvation_contribution_to_binding_kcal_per_mol}.
-        """
-        system = systems['complex_system']
-        charges, self_energy, B, k_coulomb, solute_dielectric, solvent_dielectric, kappa = \
-            self._gb_born_self_energy(system, positions)
-        n_particles = len(charges)
-
-        if unit.is_quantity(positions):
-            pos_nm = positions.value_in_unit(unit.nanometer)
-        else:
-            pos_nm = positions
-        pos_nm = np.asarray(pos_nm)
-
-        def _pair_energy_matrix(charges_arr, B_arr, pos_nm_arr):
-            r_mat = np.sqrt(np.sum((pos_nm_arr[:, None, :] - pos_nm_arr[None, :, :]) ** 2, axis=-1))
-            B_i = B_arr[:, None]
-            B_j = B_arr[None, :]
-            f_gb = np.sqrt(r_mat**2 + B_i*B_j*np.exp(-r_mat**2/(4.0*B_i*B_j)))
-            pair_screen = np.exp(-kappa * f_gb) if kappa > 0 else 1.0
-            pair_eps_factor = (1.0/solute_dielectric - pair_screen/solvent_dielectric)
-            with np.errstate(divide='ignore', invalid='ignore'):
-                pe = -k_coulomb * pair_eps_factor * charges_arr[:, None] * charges_arr[None, :] / f_gb
-            np.fill_diagonal(pe, 0.0)
-            return np.nan_to_num(pe, nan=0.0, posinf=0.0, neginf=0.0)
-
-        pair_energy = _pair_energy_matrix(charges, B, pos_nm)
-        pair_energy_half = 0.5 * pair_energy  # split 50/50 between the two atoms' owning residues
-
-        # --- Complex-vs-receptor GB-energy correction (protein atoms only) ---
-        # A protein atom's Born radius depends on the pairwise integral over
-        # EVERY other atom in the system (see _gb_born_self_energy), so BOTH
-        # its self-energy AND its pair energy with other protein atoms differ
-        # between the complex (ligand present) and isolated-receptor (ligand
-        # absent) geometries -- not just self-energy alone. When a
-        # protein-only context is available, this computes each protein
-        # atom's FULL GB-energy share (self-energy + pair energy with every
-        # OTHER PROTEIN atom) in both geometries and uses the per-atom DELTA
-        # (complex - receptor) in place of the raw complex self-energy, on
-        # top of the (separately handled, un-halved) receptor-ligand
-        # cross-term. This mirrors Amber MMPBSA.py idecomp's three-separate-
-        # calculation (complex/receptor/ligand) scheme, computed here via two
-        # of those three systems (complex, receptor) since the ligand-only
-        # self-energy has no residue bucket to be attributed to in the
-        # standard hot-spot call pattern anyway.
-        gb_correction = np.zeros(n_particles)
-        protein_context = systems.get('protein_context')
-        protein_indices_in_complex = systems.get('protein_indices_in_complex')
-        if protein_context is not None and protein_indices_in_complex is not None:
-            try:
-                complex_idx_arr = np.asarray(protein_indices_in_complex, dtype=np.int64)
-                protein_pos_nm = pos_nm[complex_idx_arr]
-                protein_system = systems['protein_system']
-                protein_charges, protein_self_energy, protein_B, _, _, _, _ = self._gb_born_self_energy(
-                    protein_system, protein_pos_nm * unit.nanometer
-                )
-                protein_pair_energy = _pair_energy_matrix(protein_charges, protein_B, protein_pos_nm)
-
-                # Each protein atom's full GB share in its own geometry:
-                # self-energy + HALF the pair energy with every OTHER PROTEIN
-                # atom (Gohlke-Kollman 50/50 split -- using the full,
-                # un-halved pair energy here would double-count every
-                # protein-protein pair once summing across the whole group,
-                # since both atoms i and j each carry the full pair_ij in
-                # their own row). Ligand cross-terms are handled separately
-                # below, via pair_contribution_table on the complex-geometry
-                # pair_energy (also halved -- see that block's docstring).
-                complex_pair_share = 0.5 * np.sum(pair_energy[np.ix_(complex_idx_arr, complex_idx_arr)], axis=1)
-                receptor_pair_share = 0.5 * np.sum(protein_pair_energy, axis=1)
-                complex_full_share = self_energy[complex_idx_arr] + complex_pair_share
-                receptor_full_share = protein_self_energy + receptor_pair_share
-                gb_correction[complex_idx_arr] = complex_full_share - receptor_full_share
-            except Exception as e:
-                log.warning(f"      GB self-energy correction failed ({e}); falling back to "
-                            f"the self-energy-cancels approximation (known to under-count delta_gb).")
-
-        target_mask = np.zeros(n_particles, dtype=bool)
-        target_mask[np.asarray(ligand_indices, dtype=np.int64)] = True
-
-        # Pair energy between a residue and the target atom set is ALWAYS
-        # the Gohlke-Kollman 50/50 split (`pair_energy_half`), matching
-        # Amber's `decpair` (see this method's docstring) -- there is no
-        # cross-molecule special case. Summing `pair_energy_half` over ALL
-        # residues (when residue_map covers every atom) reproduces the total
-        # GB pair energy exactly, since each pair's two halves each land in
-        # their own residue's bucket; when residue_map covers only the
-        # protein side (the standard hot-spot call), each protein residue
-        # correctly receives just its own half of every cross-pair with the
-        # ligand, matching what Amber's complex-geometry decomp run would
-        # have assigned that same residue.
-        #
-        # Self-energy handling still depends on whether `residue_map` covers
-        # BOTH sides of the interaction:
-        #
-        # Case 1 (target overlaps residue_map's own atoms, e.g. the total-
-        # energy self-check): use the raw complex self-energy directly --
-        # residue_map covers ALL atoms there, so there is no "receptor vs
-        # complex" distinction to correct for.
-        #
-        # Case 2 (target is a DISJOINT atom set with no residue_map entry of
-        # its own, e.g. ligand_indices when residue_map = protein residues
-        # only): each protein residue's self-energy uses `gb_correction`
-        # (complex-minus-receptor self-energy + receptor-pair-energy delta)
-        # instead of the raw complex self-energy, since a protein atom's Born
-        # radius -- and therefore its self-energy -- depends on the ligand's
-        # presence. Without `gb_correction` (the fallback path, protein
-        # context unavailable), this leaves the per-residue solvation sum at
-        # only ~15-20% of the true delta_gb (confirmed against Amber
-        # MMPBSA.py idecomp=2 on 18 production replicas) -- callers should
-        # treat per-residue solvation as unreliable whenever the fallback
-        # path is taken (a warning is logged above when this happens).
-        residue_map_atoms = set()
-        for atoms in residue_map.values():
-            residue_map_atoms.update(int(a) for a in atoms)
-        target_overlaps_residue_map = bool(residue_map_atoms & set(int(i) for i in ligand_indices))
-
-        solvation_contributions = {}
-        for res_id, res_atoms in residue_map.items():
-            res_atoms_arr = np.asarray(res_atoms, dtype=np.int64)
-            contribution = 0.0
-            in_target = target_mask[res_atoms_arr]
-            if target_overlaps_residue_map:
-                contribution += np.sum(self_energy[res_atoms_arr][in_target])
-            else:
-                contribution += np.sum(gb_correction[res_atoms_arr])
-            # Pair energy between this residue's atoms and the target atom set
-            contribution += np.sum(pair_energy_half[np.ix_(res_atoms_arr, np.where(target_mask)[0])])
-            solvation_contributions[res_id] = float(contribution)
-
-        return solvation_contributions
-
-    def _sa_decomposition(self, frame, systems, residue_map, ligand_indices):
-        """
-        Per-residue nonpolar (surface-area) solvation energy, for direct
-        comparability with Amber idecomp=2's reported 'Non-Polar Solv.'
-        column -- without this, comparing this codebase's GB-only
-        'solvation' against Amber's own (polar+nonpolar combined)
-        `amber_solvation` column silently compares two different physical
-        quantities. Confirmed on real production data: for a residue with
-        substantial hydrophobic surface area (e.g. a buried TRP/PHE/TYR),
-        this GB-only vs. combined mismatch alone explained the entire
-        residual pooled solvation/total discrepancy that remained after the
-        PBC re-imaging and GB cross-term halving fixes (the GB-only term
-        matched Amber's own polar-only value to <0.001 kcal/mol; the
-        apparent 0.01-0.7 kcal/mol residual was Amber's nonpolar term,
-        never present in this codebase's reported 'solvation' column at
-        all).
-
-        Uses the same complex-vs-receptor DELTA scheme as
-        `_gb_solvation_decomposition` (this codebase's single-trajectory
-        protocol computes complex and receptor-alone geometries from the
-        SAME frame, mirroring Amber's own complex/receptor/ligand
-        decomposition -- see that method's docstring), but via
-        `mdtraj.shrake_rupley` (Shrake-Rupley SASA, matching Amber's own
-        `gbsa=2`/LCPO-family per-atom nonpolar term in spirit, though not
-        bit-identical to LCPO's analytic overlap formula) rather than an
-        OpenMM force, since `openmm.LCPOForce` (used for the whole-system
-        total, see `GBSAForceManager._setup_lcpo_force`) does not expose a
-        per-particle energy breakdown the way `CustomGBForce` does for the
-        polar term.
-
-        surface_tension = 3.01248 kJ/mol/nm^2 (0.0072 kcal/mol/A^2),
-        matching the same LCPO surface tension `_setup_lcpo_force` builds
-        the whole-system SA force with -- this value, not `self.sa_model`,
-        determines correctness here, so this method assumes LCPO settings
-        regardless of the configured `sa_model` (ACE uses a different
-        constant; if a future caller configures ACE, this term will be off
-        by a filed constant, not silently wrong).
-
-        Returns {res_id: nonpolar_solvation_contribution_kcal_per_mol},
-        analogous to `_gb_solvation_decomposition`'s return value -- add
-        the two together to reproduce Amber's combined 'amber_solvation'.
-        """
-        surface_tension_kcal_per_A2 = 0.0072  # kcal/mol/A^2 (3.01248 kJ/mol/nm^2)
-
-        try:
-            complex_sasa_nm2 = md.shrake_rupley(frame, mode='atom')[0]  # (n_atoms,) in nm^2
-        except Exception as e:
-            log.warning(f"      Per-residue SA decomposition failed (complex SASA): {e}; "
-                        f"returning zero nonpolar contribution for all residues.")
-            return {res_id: 0.0 for res_id in residue_map}
-        complex_sasa_A2 = complex_sasa_nm2 * 100.0  # nm^2 -> A^2
-
-        protein_indices_in_complex = systems.get('protein_indices_in_complex')
-        receptor_sasa_A2 = None
-        if protein_indices_in_complex is not None:
-            try:
-                receptor_frame = frame.atom_slice(np.asarray(protein_indices_in_complex, dtype=np.int64))
-                receptor_sasa_nm2 = md.shrake_rupley(receptor_frame, mode='atom')[0]
-                receptor_sasa_A2 = receptor_sasa_nm2 * 100.0
-            except Exception as e:
-                log.warning(f"      Per-residue SA decomposition: receptor-only SASA failed ({e}); "
-                            f"falling back to the complex-SASA-only approximation (known to "
-                            f"under-count delta_sa the same way the pre-fix GB self-energy did).")
-
-        target_mask = np.zeros(frame.n_atoms, dtype=bool)
-        target_mask[np.asarray(ligand_indices, dtype=np.int64)] = True
-        residue_map_atoms = set()
-        for atoms in residue_map.values():
-            residue_map_atoms.update(int(a) for a in atoms)
-        target_overlaps_residue_map = bool(residue_map_atoms & set(int(i) for i in ligand_indices))
-
-        # Map each protein atom's complex-array index to its position in the
-        # receptor-only SASA array (same order as protein_indices_in_complex,
-        # since atom_slice preserves selection order).
-        sasa_correction = np.zeros(frame.n_atoms)
-        if receptor_sasa_A2 is not None:
-            complex_idx_arr = np.asarray(protein_indices_in_complex, dtype=np.int64)
-            sasa_correction[complex_idx_arr] = complex_sasa_A2[complex_idx_arr] - receptor_sasa_A2
-
-        sa_contributions = {}
-        for res_id, res_atoms in residue_map.items():
-            res_atoms_arr = np.asarray(res_atoms, dtype=np.int64)
-            in_target = target_mask[res_atoms_arr]
-            if target_overlaps_residue_map:
-                # Case 1 (self-consistency call): raw complex SASA, same
-                # convention as _gb_solvation_decomposition's Case 1.
-                sasa_delta = np.sum(complex_sasa_A2[res_atoms_arr][in_target])
-            else:
-                # Case 2 (standard hot-spot call): complex-vs-receptor DELTA,
-                # capturing the ligand's burial effect on this residue's own
-                # surface area -- the nonpolar analogue of gb_correction.
-                sasa_delta = np.sum(sasa_correction[res_atoms_arr])
-            sa_contributions[res_id] = float(sasa_delta * surface_tension_kcal_per_A2)
-
-        return sa_contributions
-
-    def _gb_born_self_energy(self, system, positions):
-        """
-        Compute per-atom OBC2 Born radii and GB self-energy for `system` at
-        `positions`. Shared by `_gb_solvation_decomposition` for both the
-        complex system and (when available) the protein-only system, so the
-        complex-vs-receptor self-energy shift can be computed from two calls
-        with identical GB parameter handling. See that method's docstring for
-        the OBC2 formalism and force-identification details.
-
-        Returns (charges, self_energy, B, k_coulomb, solute_dielectric,
-        solvent_dielectric, kappa) -- everything the caller needs to also
-        compute pair energies without re-deriving dielectrics/kappa.
-        """
-        gb_force = None
-        is_custom_gb = False
-        for force in system.getForces():
-            if isinstance(force, openmm.GBSAOBCForce):
-                sa_energy = force.getSurfaceAreaEnergy().value_in_unit(
-                    unit.kilojoule_per_mole / unit.nanometer**2
-                )
-                if sa_energy == 0.0:
-                    gb_force = force
-                    is_custom_gb = False
-                    break
-            elif isinstance(force, openmm.CustomGBForce):
-                try:
-                    names = [force.getPerParticleParameterName(i)
-                             for i in range(force.getNumPerParticleParameters())]
-                except Exception:
-                    names = []
-                if names == ['charge', 'or', 'sr']:
-                    gb_force = force
-                    is_custom_gb = True
-                    break
-        if gb_force is None:
-            raise ValueError(
-                "No recognized polar GB force (GBSAOBCForce with zero SurfaceAreaEnergy, "
-                "or CustomGBForce with ['charge','or','sr'] params) found on system"
-            )
-
-        n_particles = gb_force.getNumParticles()
-        charges = np.zeros(n_particles)
-        radii = np.zeros(n_particles)
-        scales = np.zeros(n_particles)
-        for i in range(n_particles):
-            params = gb_force.getParticleParameters(i)
-            q, r, s = params[0], params[1], params[2]
-            charges[i] = q.value_in_unit(unit.elementary_charge) if unit.is_quantity(q) else q
-            radii[i] = r.value_in_unit(unit.nanometer) if unit.is_quantity(r) else r
-            scales[i] = s.value_in_unit(unit.nanometer) if (is_custom_gb and unit.is_quantity(s)) \
-                else (s.value_in_unit(unit.dimensionless) if unit.is_quantity(s) else s)
-
-        solute_dielectric = float(getattr(self.mmgbsa_calculator, 'solute_dielectric', 1.0))
-        solvent_dielectric = float(getattr(self.mmgbsa_calculator, 'solvent_dielectric', 78.5))
-
-        kappa = 0.0
-        if is_custom_gb:
-            salt_concentration = getattr(self.mmgbsa_calculator, 'salt_concentration', None)
-            if salt_concentration:
-                conc = salt_concentration
-                if unit.is_quantity(conc):
-                    conc = conc.value_in_unit(unit.molar)
-                if conc and conc > 0:
-                    temp_k = getattr(self.mmgbsa_calculator, 'temperature', 300.0 * unit.kelvin)
-                    temp_k = temp_k.value_in_unit(unit.kelvin) if unit.is_quantity(temp_k) else float(temp_k)
-                    kappa = 50.33355 * np.sqrt(conc / (solvent_dielectric * temp_k)) * 7.3
-
-        if unit.is_quantity(positions):
-            pos_nm = positions.value_in_unit(unit.nanometer)
-        else:
-            pos_nm = positions
-        pos_nm = np.asarray(pos_nm)
-        if pos_nm.shape[0] != n_particles:
-            raise ValueError(
-                f"Position array has {pos_nm.shape[0]} atoms but GB force has {n_particles} particles"
-            )
-
-        offset = 0.009  # nm, standard OBC offset
-        if is_custom_gb:
-            or_radii = radii
-            sr_radii = scales
-        else:
-            or_radii = radii - offset
-            sr_radii = scales * or_radii
-
-        diff = pos_nm[:, None, :] - pos_nm[None, :, :]
-        r_mat = np.sqrt(np.sum(diff * diff, axis=-1))
-        np.fill_diagonal(r_mat, np.inf)
-
-        or1 = or_radii[:, None]
-        sr2 = sr_radii[None, :]
-        U = r_mat + sr2
-        D = np.abs(r_mat - sr2)
-        L = np.maximum(or1, D)
-        # rgbmax: Amber sander's default distance cutoff (25 A) on the
-        # Born-radius pairwise-descreening integral (confirmed directly
-        # against a real `sander` run on this benchmark's own receptor.prmtop:
-        # with rgbmax=25A (Amber's default, used by every Amber decomp run
-        # this codebase compares against), Amber's whole-system EGB was
-        # -2499.59 kcal/mol vs this formula's (no cutoff) -2490.62 kcal/mol,
-        # an 8.97 kcal/mol gap; re-running the SAME sander input with
-        # rgbmax=999 (effectively unlimited) gave -2490.68 kcal/mol, matching
-        # this formula to 0.06 kcal/mol -- i.e. the two formulas are
-        # otherwise numerically identical, and the entire gap traces to this
-        # single cutoff parameter, not a deeper formula discrepancy).
-        rgbmax_nm = 2.5  # 25 Angstrom -> nm, Amber's own default
-        valid = ((r_mat + sr2) > or1) & (r_mat <= rgbmax_nm)
-
-        with np.errstate(divide='ignore', invalid='ignore'):
-            term = 0.5 * (1.0/L - 1.0/U + 0.25*(r_mat - sr2**2/r_mat)*(1.0/U**2 - 1.0/L**2) + 0.5*np.log(L/U)/r_mat)
-        term = np.where(valid, term, 0.0)
-        term = np.nan_to_num(term, nan=0.0, posinf=0.0, neginf=0.0)
-
-        I = np.sum(term, axis=1)
-        psi = I * or_radii
-        rho = or_radii + offset
-        with np.errstate(divide='ignore', invalid='ignore'):
-            B = 1.0 / (1.0/or_radii - np.tanh(psi - 0.8*psi**2 + 4.85*psi**3) / rho)
-        B = np.nan_to_num(B, nan=rho, posinf=rho, neginf=rho)
-
-        k_coulomb = 138.935485 * 0.239006  # kJ*nm/(mol*e^2) -> kcal*nm/(mol*e^2)
-
-        self_screen = np.exp(-kappa * B) if kappa > 0 else 1.0
-        self_eps_factor = (1.0/solute_dielectric - self_screen/solvent_dielectric)
-        self_energy = -0.5 * k_coulomb * self_eps_factor * charges**2 / B
-
-        return charges, self_energy, B, k_coulomb, solute_dielectric, solvent_dielectric, kappa
-
-    def _approximate_solvation_decomposition_heuristic(self, positions, residue_map, ligand_indices):
-        """
-        Legacy distance-decay heuristic for per-residue solvation, retained
-        only as a fallback when the rigorous GB force cannot be found (see
-        `_gb_solvation_decomposition`). This is NOT derived from the GB
-        physical model: it is an ad hoc exponential-decay proxy for "burial"
-        with no connection to the actual reaction-field energy, and should
-        never be used for quantitative reporting.
-        """
-        solvation_contributions = {}
-        try:
-            if unit.is_quantity(positions):
-                pos_nm = positions.value_in_unit(unit.nanometer)
-            else:
-                pos_nm = positions
-            if not isinstance(pos_nm, np.ndarray):
-                pos_nm = np.array(pos_nm)
-
-            target_indices_arr = np.array(ligand_indices)
-
-            for res_id, res_atoms in residue_map.items():
-                burial_factor = 0.0
-                for res_atom in res_atoms:
-                    p1 = pos_nm[res_atom]
-                    targets_pos = pos_nm[target_indices_arr]
-                    diff = targets_pos - p1
-                    r = np.linalg.norm(diff, axis=1)
-                    mask = (r < 0.5) & (r > 0.001)
-                    if np.any(mask):
-                        burial_factor += np.sum(np.exp(-r[mask] * 4))
-                solvation_contributions[res_id] = -burial_factor * 0.1
-
-            return solvation_contributions
-        except Exception as e:
-            print(f"      WARNING: Solvation decomposition heuristic fallback also failed: {e}")
-            return solvation_contributions
-    
     def _average_residue_energies(self, residue_energies):
         """
         Average residue energies across frames (Dynamic for all keys)
@@ -1838,21 +1050,25 @@ class PerResidueDecomposition:
         print(f"Residues:      {analysis['n_residues']}")
         print(f"Frames:        {results['n_decomp_frames']}")
 
-        # The sum over receptor residues is reported, not tested against the
-        # binding enthalpy. They differ by design: vdW and electrostatic pair
-        # terms are halved between receptor residue and ligand (Gohlke-Kollman,
-        # as in Amber MMPBSA.py idecomp; see
-        # `_calculate_pairwise_interactions_standalone`), the ligand's half and
-        # its own GB self-energy change have no receptor residue to go to, and
-        # the non-polar term is listed separately.
+        # The receptor residues carry half of each receptor-ligand van der
+        # Waals/electrostatic pair term (Amber decpair convention) and their
+        # own polar/non-polar change; the ligand carries the other half and its
+        # own solvation change. Both together are the binding energy of the
+        # decomposed frames, term by term (checked against OpenMM per frame).
         total_binding = mmgbsa.get('mean_binding_energy')
         residue_sum = analysis.get('total_contribution')
-        if total_binding is not None and residue_sum is not None:
-            print(f"Sum of the receptor-residue contributions: {residue_sum:.2f} kcal/mol "
-                  f"(binding enthalpy {total_binding:.2f} kcal/mol). The two are not expected "
-                  f"to agree: as in Amber's idecomp, each receptor-ligand pair term is split "
-                  f"equally between the receptor residue and the ligand, and the ligand's share "
-                  f"and the non-polar term are not listed per receptor residue.")
+        check = results.get('energy_check') or []
+        if check:
+            decomposed = np.mean([c['decomposed_binding_energy'] for c in check])
+            reference = np.mean([c['openmm_binding_energy'] for c in check])
+            ligand = np.mean([c['ligand_vdw'] + c['ligand_electrostatic'] + c['ligand_solvation']
+                              + c['ligand_nonpolar_solvation'] for c in check])
+            nonpolar = np.mean([c['receptor_nonpolar_solvation'] for c in check])
+            print(f"Receptor residues (vdW + electrostatic + polar): {residue_sum:.2f} kcal/mol; "
+                  f"their non-polar term {nonpolar:.2f}; ligand share {ligand:.2f}.")
+            print(f"Decomposed binding energy {decomposed:.4f} kcal/mol = OpenMM binding energy on "
+                  f"the same {len(check)} frames {reference:.4f} kcal/mol "
+                  f"(MM/GBSA mean over its own frames: {total_binding:.2f}).")
         print()
         
         print("TOP 10 BINDING HOT SPOTS:")
@@ -1908,6 +1124,11 @@ class PerResidueDecomposition:
                 'top_hotspot': hot_spots.iloc[0]['residue_id'],
                 'top_contribution': hot_spots.iloc[0]['total']
             }
+            check = results.get('energy_check') or []
+            if check:
+                summary['decomposed_binding_energy'] = float(np.mean([c['decomposed_binding_energy'] for c in check]))
+                summary['openmm_binding_energy_same_frames'] = float(np.mean([c['openmm_binding_energy'] for c in check]))
+                summary['max_solvation_check_deviation'] = float(max(c['max_solvation_deviation'] for c in check))
             summary_df = pd.DataFrame([summary])
             
             # Save files to output directory if available
@@ -1918,11 +1139,16 @@ class PerResidueDecomposition:
                 df.to_csv(os.path.join(output_dir, 'per_residue_detailed.csv'), index=False, encoding='utf-8')
                 hot_spots.to_csv(os.path.join(output_dir, 'binding_hot_spots.csv'), index=False, encoding='utf-8')
                 summary_df.to_csv(os.path.join(output_dir, 'decomposition_summary.csv'), index=False, encoding='utf-8')
+                if check:
+                    pd.DataFrame(check).to_csv(os.path.join(output_dir, 'decomposition_energy_check.csv'),
+                                               index=False, encoding='utf-8')
                 
                 print(f"Results saved to {output_dir}:")
                 print(f"    • per_residue_detailed.csv")
                 print(f"    • binding_hot_spots.csv") 
                 print(f"    • decomposition_summary.csv")
+                if check:
+                    print(f"    • decomposition_energy_check.csv")
                 
                 # Save Amber-like raw energy tables if available
                 if 'complex_total' in df.columns:
@@ -2149,390 +1375,438 @@ def test_per_residue_decomposition():
 
 
 # ==============================================================================
-# STANDALONE WORKER FUNCTIONS FOR PARALLEL PROCESSING
+# PER-FRAME DECOMPOSITION ENGINE (shared by the serial and the parallel path)
 # ==============================================================================
 
-def _worker_init(system_xml, pdb_params):
-    """
-    Initialize worker process with OpenMM System and Context.
-    This runs once per worker to avoid overhead.
-    """
-    global _worker_context
-    try:
-        # Deserialize System
-        system = openmm.XmlSerializer.deserialize(system_xml)
-        
-        # We DO NOT need a Context because the decomposition
-        # performs manual pairwise calculation using parameters from the System/Force objects.
-        # This avoids OpenCL/CUDA context limits and initialization overhead.
-        
-        # Extract Exclusions from NonbondedForce
-        # Key: (min(i,j), max(i,j)) -> (chargeProd, sigma, epsilon)
-        exclusions = {}
-        for force in system.getForces():
-            if isinstance(force, openmm.NonbondedForce):
-                for i in range(force.getNumExceptions()):
-                    # getExceptionParameters returns: (particle1, particle2, chargeProd, sigma, epsilon)
-                    p1, p2, q, sig, eps = force.getExceptionParameters(i)
-                    p1, p2 = min(p1, p2), max(p1, p2)
-                    
-                    # Convert quantities if needed (usually they are primitives in OpenMM python API? No, quantities)
-                    # getExceptionParameters returns Quantities or floats?
-                    # It returns (int, int, Quantity, Quantity, Quantity) usually.
-                    # We strip units for raw calculation performance
-                    if unit.is_quantity(q): q = q.value_in_unit(unit.elementary_charge**2)
-                    if unit.is_quantity(sig): sig = sig.value_in_unit(unit.nanometer)
-                    if unit.is_quantity(eps): eps = eps.value_in_unit(unit.kilojoule_per_mole) # Use kJ internally
-                    
-                    exclusions[(p1, p2)] = (q, sig, eps)
-                    
-        # Store in global variable
-        _worker_context['system'] = system
-        _worker_context['context'] = None # Not used
-        _worker_context['pdb_params'] = pdb_params
-        _worker_context['exclusions'] = exclusions
-        
-    except Exception as e:
-        print(f"Worker Initialization Failed: {e}")
-        raise e
+ELECTROSTATIC_GROUP = 0      # GBSACalculator: NonbondedForce (Coulomb)
+VDW_GROUP = 3                # CustomNonbondedForce LJ and the 1-4 LJ CustomBondForce
+FRAME_COMPONENTS = ('vdw', 'electrostatic', 'solvation', 'nonpolar_solvation', 'total')
 
-def _worker_analyze_frame(args):
-    """
-    Analyze a single frame in the worker process.
-    """
-    frame_idx, positions, residue_map, ligand_indices, salt_concentration, ligand_resname, report_raw_energies = args
 
-    global _worker_context
-    try:
-        system = _worker_context.get('system')
-        pdb_params = _worker_context.get('pdb_params')
-        exclusions = _worker_context.get('exclusions')
-        
-        if not system:
-            return (frame_idx, None, None)
-            
-        # Ensure units
-        if not unit.is_quantity(positions):
-            positions = positions * unit.nanometer
-            
-        # 1. Standard Binding Interaction
-        result_binding = _calculate_pairwise_interactions_standalone(
-            system, None, positions, residue_map, ligand_indices, 
-            salt_concentration=salt_concentration, pdb_params=pdb_params,
-            exclusions=exclusions
-        )
-        
-        # 2. Complex Total Interaction (if requested)
-        result_complex = None
-        if report_raw_energies:
-            # Interaction with ALL atoms
-            n_particles = system.getNumParticles()
-            all_indices = list(range(n_particles))
-            
-            result_complex = _calculate_pairwise_interactions_standalone(
-                system, None, positions, residue_map, all_indices, 
-                salt_concentration=salt_concentration, pdb_params=pdb_params,
-                exclusions=exclusions
-            )
-        
-        return (frame_idx, result_binding, result_complex)
-        
-    except Exception as e:
-        # Return error/None so main process knows
-        print(f"Worker Frame {frame_idx} Failed: {e}")
-        return (frame_idx, None, None)
-
-def _calculate_pairwise_interactions_standalone(system, context, positions, residue_map, ligand_indices, salt_concentration=None, pdb_params=None, exclusions=None):
-    """
-    Standalone version of pairwise interaction calculation for workers.
-    """
-    interaction_energies = {}
-    
-    try:
-        # NOTE: no Debye-Huckel salt screening is applied to this pairwise
-        # electrostatic decomposition. The real total electrostatic energy
-        # this decomposition is meant to reproduce comes unconditionally from
-        # a plain NonbondedForce (bare Coulomb, force group 0 -- see
-        # `e_ele = complex_context.getState(..., groups=1)...` in
-        # mmgbsa_core.py's main energy loop), which has no salt/kappa
-        # dependence at all; any salt screening in this codebase's actual GB
-        # energy is applied inside the GB force itself (see
-        # `_gb_solvation_decomposition`'s kappa handling), not to Coulomb's
-        # law. Applying an exp(-kappa*r) factor here (as this function
-        # previously did) made the decomposition's electrostatic term
-        # diverge from the real total it should sum to.
-        kappa = 0.0
-        
-        # Force Identification
-        nonbonded_force = None
-        custom_vdw_force = None
-        atom_types = None
-        acoef_table = None
-        bcoef_table = None
-        
-        # Locate Forces (if pdb_params missing AND exclusions missing or we need standard params fallbacks)
-        if True: # Always locate forces to get standard params if not in exclusions
-            for force in system.getForces():
-                if isinstance(force, openmm.NonbondedForce):
-                    nonbonded_force = force
-                elif isinstance(force, openmm.CustomNonbondedForce):
-                    if 'acoef' in force.getEnergyFunction():
-                        custom_vdw_force = force
-                    elif 'epsilon' in force.getEnergyFunction() and 'sigma' in force.getEnergyFunction():
-                        custom_vdw_force = force
-            
-            # Extract Custom Tables if needed
-            if custom_vdw_force:
-                try:
-                    atom_types = []
-                    for i in range(system.getNumParticles()):
-                        vals = custom_vdw_force.getParticleParameters(i)
-                        atom_types.append(int(vals[0]))
-                    
-                    for i in range(custom_vdw_force.getNumTabulatedFunctions()):
-                        name = custom_vdw_force.getTabulatedFunctionName(i)
-                        fun = custom_vdw_force.getTabulatedFunction(i)
-                        if isinstance(fun, openmm.Discrete2DFunction):
-                             w, h, v = fun.getFunctionParameters()
-                             if name == 'acoef': acoef_table = (w, list(v))
-                             elif name == 'bcoef': bcoef_table = (w, list(v))
-                except:
-                    pass
-
-        # ---------------------------------------------------------
-        # VECTORIZED IMPLEMENTATION
-        # ---------------------------------------------------------
-        
-        # 0. Prepare Position Array
-        if unit.is_quantity(positions):
-            pos_nm = positions.value_in_unit(unit.nanometer)
+def _frame_row(frame_result, frame_index, frame_number, total_frames):
+    """One row of frame_by_frame_decomposition.csv: every component of every
+    residue, labelled <NAME><NUMBER>_<CHAIN>_<component>."""
+    row = {'frame_index': frame_index, 'frame_number': frame_number, 'total_frames': total_frames}
+    for res_id, energies in frame_result.items():
+        parts = res_id.split('_')
+        if len(parts) >= 3:
+            prefix = f"{parts[0]}{parts[1]}_{parts[2]}"
         else:
-            pos_nm = positions
-        if not isinstance(pos_nm, np.ndarray):
-            pos_nm = np.array(pos_nm)
-
-        # 1. Prepare Target Arrays (ligand_indices)
-        n_targets = len(ligand_indices)
-        target_indices_arr = np.array(ligand_indices, dtype=np.int64)
-        
-        # Arrays for params
-        t_charges = np.zeros(n_targets)
-        t_sigmas = np.zeros(n_targets)
-        t_epsilons = np.zeros(n_targets)
-        t_atom_types = np.zeros(n_targets, dtype=int)
-        
-        # Helper to get params
-        def get_params(idx):
-             """Return (charge, sigma_nm, epsilon_kJ) for atom `idx`, used for
-             electrostatics (always) and for the sigma/epsilon-combining-rule
-             vdW fallback (only relevant when `use_acoef` below is False --
-             sigma/epsilon here are not consulted for the acoef/bcoef-table path)."""
-             if pdb_params:
-                 return pdb_params[idx] # (q, sig, eps)
-             
-             c, s, e = (0, 0, 0)
-             if nonbonded_force:
-                 c_nb, s_nb, e_nb = nonbonded_force.getParticleParameters(idx)
-                 # strip units
-                 if unit.is_quantity(c_nb): c_nb = c_nb.value_in_unit(unit.elementary_charge)
-                 if unit.is_quantity(s_nb): s_nb = s_nb.value_in_unit(unit.nanometer)
-                 if unit.is_quantity(e_nb): e_nb = e_nb.value_in_unit(unit.kilojoule_per_mole)
-                 c, s, e = c_nb, s_nb, e_nb
-                 
-             if custom_vdw_force and custom_vdw_force.getNumPerParticleParameters() >= 2:
-                 if 'acoef' not in custom_vdw_force.getEnergyFunction():
-                     p_params = custom_vdw_force.getParticleParameters(idx)
-                     s_c = p_params[0]
-                     e_c = p_params[1]
-                     if unit.is_quantity(s_c): s_c = s_c.value_in_unit(unit.nanometer)
-                     if unit.is_quantity(e_c): e_c = e_c.value_in_unit(unit.kilojoule_per_mole)
-                     s, e = s_c, e_c
-                     
-             return (c, s, e)
-
-        # Populate Target Params
-        # This O(N) loop is fine (N~2500)
-        for i, idx in enumerate(ligand_indices):
-             q, s, e = get_params(idx)
-             t_charges[i] = q
-             t_sigmas[i] = s
-             t_epsilons[i] = e
-             if custom_vdw_force and atom_types:
-                 t_atom_types[i] = atom_types[idx]
-
-        # 2. Main Loop Over Residues
-        k_e = 138.935456 * 0.239006 # kJ->kcal with constant
-
-        # acoef/bcoef-table lookup (ParmEd's NBFIX-capable CustomNonbondedForce,
-        # 'Structure.createSystem's own AMBER/CHARMM LJ construction):
-        #   E = a^2/r^12 - b/r^6, a = acoef(type_i, type_j), b = bcoef(type_i, type_j)
-        # Table is stored flat as v[type_i + width*type_j] (see ParmEd
-        # structure.py's `acoef[i+num_lj_types*j] = ...`). This is the ONLY
-        # correct vdW source when the actual System separates LJ out of
-        # NonbondedForce into this table-based CustomNonbondedForce (as this
-        # codebase's own pipeline does for CHARMM systems -- "Separating VDW
-        # from NonbondedForce to CustomNonbondedForce for consistency"); the
-        # NonbondedForce's own sigma/epsilon are zero in that case, and the
-        # non-table sigma/epsilon CustomNonbondedForce branch below does not
-        # apply. Previously this table was extracted but never used, silently
-        # under-reporting vdW energy for every CHARMM-derived system.
-        use_acoef = acoef_table is not None and bcoef_table is not None and atom_types is not None
-        if use_acoef:
-            acoef_width, acoef_flat = acoef_table
-            bcoef_width, bcoef_flat = bcoef_table
-            acoef_arr = np.array(acoef_flat).reshape((acoef_width, acoef_width), order='F')
-            bcoef_arr = np.array(bcoef_flat).reshape((bcoef_width, bcoef_width), order='F')
-            atom_types_arr = np.array(atom_types)
-
-        for res_id, res_atoms in residue_map.items():
-            run_vdw = 0.0
-            run_elec = 0.0
-
-            for res_atom in res_atoms:
-                # Residue Atom Params
-                q1, s1, e1 = get_params(res_atom)
-                p1 = pos_nm[res_atom]
-
-                # Vectorized Distance
-                # targets_pos shape (N, 3)
-                targets_pos = pos_nm[target_indices_arr]
-                diff = targets_pos - p1
-                r2 = np.sum(diff*diff, axis=1)
-                r = np.sqrt(r2)
-
-                # Mask self and too close
-                mask = r > 0.001
-
-                # Electrostatics
-                # E = k * q1 * q2 / r
-                # We calc for all, then apply mask
-                # Avoid divide by zero
-                r_safe = np.where(mask, r, 1.0)
-
-                elec_terms = (k_e * q1 * t_charges[mask]) / r_safe[mask]
-
-                run_elec += np.sum(elec_terms)
-
-                if use_acoef:
-                    type_i = atom_types_arr[res_atom]
-                    types_j = t_atom_types[mask]
-                    a = acoef_arr[type_i, types_j]
-                    b = bcoef_arr[type_i, types_j]
-                    r6 = r_safe[mask] ** 6
-                    r12 = r6 * r6
-                    # a/bcoef are in ParmEd's internal (kJ/mol, nm) energy convention
-                    # (ene_conv/length_conv applied at table-build time), same as
-                    # NonbondedForce -- convert kJ -> kcal same as the elec/sigma-eps path.
-                    vdw_terms = (a * a / r12 - b / r6) * 0.239006
-                else:
-                    # Fallback: standard Lorentz-Berthelot sigma/epsilon combining
-                    # rule (correct only when vdW truly lives in a plain sigma/epsilon
-                    # NonbondedForce or CustomNonbondedForce, i.e. use_acoef is False).
-                    s2_masked = t_sigmas[mask]
-                    e2_masked = t_epsilons[mask]
-
-                    s_comb = (s1 + s2_masked) * 0.5
-                    e_comb = np.sqrt(e1 * e2_masked)
-
-                    sr = s_comb / r_safe[mask]
-                    sr6 = sr**6
-                    sr12 = sr6**2
-                    vdw_terms = 4.0 * e_comb * (sr12 - sr6) * 0.239006
-
-                run_vdw += np.sum(vdw_terms)
-
-                # Handle Exclusions Correction
-                if exclusions:
-                     # Iterate Exceptions dealing with res_atom
-                     # How to find them efficiently without loop?
-                     # Build map locally? No, exclusions dict is global.
-                     # We only check pairs (res_atom, x) where x in targets.
-                     # This loop is small (only exclusions).
-                     pass
-
-            # Halved (Gohlke-Kollman 50/50 convention, matching Amber
-            # MMPBSA.py idecomp's `decpair` subroutine unconditionally --
-            # see the class docstring for why this must never be un-halved,
-            # even for cross-molecule/protein-ligand pairs).
-            interaction_energies[res_id] = {'vdw': 0.5 * run_vdw, 'elec': 0.5 * run_elec}
-        
-        # Exclusion Correction Logic (MOVED OUTSIDE RESIDUE LOOP FOR PERFORMANCE)
-        # This runs ONCE per frame instead of once per residue
-        if exclusions:
-            # 1. Build atom -> residue map for fast lookup
-            atom_to_res = {}
-            for r_id, atoms in residue_map.items():
-                for a in atoms:
-                    atom_to_res[a] = r_id
-            
-            # 2. Set for fast target check
-            target_set = set(ligand_indices)
-            
-            # 3. Iterate Exclusions
-            for (p1, p2), (exc_q, exc_sig, exc_eps) in exclusions.items():
-                r1 = atom_to_res.get(p1)
-                r2 = atom_to_res.get(p2)
-                
-                t1_in = p1 in target_set
-                t2_in = p2 in target_set
-                
-                # If neither atom is in a mapped residue, skip
-                if r1 is None and r2 is None:
-                    continue
-                    
-                # Prepare params standard
-                q1, s1, e1 = get_params(p1)
-                q2, s2, e2 = get_params(p2)
-                
-                # Calculate distance
-                pos1 = pos_nm[p1]
-                pos2 = pos_nm[p2]
-                d_vec = pos1 - pos2
-                dist = np.linalg.norm(d_vec)
-                
-                if dist < 0.001: continue
-                
-                # Calculate Standard Energy (to SUBTRACT)
-                # Elec Standard (bare Coulomb -- no salt screening, matching
-                # the real total's plain NonbondedForce; see the note above
-                # kappa's definition earlier in this function)
-                std_elec = (k_e * q1 * q2) / dist
-
-                # VdW Standard
-                s_avg = (s1 + s2) * 0.5
-                e_avg = np.sqrt(e1 * e2)
-                sr = s_avg / dist
-                sr6 = sr**6
-                std_vdw = 4.0 * e_avg * (sr6**2 - sr6) * 0.239006
-
-                # Calculate Exception Energy (to ADD)
-                # Elec Exception
-                exc_elec = (k_e * exc_q) / dist
-                
-                # VdW Exception
-                exc_vdw = 0.0
-                if exc_eps > 0:
-                    sr_ex = exc_sig / dist
-                    sr6_ex = sr_ex**6
-                    exc_vdw = 4.0 * exc_eps * (sr6_ex**2 - sr6_ex) * 0.239006
-
-                # Apply Corrections
-                # Case A: p1 is Residue, p2 is Target
-                if r1 is not None and t2_in:
-                    interaction_energies[r1]['elec'] += (exc_elec - std_elec)
-                    interaction_energies[r1]['vdw'] += (exc_vdw - std_vdw)
-                    
-                # Case B: p2 is Residue, p1 is Target
-                if r2 is not None and t1_in:
-                    interaction_energies[r2]['elec'] += (exc_elec - std_elec)
-                    interaction_energies[r2]['vdw'] += (exc_vdw - std_vdw)
+            prefix = f"{res_id}0_A"
+        for comp in FRAME_COMPONENTS:
+            row[f'{prefix}_{comp}'] = energies.get(comp, 0.0)
+    return row
 
 
-        return interaction_energies
-        
+def _strip(x, u=None):
+    if unit.is_quantity(x):
+        x = x.value_in_unit(u) if u is not None else x._value
+    return float(x)
+
+
+class _CustomPairModel:
+    """A CustomNonbondedForce (van der Waals group) evaluated from its own
+    energy expression, per-particle parameters and tabulated functions."""
+
+    def __init__(self, force):
+        if force.getNonbondedMethod() != openmm.CustomNonbondedForce.NoCutoff:
+            raise DecompositionError("CustomNonbondedForce with a cutoff cannot be decomposed")
+        if force.getNumInteractionGroups() > 0:
+            raise DecompositionError("CustomNonbondedForce interaction groups are not supported")
+        if hasattr(force, 'getNumComputedValues') and force.getNumComputedValues() > 0:
+            raise DecompositionError("CustomNonbondedForce computed values are not supported")
+        funcs = dict(_LEPTON_BUILTINS)
+        for k in range(force.getNumTabulatedFunctions()):
+            funcs[force.getTabulatedFunctionName(k)] = _discrete_function(force.getTabulatedFunction(k))
+        self.expr = _LeptonExpression(force.getEnergyFunction(), funcs)
+        n = force.getNumParticles()
+        names = [force.getPerParticleParameterName(k) for k in range(force.getNumPerParticleParameters())]
+        values = np.zeros((n, len(names)))
+        for i in range(n):
+            values[i] = [_strip(v) for v in force.getParticleParameters(i)]
+        self.params = {name: values[:, k].copy() for k, name in enumerate(names)}
+        self.globals = {force.getGlobalParameterName(k): _strip(force.getGlobalParameterDefaultValue(k))
+                        for k in range(force.getNumGlobalParameters())}
+        excl = [force.getExclusionParticles(k) for k in range(force.getNumExclusions())]
+        self.excl_i = np.array([e[0] for e in excl], dtype=np.int64)
+        self.excl_j = np.array([e[1] for e in excl], dtype=np.int64)
+
+    def energy(self, idx1, idx2, r):
+        """kJ/mol for particle 1 = idx1, particle 2 = idx2 (broadcast shapes)."""
+        v = dict(self.globals)
+        for name, arr in self.params.items():
+            v[name + '1'] = arr[idx1]
+            v[name + '2'] = arr[idx2]
+        v['r'] = r
+        return np.broadcast_to(np.asarray(self.expr.evaluate(v), dtype=float), np.shape(r))
+
+
+class _CustomBondModel:
+    """A CustomBondForce of the van der Waals group (the 1-4 LJ that
+    GBSAForceManager.refine_gbsa_forces moves out of the NonbondedForce)."""
+
+    def __init__(self, force):
+        if force.usesPeriodicBoundaryConditions():
+            raise DecompositionError("A periodic CustomBondForce cannot be decomposed")
+        self.expr = _LeptonExpression(force.getEnergyFunction(), dict(_LEPTON_BUILTINS))
+        nb = force.getNumBonds()
+        names = [force.getPerBondParameterName(k) for k in range(force.getNumPerBondParameters())]
+        self.i = np.zeros(nb, dtype=np.int64)
+        self.j = np.zeros(nb, dtype=np.int64)
+        values = np.zeros((nb, len(names)))
+        for k in range(nb):
+            a, b, p = force.getBondParameters(k)
+            self.i[k], self.j[k] = a, b
+            values[k] = [_strip(x) for x in p]
+        self.params = {name: values[:, k].copy() for k, name in enumerate(names)}
+        self.globals = {force.getGlobalParameterName(k): _strip(force.getGlobalParameterDefaultValue(k))
+                        for k in range(force.getNumGlobalParameters())}
+
+    def energy(self, sel, r):
+        v = dict(self.globals)
+        for name, arr in self.params.items():
+            v[name] = arr[sel]
+        v['r'] = r
+        return np.broadcast_to(np.asarray(self.expr.evaluate(v), dtype=float), np.shape(r))
+
+
+class _NonbondedModel:
+    """Pairwise electrostatic and van der Waals energies of a System, read from
+    its own forces: the NonbondedForce (charges, exceptions; any LJ left in it),
+    and the CustomNonbondedForce and CustomBondForce of the van der Waals force
+    group. Charges therefore carry whatever scaling the run applied (e.g. a
+    Coulomb term divided by the solute dielectric)."""
+
+    def __init__(self, system):
+        n = system.getNumParticles()
+        self.n = n
+        self.q = np.zeros(n)
+        self.sig = np.zeros(n)
+        self.eps = np.zeros(n)
+        ex = []
+        self.custom, self.bonds = [], []
+        n_nb = 0
+        for f in system.getForces():
+            group = f.getForceGroup()
+            if isinstance(f, openmm.NonbondedForce):
+                n_nb += 1
+                if f.getNonbondedMethod() != openmm.NonbondedForce.NoCutoff:
+                    raise DecompositionError("A NonbondedForce with a cutoff cannot be decomposed per residue")
+                for i in range(n):
+                    q, s, e = f.getParticleParameters(i)
+                    self.q[i] = _strip(q, unit.elementary_charge)
+                    self.sig[i] = _strip(s, unit.nanometer)
+                    self.eps[i] = _strip(e, unit.kilojoule_per_mole)
+                for k in range(f.getNumExceptions()):
+                    i, j, qq, s, e = f.getExceptionParameters(k)
+                    ex.append((i, j, _strip(qq, unit.elementary_charge ** 2), _strip(s, unit.nanometer),
+                               _strip(e, unit.kilojoule_per_mole)))
+            elif isinstance(f, openmm.CustomNonbondedForce) and group == VDW_GROUP:
+                self.custom.append(_CustomPairModel(f))
+            elif isinstance(f, openmm.CustomBondForce) and group == VDW_GROUP:
+                self.bonds.append(_CustomBondModel(f))
+        if n_nb != 1:
+            raise DecompositionError(f"Expected one NonbondedForce, found {n_nb}")
+        self.has_lj = bool(np.any(self.eps != 0.0))
+        ex = np.array(ex, dtype=float).reshape(-1, 5)
+        self.ex_i, self.ex_j = ex[:, 0].astype(np.int64), ex[:, 1].astype(np.int64)
+        self.ex_qq, self.ex_sig, self.ex_eps = ex[:, 2], ex[:, 3], ex[:, 4]
+
+    def _lj(self, i, j, r):
+        s = 0.5 * (self.sig[i] + self.sig[j])
+        e = np.sqrt(self.eps[i] * self.eps[j])
+        sr6 = (s / r) ** 6
+        return 4.0 * e * (sr6 * sr6 - sr6)
+
+    def pair_energies(self, pos, rows, targets):
+        """Half of each row-atom/target-atom pair energy, summed per row atom.
+
+        Returns (electrostatic, vdw) per atom in kcal/mol (zero outside `rows`).
+        A pair whose both atoms are rows and targets is counted once from each
+        side, so each atom carries its half.
+        """
+        n = self.n
+        rows = np.asarray(rows, dtype=np.int64)
+        targets = np.asarray(targets, dtype=np.int64)
+        elec = np.zeros(n)
+        vdw = np.zeros(n)
+        if rows.size == 0 or targets.size == 0:
+            return elec, vdw
+        qt = self.q[targets]
+        m = max(1, CHUNK_ELEMENTS // targets.size)
+        blocks = [(s, min(rows.size, s + m)) for s in range(0, rows.size, m)]
+
+        def work(s, e):
+            a = rows[s:e]
+            r = _pair_distances(pos[a], pos[targets])
+            mask = (a[:, None] != targets[None, :]) & (r > 1e-3)
+            rs = np.where(mask, r, 1.0)
+            ee = ONE_4PI_EPS0 * self.q[a][:, None] * qt[None, :] / rs
+            vv = np.zeros(r.shape)
+            if self.has_lj:
+                vv = vv + self._lj(a[:, None], targets[None, :], rs)
+            for c in self.custom:
+                vv = vv + c.energy(a[:, None], targets[None, :], rs)
+            return a, 0.5 * np.where(mask, ee, 0.0).sum(axis=1), 0.5 * np.where(mask, vv, 0.0).sum(axis=1)
+
+        for a, e_a, v_a in _map_blocks(work, blocks):
+            elec[a] = e_a
+            vdw[a] = v_a
+
+        in_rows = np.zeros(n, dtype=bool)
+        in_rows[rows] = True
+        in_t = np.zeros(n, dtype=bool)
+        in_t[targets] = True
+
+        def scatter(i, j, d_e, d_v):
+            """Add pair corrections to row atom i (target j) and row atom j (target i)."""
+            w1 = in_rows[i] & in_t[j]
+            w2 = in_rows[j] & in_t[i]
+            if d_e is not None:
+                elec[:] += np.bincount(i[w1], d_e[w1], n) + np.bincount(j[w2], d_e[w2], n)
+            if d_v is not None:
+                vdw[:] += np.bincount(i[w1], d_v[0][w1], n) + np.bincount(j[w2], d_v[1][w2], n)
+
+        def selected(i, j):
+            sel = np.nonzero((in_rows[i] & in_t[j]) | (in_rows[j] & in_t[i]))[0]
+            if sel.size == 0:
+                return sel, None, None
+            d = pos[i[sel]] - pos[j[sel]]
+            r = np.sqrt(np.einsum('ij,ij->i', d, d))
+            return sel, r, r > 1e-3
+
+        # NonbondedForce exceptions replace the standard Coulomb (and LJ) term.
+        sel, r, ok = selected(self.ex_i, self.ex_j)
+        if sel.size:
+            i, j = self.ex_i[sel], self.ex_j[sel]
+            rs = np.where(ok, r, 1.0)
+            d_e = ONE_4PI_EPS0 * (self.ex_qq[sel] - self.q[i] * self.q[j]) / rs
+            sr6 = (self.ex_sig[sel] / rs) ** 6
+            act = 4.0 * self.ex_eps[sel] * (sr6 * sr6 - sr6)
+            std = self._lj(i, j, rs) if self.has_lj else 0.0
+            d_v = np.where(ok, 0.5 * (act - std), 0.0)
+            scatter(i, j, np.where(ok, 0.5 * d_e, 0.0), (d_v, d_v))
+        # CustomNonbondedForce exclusions: that pair has no standard term.
+        for c in self.custom:
+            sel, r, ok = selected(c.excl_i, c.excl_j)
+            if sel.size:
+                i, j = c.excl_i[sel], c.excl_j[sel]
+                rs = np.where(ok, r, 1.0)
+                v_ij = np.where(ok, -0.5 * c.energy(i, j, rs), 0.0)
+                v_ji = np.where(ok, -0.5 * c.energy(j, i, rs), 0.0)
+                scatter(i, j, None, (v_ij, v_ji))
+        # CustomBondForce (1-4 LJ) between a row atom and a target atom.
+        for b in self.bonds:
+            sel, r, ok = selected(b.i, b.j)
+            if sel.size:
+                v = 0.5 * b.energy(sel, r)
+                scatter(b.i[sel], b.j[sel], None, (v, v))
+        return elec * KJ_TO_KCAL, vdw * KJ_TO_KCAL
+
+
+def _pair_distances(a, b):
+    d = a[:, None, :] - b[None, :, :]
+    return np.sqrt(np.einsum('ijk,ijk->ij', d, d))
+
+
+class _FrameDecomposer:
+    """Per-residue decomposition of one frame, from the run's own Systems.
+
+    Van der Waals / electrostatic: half of each receptor-residue/ligand pair
+    energy (Amber decpair convention), from the complex System's nonbonded
+    forces. Polar and non-polar solvation: each atom's energy in the complex
+    minus its energy in the receptor (receptor atoms) or ligand (ligand atoms)
+    System, from the GB and surface-area forces of those Systems
+    (mmgbsa.solvation_peratom). Summed over the receptor residues and the
+    ligand this is the frame's binding energy, term by term.
+    """
+
+    def __init__(self, complex_system, receptor_system, ligand_system, residue_map, ligand_indices,
+                 report_raw_energies=False, contexts=None, interaction_tolerance=None):
+        n = complex_system.getNumParticles()
+        self.n = n
+        lig = np.array(sorted({int(i) for i in ligand_indices}), dtype=np.int64)
+        lig_set = set(lig.tolist())
+        rec = np.array([i for i in range(n) if i not in lig_set], dtype=np.int64)
+        if receptor_system.getNumParticles() != rec.size or ligand_system.getNumParticles() != lig.size:
+            raise DecompositionError(
+                f"The receptor and ligand Systems have {receptor_system.getNumParticles()} and "
+                f"{ligand_system.getNumParticles()} particles, but the decomposition splits the "
+                f"{n}-atom complex into {rec.size} receptor and {lig.size} ligand atoms")
+        self.rec, self.lig = rec, lig
+        self.res_ids = list(residue_map)
+        atom_res = np.full(n, -1, dtype=np.int64)
+        for k, res_id in enumerate(self.res_ids):
+            atom_res[np.asarray(residue_map[res_id], dtype=np.int64)] = k
+        if np.any(atom_res[lig] >= 0):
+            raise DecompositionError("Ligand atoms are listed in the receptor residue map")
+        self.atom_res = atom_res
+        self.rows = np.nonzero(atom_res >= 0)[0]
+        self.report_raw_energies = report_raw_energies
+        self.nb = _NonbondedModel(complex_system)
+        self.solvation = {'complex': SolvationEnergies(complex_system),
+                          'receptor': SolvationEnergies(receptor_system),
+                          'ligand': SolvationEnergies(ligand_system)}
+        self.contexts = contexts or {}
+        self._warned_interaction = False
+
+    def _per_residue(self, values):
+        return np.bincount(self.atom_res[self.rows], weights=values[self.rows], minlength=len(self.res_ids))
+
+    def decompose(self, xyz_nm):
+        """Returns ({res_id: energies}, check) for one frame (positions in nm)."""
+        if unit.is_quantity(xyz_nm):
+            xyz_nm = xyz_nm.value_in_unit(unit.nanometer)
+        pos = np.ascontiguousarray(np.asarray(xyz_nm, dtype=np.float64).reshape(self.n, 3))
+        rec, lig = self.rec, self.lig
+
+        elec_a, vdw_a = self.nb.pair_energies(pos, self.rows, lig)
+        pc, nc = self.solvation['complex'].per_atom(pos)
+        pr, nr = self.solvation['receptor'].per_atom(pos[rec])
+        pl, nl = self.solvation['ligand'].per_atom(pos[lig])
+        dp, dn = pc.copy(), nc.copy()
+        dp[rec] -= pr
+        dp[lig] -= pl
+        dn[rec] -= nr
+        dn[lig] -= nl
+
+        vdw_r, elec_r = self._per_residue(vdw_a), self._per_residue(elec_a)
+        pol_r, np_r = self._per_residue(dp), self._per_residue(dn)
+        if self.report_raw_energies:
+            ce, cv = self.nb.pair_energies(pos, self.rows, np.arange(self.n))
+            c_elec, c_vdw = self._per_residue(ce), self._per_residue(cv)
+            c_pol, c_np = self._per_residue(pc), self._per_residue(nc)
+
+        result = {}
+        for k, res_id in enumerate(self.res_ids):
+            e = {'vdw': float(vdw_r[k]), 'electrostatic': float(elec_r[k]),
+                 'solvation': float(pol_r[k]), 'nonpolar_solvation': float(np_r[k])}
+            e['total'] = e['vdw'] + e['electrostatic'] + e['solvation']
+            if self.report_raw_energies:
+                cvdw, cele, csol, cnp = float(c_vdw[k]), float(c_elec[k]), float(c_pol[k]), float(c_np[k])
+                e.update({'complex_vdw': cvdw, 'complex_electrostatic': cele,
+                          'complex_solvation': csol, 'complex_nonpolar_solvation': cnp,
+                          'complex_total': cvdw + cele + csol})
+                # Receptor = complex - binding: each residue's own value in the
+                # receptor System (for the solvation terms exactly that).
+                r = {'vdw': cvdw - e['vdw'], 'electrostatic': cele - e['electrostatic'],
+                     'solvation': csol - e['solvation'], 'nonpolar_solvation': cnp - e['nonpolar_solvation']}
+                e.update({f'receptor_{key}': val for key, val in r.items()})
+                e['receptor_total'] = r['vdw'] + r['electrostatic'] + r['solvation']
+            result[res_id] = e
+
+        check = {
+            'receptor_vdw': float(vdw_r.sum()), 'receptor_electrostatic': float(elec_r.sum()),
+            'receptor_solvation': float(pol_r.sum()), 'receptor_nonpolar_solvation': float(np_r.sum()),
+            'ligand_vdw': float(vdw_r.sum()), 'ligand_electrostatic': float(elec_r.sum()),
+            'ligand_solvation': float(dp[lig].sum()), 'ligand_nonpolar_solvation': float(dn[lig].sum()),
+        }
+        check['decomposed_binding_energy'] = (2.0 * (check['receptor_vdw'] + check['receptor_electrostatic'])
+                                              + float(dp.sum()) + float(dn.sum()))
+        check.update(self._verify(pos, {'complex': (pc, nc), 'receptor': (pr, nr), 'ligand': (pl, nl)},
+                                  2.0 * check['receptor_electrostatic'], 2.0 * check['receptor_vdw']))
+        return result, check
+
+    def _verify(self, pos, per_atom, elec_int, vdw_int):
+        """Compare with OpenMM's force-group energies of the three Contexts.
+
+        The per-atom solvation energies must sum to each System's GB and
+        surface-area group energies (raises otherwise). The interaction terms
+        are compared with the complex-minus-receptor-minus-ligand van der
+        Waals and electrostatic group energies (a warning if they differ).
+        """
+        out = {'max_solvation_deviation': float('nan'), 'max_interaction_deviation': float('nan'),
+               'openmm_binding_energy': float('nan')}
+        if not all(k in self.contexts for k in ('complex', 'receptor', 'ligand')):
+            return out
+        coords = {'complex': pos, 'receptor': pos[self.rec], 'ligand': pos[self.lig]}
+        energies = {}
+        worst = 0.0
+        for name in ('complex', 'receptor', 'ligand'):
+            ctx = self.contexts[name]
+            ctx.setPositions(coords[name])
+            polar_ref = group_energy(ctx, POLAR_GROUPS)
+            nonpolar_ref = group_energy(ctx, NONPOLAR_GROUPS)
+            polar, nonpolar = (float(x.sum()) for x in per_atom[name])
+            for value, ref, label in ((polar, polar_ref, 'polar'), (nonpolar, nonpolar_ref, 'non-polar')):
+                dev = abs(value - ref)
+                worst = max(worst, dev)
+                if dev > 0.01 + 1e-5 * abs(ref):
+                    raise DecompositionError(
+                        f"{name} {label} solvation: per-atom energies sum to {value:.6f} kcal/mol, "
+                        f"OpenMM gives {ref:.6f} kcal/mol for the same coordinates")
+            energies[name] = (group_energy(ctx, (ELECTROSTATIC_GROUP,)), group_energy(ctx, (VDW_GROUP,)),
+                              polar_ref, nonpolar_ref)
+        delta = [energies['complex'][k] - energies['receptor'][k] - energies['ligand'][k] for k in range(4)]
+        dev_int = max(abs(elec_int - delta[0]), abs(vdw_int - delta[1]))
+        if dev_int > 0.01 + 1e-5 * (abs(delta[0]) + abs(delta[1])) and not self._warned_interaction:
+            self._warned_interaction = True
+            log.warning(f"Per-residue van der Waals/electrostatic interaction ({vdw_int:.4f}/{elec_int:.4f} "
+                        f"kcal/mol) differs from OpenMM's complex-receptor-ligand difference "
+                        f"({delta[1]:.4f}/{delta[0]:.4f} kcal/mol). The receptor or ligand System "
+                        f"does not carry the complex's nonbonded parameters.")
+        out.update({'max_solvation_deviation': worst, 'max_interaction_deviation': dev_int,
+                    'openmm_binding_energy': float(sum(delta))})
+        return out
+
+
+# ==============================================================================
+# WORKER FUNCTIONS FOR PARALLEL PROCESSING
+# ==============================================================================
+
+def _worker_init(payload):
+    """Build this worker's decomposer from the serialized Systems (once per worker)."""
+    global _worker_context
+    os.environ['OPENGBSA_DECOMP_THREADS'] = '1'      # one process per core already
+    from . import solvation_peratom
+    solvation_peratom._EXECUTOR = None                # never reuse a forked thread pool
+    systems = {key: openmm.XmlSerializer.deserialize(payload[f'{key}_xml'])
+               for key in ('complex', 'protein', 'ligand')}
+    platform = openmm.Platform.getPlatformByName('CPU')
+    contexts = {name: openmm.Context(systems[key], openmm.VerletIntegrator(0.001), platform, {'Threads': '1'})
+                for name, key in (('complex', 'complex'), ('receptor', 'protein'), ('ligand', 'ligand'))}
+    _worker_context['decomposer'] = _FrameDecomposer(
+        systems['complex'], systems['protein'], systems['ligand'], payload['residue_map'],
+        payload['ligand_indices'], report_raw_energies=payload['report_raw_energies'], contexts=contexts)
+
+
+def _worker_decompose(args):
+    """Decompose one frame in a worker: returns (index, (result, check), error)."""
+    index, xyz = args
+    try:
+        return index, _worker_context['decomposer'].decompose(xyz), None
     except Exception as e:
-        print(f"Error in pairwise calc: {e}")
-        return {}
+        import traceback
+        return index, None, f"{e}\n{traceback.format_exc()}"
+
+
+def _calculate_pairwise_interactions_standalone(system, context, positions, residue_map, ligand_indices,
+                                                salt_concentration=None, pdb_params=None, exclusions=None):
+    """
+    Per-residue van der Waals and electrostatic interaction energies with the
+    atoms `ligand_indices`, halved (Gohlke-Kollman / Amber decpair: each pair
+    energy is split equally between the two atoms' residues), in kcal/mol.
+
+    Every parameter comes from the System's own nonbonded forces (charges and
+    exceptions of the NonbondedForce, the van der Waals CustomNonbondedForce
+    and its exclusions, the 1-4 CustomBondForce), so the halves sum to the
+    interaction energy OpenMM computes. `context`, `salt_concentration`,
+    `pdb_params` and `exclusions` are accepted for compatibility and ignored.
+    Returns {res_id: {'vdw': ..., 'elec': ...}}.
+    """
+    if unit.is_quantity(positions):
+        positions = positions.value_in_unit(unit.nanometer)
+    pos = np.ascontiguousarray(np.asarray(positions, dtype=np.float64))
+    model = _NonbondedModel(system)
+    atom_res = np.full(model.n, -1, dtype=np.int64)
+    res_ids = list(residue_map)
+    for k, res_id in enumerate(res_ids):
+        atom_res[np.asarray(residue_map[res_id], dtype=np.int64)] = k
+    rows = np.nonzero(atom_res >= 0)[0]
+    elec, vdw = model.pair_energies(pos, rows, np.asarray(list(ligand_indices), dtype=np.int64))
+    e_res = np.bincount(atom_res[rows], weights=elec[rows], minlength=len(res_ids))
+    v_res = np.bincount(atom_res[rows], weights=vdw[rows], minlength=len(res_ids))
+    return {res_id: {'vdw': float(v_res[k]), 'elec': float(e_res[k])} for k, res_id in enumerate(res_ids)}
 
 
 if __name__ == '__main__':
