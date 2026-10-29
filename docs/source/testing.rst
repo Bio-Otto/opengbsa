@@ -73,9 +73,9 @@ pytest to the environment:
 
 The repository contains the topologies of the test systems but not their
 trajectories. Without them, the 13 tests that need a trajectory are skipped. On
-a Linux machine with a CUDA GPU the run ends with ``134 passed, 13 skipped``.
+a Linux machine with a CUDA GPU the run ends with ``391 passed, 13 skipped``.
 Without a GPU the test of the CUDA platform is skipped as well; continuous
-integration, which has no GPU, reports ``133 passed, 14 skipped`` on Linux and
+integration, which has no GPU, reports ``390 passed, 14 skipped`` on Linux and
 on macOS. No test should fail. The skipped tests and
 their reasons are listed at the end of the run. To run them as well, download
 the test trajectories (10 GB, Zenodo record
@@ -86,11 +86,11 @@ root of the repository and run the tests again:
 
     opengbsa --list-test-data
     opengbsa --fetch-test-data --only core-fixtures
-    python -m pytest test/unit           # 146 passed, 1 skipped
+    python -m pytest test/unit           # 403 passed, 1 skipped
 
 The one remaining test reads an OpenMM System built from the 3dd2 validation
 case. It runs after the data of that case are downloaded (Step 4, 44 MB), and
-then all 147 tests pass.
+then all 404 tests pass.
 
 The data are cached in ``~/.cache/opengbsa`` and linked into ``test/data/``.
 A dropped connection is retried up to five times. If the download still
