@@ -10,10 +10,6 @@ a commented file. An option that is left out takes its default. The sections
 ``analysis_settings`` are required; ``analysis_settings`` may be empty, so
 that every option of it takes its default.
 
-.. contents:: Sections
-   :local:
-   :depth: 1
-
 input_files
 -----------
 
