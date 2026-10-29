@@ -78,8 +78,10 @@ def test_quasiharmonic_entropy_is_stored(tmp_path):
     assert summary["entropy"]["TS_ligand"] == pytest.approx(entropy["TS_ligand"])
     assert "Ligand TS" in (out / "final_report.txt").read_text()
 
-    # the same ligand frames with real masses, computed directly
-    traj = md.load(str(XTC), top=str(PRMTOP))[:4]
+    # the same (re-imaged: the raw ligand is split by the box in frame 3) ligand
+    # frames with real masses, computed directly
+    from mmgbsa.trajectory import reimage_molecules
+    traj = reimage_molecules(md.load(str(XTC), top=str(PRMTOP))[:4])
     ligand = traj.atom_slice(traj.topology.select("resname LIG"))
     masses = [a.element.mass for a in ligand.topology.atoms]
     direct = QuasiHarmonicAnalysis(ligand, None, 300.0, verbose=False, masses=masses).calculate_entropy()
