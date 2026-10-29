@@ -20,17 +20,12 @@ class GromacsPreprocessor:
     to enable Native Amber Mode processing in MM/GBSA.
     """
     
-    # Standard Amber GB-model-to-radii-set pairing (see e.g. Amber Reference
-    # Manual / MMPBSA.py docs): HCT/GBn pair with 'mbondi', OBC1/OBC2 with
-    # 'mbondi2', GBn2 with 'mbondi3'. Kept in sync with the identical mapping
-    # in mmgbsa_core.py's StructureManager._GB_MODEL_RADII_SET.
-    _GB_MODEL_RADII_SET = {
-        'HCT': 'mbondi',
-        'OBC1': 'mbondi2',
-        'OBC2': 'mbondi2',
-        'GBn': 'mbondi',
-        'GBn2': 'mbondi3',
-    }
+    # The radii set of each GB model, as in mmgbsa_core.py's
+    # StructureManager._GB_MODEL_RADII_SET: GBn is bondi, as Amber recommends
+    # and as its neck correction needs (mbondi's 0.8 A hydrogens lie outside
+    # its 1-2 A range).
+    from .mmgbsa_core import StructureManager as _StructureManager
+    _GB_MODEL_RADII_SET = dict(_StructureManager._GB_MODEL_RADII_SET)
 
     @staticmethod
     def convert_to_amber(topology_file, coordinate_file, output_dir=None, gb_model='OBC2'):
