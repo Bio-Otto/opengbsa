@@ -299,12 +299,17 @@ class PerResidueDecomposition:
 
             traj = md.load(xtc_file, top=load_top)
 
-            if n_frames is None or len(traj) < n_frames:
-                n_frames = len(traj)
-
-            # Select frames based on parameters
-            selected_frames = self._select_frames(len(traj), n_frames, frame_start, frame_end,
-                                                frame_stride, frame_selection, random_seed)
+            # The decomposed frames are a subset of the frames the MM/GBSA run analysed
+            # (the trajectory, distilled or not, keeps every frame); without a
+            # completed run they are chosen from the trajectory directly.
+            calculator = getattr(self, 'mmgbsa_calculator', None)
+            if getattr(calculator, 'analysed_frames', None) is not None:
+                selected_frames = calculator.decomposition_frames(n_frames, frame_selection, random_seed)
+            else:
+                if n_frames is None or len(traj) < n_frames:
+                    n_frames = len(traj)
+                selected_frames = self._select_frames(len(traj), n_frames, frame_start, frame_end,
+                                                      frame_stride, frame_selection, random_seed)
             decomp_traj = traj[selected_frames]
 
             print(f"  Selected {len(decomp_traj)} frames for decomposition")
