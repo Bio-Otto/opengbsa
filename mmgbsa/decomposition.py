@@ -398,25 +398,12 @@ class PerResidueDecomposition:
             if run_parallel:
                 n_workers = min(n_cores, len(decomp_traj))
                 log.info(f"✓ Running parallel decomposition on {n_workers} cores (CPU platform)")
-                payload = {
-                    'complex_xml': openmm.XmlSerializer.serialize(systems['complex_system']),
-                    'protein_xml': openmm.XmlSerializer.serialize(systems['protein_system']),
-                    'ligand_xml': openmm.XmlSerializer.serialize(systems['ligand_system']),
-                    'residue_map': residue_map,
-                    'ligand_indices': list(ligand_indices),
-                    'report_raw_energies': self.report_raw_energies,
-                }
-                tasks = [(i, decomp_traj.xyz[i]) for i in range(len(decomp_traj))]
                 try:
-                    outputs = [None] * len(tasks)
-                    with multiprocessing.Pool(processes=n_workers, initializer=_worker_init,
-                                              initargs=(payload,)) as pool:
-                        for done, (i, out, error) in enumerate(pool.imap(_worker_decompose, tasks)):
-                            if error is not None:
-                                raise DecompositionError(f"frame {selected_frames[i]}: {error}")
-                            outputs[i] = out
-                            if (done + 1) % 5 == 0:
-                                log.process(f"Processed {done+1}/{len(tasks)} frames (Parallel)...")
+                    outputs = _decompose_parallel(decomposer, [decomp_traj.xyz[i] for i in range(len(decomp_traj))],
+                                                  n_workers, progress=lambda done: log.process(
+                                                      f"Processed {done}/{len(decomp_traj)} frames (Parallel)..."))
+                except _WorkerError as e:
+                    raise DecompositionError(f"frame {selected_frames[e.index]}: {e}") from e
                 except DecompositionError:
                     raise
                 except Exception as e:
@@ -1607,8 +1594,12 @@ class _FrameDecomposer:
     def _per_residue(self, values):
         return np.bincount(self.atom_res[self.rows], weights=values[self.rows], minlength=len(self.res_ids))
 
-    def decompose(self, xyz_nm):
-        """Returns ({res_id: energies}, check) for one frame (positions in nm)."""
+    def decompose(self, xyz_nm, verify=True):
+        """Returns ({res_id: energies}, check) for one frame (positions in nm).
+
+        verify=False (parallel workers, which must not call OpenMM) leaves the
+        comparison with OpenMM to `verify_pending`, run in the parent process.
+        """
         if unit.is_quantity(xyz_nm):
             xyz_nm = xyz_nm.value_in_unit(unit.nanometer)
         pos = np.ascontiguousarray(np.asarray(xyz_nm, dtype=np.float64).reshape(self.n, 3))
@@ -1657,11 +1648,25 @@ class _FrameDecomposer:
         }
         check['decomposed_binding_energy'] = (2.0 * (check['receptor_vdw'] + check['receptor_electrostatic'])
                                               + float(dp.sum()) + float(dn.sum()))
-        check.update(self._verify(pos, {'complex': (pc, nc), 'receptor': (pr, nr), 'ligand': (pl, nl)},
-                                  2.0 * check['receptor_electrostatic'], 2.0 * check['receptor_vdw']))
+        sums = {'complex': (float(pc.sum()), float(nc.sum())), 'receptor': (float(pr.sum()), float(nr.sum())),
+                'ligand': (float(pl.sum()), float(nl.sum()))}
+        pending = (sums, 2.0 * check['receptor_electrostatic'], 2.0 * check['receptor_vdw'])
+        if verify:
+            check.update(self._verify(pos, *pending))
+        else:
+            check.update({'max_solvation_deviation': float('nan'), 'max_interaction_deviation': float('nan'),
+                          'openmm_binding_energy': float('nan'), '_pending': pending})
         return result, check
 
-    def _verify(self, pos, per_atom, elec_int, vdw_int):
+    def verify_pending(self, xyz_nm, check):
+        """Run the OpenMM comparison of a frame decomposed with verify=False."""
+        pending = check.pop('_pending', None)
+        if pending is not None:
+            pos = np.asarray(xyz_nm, dtype=np.float64).reshape(self.n, 3)
+            check.update(self._verify(pos, *pending))
+        return check
+
+    def _verify(self, pos, sums, elec_int, vdw_int):
         """Compare with OpenMM's force-group energies of the three Contexts.
 
         The per-atom solvation energies must sum to each System's GB and
@@ -1681,7 +1686,7 @@ class _FrameDecomposer:
             ctx.setPositions(coords[name])
             polar_ref = group_energy(ctx, POLAR_GROUPS)
             nonpolar_ref = group_energy(ctx, NONPOLAR_GROUPS)
-            polar, nonpolar = (float(x.sum()) for x in per_atom[name])
+            polar, nonpolar = sums[name]
             for value, ref, label in ((polar, polar_ref, 'polar'), (nonpolar, nonpolar_ref, 'non-polar')):
                 dev = abs(value - ref)
                 worst = max(worst, dev)
@@ -1708,30 +1713,63 @@ class _FrameDecomposer:
 # WORKER FUNCTIONS FOR PARALLEL PROCESSING
 # ==============================================================================
 
-def _worker_init(payload):
-    """Build this worker's decomposer from the serialized Systems (once per worker)."""
-    global _worker_context
-    os.environ['OPENGBSA_DECOMP_THREADS'] = '1'      # one process per core already
+class _WorkerError(RuntimeError):
+    """A frame failed in a parallel worker (index = position in the frame list)."""
+
+    def __init__(self, index, message):
+        super().__init__(message)
+        self.index = index
+
+
+def _worker_init():
+    """Forked worker: one numpy thread (one process per core already), and
+    never reuse the parent's thread pool, whose threads do not survive fork."""
+    os.environ['OPENGBSA_DECOMP_THREADS'] = '1'
     from . import solvation_peratom
-    solvation_peratom._EXECUTOR = None                # never reuse a forked thread pool
-    systems = {key: openmm.XmlSerializer.deserialize(payload[f'{key}_xml'])
-               for key in ('complex', 'protein', 'ligand')}
-    platform = openmm.Platform.getPlatformByName('CPU')
-    contexts = {name: openmm.Context(systems[key], openmm.VerletIntegrator(0.001), platform, {'Threads': '1'})
-                for name, key in (('complex', 'complex'), ('receptor', 'protein'), ('ligand', 'ligand'))}
-    _worker_context['decomposer'] = _FrameDecomposer(
-        systems['complex'], systems['protein'], systems['ligand'], payload['residue_map'],
-        payload['ligand_indices'], report_raw_energies=payload['report_raw_energies'], contexts=contexts)
+    solvation_peratom._EXECUTOR = None
 
 
 def _worker_decompose(args):
-    """Decompose one frame in a worker: returns (index, (result, check), error)."""
+    """Decompose one frame in a worker: returns (index, (result, check), error).
+
+    The decomposer was built in the parent and is inherited through fork; the
+    worker only runs numpy on it and makes no OpenMM call (a forked child of a
+    process with OpenMM threads crashed inside OpenMM's Python wrapper).
+    """
     index, xyz = args
     try:
-        return index, _worker_context['decomposer'].decompose(xyz), None
+        return index, _worker_context['decomposer'].decompose(xyz, verify=False), None
     except Exception as e:
         import traceback
         return index, None, f"{e}\n{traceback.format_exc()}"
+
+
+def _decompose_parallel(decomposer, frames, n_workers, progress=None):
+    """Decompose frames (positions in nm) in forked worker processes.
+
+    Returns [(result, check), ...] in frame order, identical to the serial
+    path's values; the OpenMM comparison runs here, in the parent. A failing
+    frame raises _WorkerError; a worker that dies breaks the pool and raises
+    (concurrent.futures BrokenProcessPool) instead of hanging.
+    """
+    from concurrent.futures import ProcessPoolExecutor
+
+    ctx = multiprocessing.get_context('fork')        # ValueError where fork does not exist
+    _worker_context['decomposer'] = decomposer
+    outputs = []
+    try:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx, initializer=_worker_init) as pool:
+            for done, (index, out, error) in enumerate(pool.map(_worker_decompose, list(enumerate(frames))), 1):
+                if error is not None:
+                    raise _WorkerError(index, error)
+                outputs.append(out)
+                if progress is not None and done % 5 == 0:
+                    progress(done)
+    finally:
+        _worker_context.pop('decomposer', None)
+    for xyz, (_, check) in zip(frames, outputs):
+        decomposer.verify_pending(xyz, check)
+    return outputs
 
 
 def _calculate_pairwise_interactions_standalone(system, context, positions, residue_map, ligand_indices,

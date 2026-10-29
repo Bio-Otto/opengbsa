@@ -28,7 +28,6 @@ CHARMM36 chamber prmtops) at frame 0 of examples/quickstart/trajectory.xtc,
 as a 10 A pocket for the GB matrix and whole for the binding-energy checks;
 a DNA strand with a bound pentapeptide (test/data/gb_decomp_dna, tleap).
 """
-import multiprocessing
 import os
 
 import numpy as np
@@ -302,15 +301,18 @@ def test_report_raw_energies_and_parallel_workers_give_identical_values(dna):
     receptor_ref = group_energy(reference_context(systems[1], pos[rec].astype(np.float64)), (0,))
     assert complex_elec - sum(r["electrostatic"] for r in raw.values()) == pytest.approx(receptor_ref, abs=TOL)
 
-    payload = {"complex_xml": openmm.XmlSerializer.serialize(systems[0]),
-               "protein_xml": openmm.XmlSerializer.serialize(systems[1]),
-               "ligand_xml": openmm.XmlSerializer.serialize(systems[2]),
-               "residue_map": residue_map, "ligand_indices": list(lig), "report_raw_energies": True}
-    with multiprocessing.get_context("fork").Pool(1, initializer=d._worker_init, initargs=(payload,)) as pool:
-        index, out, error = pool.apply(d._worker_decompose, ((0, pos),))
-    assert error is None, error
-    assert out[0] == raw                      # the parallel path's values, bit for bit
-    assert d._frame_row(out[0], 7, 1, 1) == d._frame_row(raw, 7, 1, 1)
+    # the parallel path: forked workers on the parent's decomposer, OpenMM check in the parent
+    dec = _decomposer(systems, residue_map, lig, raw=True, platform="CPU")
+    frames = [pos, pos + np.float32(0.001)]
+    parallel = d._decompose_parallel(dec, frames, 2)
+    for xyz, (result, check) in zip(frames, parallel):
+        serial, serial_check = dec.decompose(xyz)
+        assert result == serial                   # bit for bit
+        assert d._frame_row(result, 7, 1, 1) == d._frame_row(serial, 7, 1, 1)
+        assert "_pending" not in check
+        assert check["max_solvation_deviation"] < 0.01
+        # OpenMM CPU-platform energies vary by ~1e-4 between evaluations
+        assert check["openmm_binding_energy"] == pytest.approx(serial_check["openmm_binding_energy"], abs=TOL)
 
 
 def _scaled_coulomb_systems(dna, eps_in):
