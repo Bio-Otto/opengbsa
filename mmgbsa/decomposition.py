@@ -232,7 +232,8 @@ class PerResidueDecomposition:
             for key in ('protein_system', 'ligand_system'):
                 if systems.get(key) is None and calc_systems.get(key) is not None:
                     systems[key] = calc_systems[key]
-            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices,
+                                               md_topology=trajectory.topology)
 
             residue_energies = []
             frame_by_frame_data = []
@@ -382,7 +383,8 @@ class PerResidueDecomposition:
                                         ligand_indices=ligand_indices,
                                         positions=decomp_traj.xyz[len(decomp_traj) // 2])
 
-            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices,
+                                               md_topology=decomp_traj.topology)
 
             # Determine number of cores
             n_cores = self.n_jobs
@@ -680,11 +682,18 @@ class PerResidueDecomposition:
         print("  Systems prepared for decomposition")
         return systems
 
-    def _make_decomposer(self, systems, residue_map, ligand_indices):
+    def _nonpolar_convention(self):
+        """'numerical_surface' (MMPBSA.py's decomposition convention) when the
+        run uses amber_compatible, else 'force' (the run's own LCPO/ACE term)."""
+        amber = bool(getattr(self.mmgbsa_calculator, 'amber_compatible', False))
+        return NONPOLAR_NUMERICAL_SURFACE if amber else NONPOLAR_FORCE
+
+    def _make_decomposer(self, systems, residue_map, ligand_indices, md_topology=None):
         """The per-frame decomposer for these Systems and this residue mapping.
 
         Missing receptor/ligand Contexts (execute_decomposition) are created on
-        the decomposition platform.
+        the decomposition platform. `md_topology` (the trajectory topology of
+        the complex) is needed for the amber_compatible non-polar term.
         """
         for key in ('protein_system', 'ligand_system'):
             if systems.get(key) is None:
@@ -699,11 +708,19 @@ class PerResidueDecomposition:
                 ctx = openmm.Context(systems[f'{key}_system'], openmm.VerletIntegrator(0.001), platform, properties)
                 systems[f'{key}_context'] = ctx
             contexts[name] = ctx
+        nonpolar = self._nonpolar_convention()
         decomposer = _FrameDecomposer(systems['complex_system'], systems['protein_system'],
                                       systems['ligand_system'], residue_map, ligand_indices,
-                                      report_raw_energies=self.report_raw_energies, contexts=contexts)
-        log.info(f"  Per-atom solvation terms from the run's own forces: "
-                 f"complex {decomposer.solvation['complex'].describe()}")
+                                      report_raw_energies=self.report_raw_energies, contexts=contexts,
+                                      nonpolar=nonpolar, md_topology=md_topology)
+        described = decomposer.solvation['complex'].describe()
+        log.info(f"  Per-atom polar solvation from the run's own GB force: {described['polar']}")
+        if nonpolar == NONPOLAR_NUMERICAL_SURFACE:
+            log.info("  Per-residue non-polar term: MMPBSA.py's decomposition convention (amber_compatible), "
+                     "a numerical surface (Shrake-Rupley, 0.0072 kcal/mol/A^2) as sander gbsa=2; these "
+                     "per-residue terms do not sum to the LCPO term of the binding energy.")
+        else:
+            log.info(f"  Per-atom non-polar solvation from the run's own surface-area force: {described['nonpolar']}")
         return decomposer
 
     def _log_energy_check(self, energy_check):
@@ -712,13 +729,23 @@ class PerResidueDecomposition:
             return
         solv = max(c['max_solvation_deviation'] for c in energy_check)
         inter = max(c['max_interaction_deviation'] for c in energy_check)
-        mean_sum = np.mean([c['decomposed_binding_energy'] for c in energy_check])
-        mean_ref = np.mean([c['openmm_binding_energy'] for c in energy_check])
+        mean = lambda key: float(np.mean([c[key] for c in energy_check]))
+        if energy_check[0].get('nonpolar_convention') == NONPOLAR_NUMERICAL_SURFACE:
+            log.info(f"Per-atom polar energies reproduce OpenMM's GB energies of the complex, receptor and "
+                     f"ligand to {solv:.2e} kcal/mol (largest deviation, all frames).")
+            log.info(f"Receptor residues plus the ligand's share, without the non-polar term: "
+                     f"{mean('decomposed_binding_energy_without_nonpolar'):.4f} kcal/mol; OpenMM (vdW + "
+                     f"electrostatic + polar) on the same frames: {mean('openmm_binding_energy_without_nonpolar'):.4f} "
+                     f"kcal/mol (largest per-frame vdW/electrostatic deviation {inter:.2e}). Non-polar: "
+                     f"numerical surface {mean('decomposed_nonpolar'):.4f}, LCPO {mean('openmm_nonpolar'):.4f} "
+                     f"kcal/mol (MMPBSA.py's decomposition convention).")
+            return
         log.info(f"Per-atom polar and non-polar energies reproduce OpenMM's force-group energies of the "
                  f"complex, receptor and ligand to {solv:.2e} kcal/mol (largest deviation, all frames).")
-        log.info(f"Receptor residues plus the ligand's share: {mean_sum:.4f} kcal/mol; OpenMM binding "
-                 f"energy (vdW + electrostatic + polar + non-polar) on the same frames: {mean_ref:.4f} "
-                 f"kcal/mol (largest per-frame vdW/electrostatic deviation {inter:.2e}).")
+        log.info(f"Receptor residues plus the ligand's share: {mean('decomposed_binding_energy'):.4f} kcal/mol; "
+                 f"OpenMM binding energy (vdW + electrostatic + polar + non-polar) on the same frames: "
+                 f"{mean('openmm_binding_energy'):.4f} kcal/mol (largest per-frame vdW/electrostatic "
+                 f"deviation {inter:.2e}).")
 
     def _decompose_single_frame(self, frame, systems, residue_map, ligand_indices, ligand_resname,
                                 salt_concentration=None):
@@ -728,7 +755,7 @@ class PerResidueDecomposition:
         """
         decomposer = systems.get('_decomposer')
         if decomposer is None:
-            decomposer = self._make_decomposer(systems, residue_map, ligand_indices)
+            decomposer = self._make_decomposer(systems, residue_map, ligand_indices, md_topology=frame.topology)
             systems['_decomposer'] = decomposer
         frame_result, _ = decomposer.decompose(frame.xyz[0])
         return frame_result
@@ -1061,9 +1088,19 @@ class PerResidueDecomposition:
             nonpolar = np.mean([c['receptor_nonpolar_solvation'] for c in check])
             print(f"Receptor residues (vdW + electrostatic + polar): {residue_sum:.2f} kcal/mol; "
                   f"their non-polar term {nonpolar:.2f}; ligand share {ligand:.2f}.")
-            print(f"Decomposed binding energy {decomposed:.4f} kcal/mol = OpenMM binding energy on "
-                  f"the same {len(check)} frames {reference:.4f} kcal/mol "
-                  f"(MM/GBSA mean over its own frames: {total_binding:.2f}).")
+            if check[0].get('nonpolar_convention') == NONPOLAR_NUMERICAL_SURFACE:
+                m = lambda key: np.mean([c[key] for c in check])
+                print(f"Decomposed binding energy without the non-polar term "
+                      f"{m('decomposed_binding_energy_without_nonpolar'):.4f} kcal/mol = OpenMM's "
+                      f"{m('openmm_binding_energy_without_nonpolar'):.4f} kcal/mol on the same {len(check)} "
+                      f"frames. Non-polar term in MMPBSA.py's decomposition convention (numerical "
+                      f"surface): {m('decomposed_nonpolar'):.4f}; LCPO term of the binding energy: "
+                      f"{m('openmm_nonpolar'):.4f} kcal/mol (MM/GBSA mean over its own frames: "
+                      f"{total_binding:.2f}).")
+            else:
+                print(f"Decomposed binding energy {decomposed:.4f} kcal/mol = OpenMM binding energy on "
+                      f"the same {len(check)} frames {reference:.4f} kcal/mol "
+                      f"(MM/GBSA mean over its own frames: {total_binding:.2f}).")
         print()
         
         print(f"TOP {len(analysis['hot_spots'])} BINDING HOT SPOTS:")
@@ -1124,6 +1161,10 @@ class PerResidueDecomposition:
                 summary['decomposed_binding_energy'] = float(np.mean([c['decomposed_binding_energy'] for c in check]))
                 summary['openmm_binding_energy_same_frames'] = float(np.mean([c['openmm_binding_energy'] for c in check]))
                 summary['max_solvation_check_deviation'] = float(max(c['max_solvation_deviation'] for c in check))
+                summary['nonpolar_convention'] = check[0].get('nonpolar_convention')
+                for key in ('decomposed_binding_energy_without_nonpolar', 'openmm_binding_energy_without_nonpolar',
+                            'decomposed_nonpolar', 'openmm_nonpolar'):
+                    summary[key] = float(np.mean([c[key] for c in check]))
             summary_df = pd.DataFrame([summary])
             
             # Save files to output directory if available
@@ -1550,20 +1591,38 @@ def _pair_distances(a, b):
     return np.sqrt(np.einsum('ijk,ijk->ij', d, d))
 
 
+NONPOLAR_FORCE = 'force'
+NONPOLAR_NUMERICAL_SURFACE = 'numerical_surface'
+# MMPBSA.py's per-residue non-polar convention: sander gbsa=2 (numerical
+# surface) whenever decomposition is on, surften 0.0072 kcal/mol/A^2.
+NUMERICAL_SURFACE_TENSION = 0.0072  # kcal/mol/A^2
+
+
 class _FrameDecomposer:
     """Per-residue decomposition of one frame, from the run's own Systems.
 
     Van der Waals / electrostatic: half of each receptor-residue/ligand pair
     energy (Amber decpair convention), from the complex System's nonbonded
-    forces. Polar and non-polar solvation: each atom's energy in the complex
-    minus its energy in the receptor (receptor atoms) or ligand (ligand atoms)
-    System, from the GB and surface-area forces of those Systems
-    (mmgbsa.solvation_peratom). Summed over the receptor residues and the
-    ligand this is the frame's binding energy, term by term.
+    forces. Polar solvation: each atom's energy in the complex minus its
+    energy in the receptor (receptor atoms) or ligand (ligand atoms) System,
+    from the GB forces of those Systems (mmgbsa.solvation_peratom).
+
+    Non-polar solvation, `nonpolar`:
+      'force' (default) -- the same complex-minus-receptor/ligand difference
+          of the per-atom energies of the run's surface-area force (LCPO or
+          ACE); with the ligand's share the terms sum to the frame's binding
+          energy, term by term.
+      'numerical_surface' (amber_compatible) -- MMPBSA.py's decomposition
+          convention: per-atom numerical (Shrake-Rupley) surface areas of the
+          complex minus those of the receptor/ligand alone, times 0.0072
+          kcal/mol/A^2 (mdtraj.shrake_rupley defaults: element radii, 1.4 A
+          probe, 960 points), as OpenGBSA computed it up to 0.0.22. Like
+          Amber's own per-residue non-polar terms (sander gbsa=2) they do not
+          sum to the LCPO energy of the binding calculation.
     """
 
     def __init__(self, complex_system, receptor_system, ligand_system, residue_map, ligand_indices,
-                 report_raw_energies=False, contexts=None, interaction_tolerance=None):
+                 report_raw_energies=False, contexts=None, nonpolar=NONPOLAR_FORCE, md_topology=None):
         n = complex_system.getNumParticles()
         self.n = n
         lig = np.array(sorted({int(i) for i in ligand_indices}), dtype=np.int64)
@@ -1584,6 +1643,14 @@ class _FrameDecomposer:
         self.atom_res = atom_res
         self.rows = np.nonzero(atom_res >= 0)[0]
         self.report_raw_energies = report_raw_energies
+        if nonpolar not in (NONPOLAR_FORCE, NONPOLAR_NUMERICAL_SURFACE):
+            raise DecompositionError(f"Unknown non-polar convention '{nonpolar}'")
+        if nonpolar == NONPOLAR_NUMERICAL_SURFACE:
+            if md_topology is None or md_topology.n_atoms != n:
+                raise DecompositionError("The numerical-surface non-polar term needs the trajectory topology "
+                                         "of the complex (element radii)")
+        self.nonpolar = nonpolar
+        self.md_topology = md_topology
         self.nb = _NonbondedModel(complex_system)
         self.solvation = {'complex': SolvationEnergies(complex_system),
                           'receptor': SolvationEnergies(receptor_system),
@@ -1593,6 +1660,15 @@ class _FrameDecomposer:
 
     def _per_residue(self, values):
         return np.bincount(self.atom_res[self.rows], weights=values[self.rows], minlength=len(self.res_ids))
+
+    def _numerical_surface(self, xyz32):
+        """Per-atom Shrake-Rupley areas (A^2) of the complex and of the receptor
+        and ligand alone, as the 0.0.22 decomposition computed them."""
+        frame = md.Trajectory(xyz32.reshape(1, self.n, 3), self.md_topology)
+        complex_a2 = md.shrake_rupley(frame, mode='atom')[0] * 100.0
+        receptor_a2 = md.shrake_rupley(frame.atom_slice(self.rec), mode='atom')[0] * 100.0
+        ligand_a2 = md.shrake_rupley(frame.atom_slice(self.lig), mode='atom')[0] * 100.0
+        return complex_a2.astype(np.float64), receptor_a2.astype(np.float64), ligand_a2.astype(np.float64)
 
     def decompose(self, xyz_nm, verify=True):
         """Returns ({res_id: energies}, check) for one frame (positions in nm).
@@ -1604,23 +1680,39 @@ class _FrameDecomposer:
             xyz_nm = xyz_nm.value_in_unit(unit.nanometer)
         pos = np.ascontiguousarray(np.asarray(xyz_nm, dtype=np.float64).reshape(self.n, 3))
         rec, lig = self.rec, self.lig
+        force_np = self.nonpolar == NONPOLAR_FORCE
 
         elec_a, vdw_a = self.nb.pair_energies(pos, self.rows, lig)
-        pc, nc = self.solvation['complex'].per_atom(pos)
-        pr, nr = self.solvation['receptor'].per_atom(pos[rec])
-        pl, nl = self.solvation['ligand'].per_atom(pos[lig])
-        dp, dn = pc.copy(), nc.copy()
+        pc, nc = self.solvation['complex'].per_atom(pos, nonpolar=force_np)
+        pr, nr = self.solvation['receptor'].per_atom(pos[rec], nonpolar=force_np)
+        pl, nl = self.solvation['ligand'].per_atom(pos[lig], nonpolar=force_np)
+        dp = pc.copy()
         dp[rec] -= pr
         dp[lig] -= pl
-        dn[rec] -= nr
-        dn[lig] -= nl
+        if force_np:
+            dn = nc.copy()
+            dn[rec] -= nr
+            dn[lig] -= nl
+            np_r = self._per_residue(dn)
+            c_np_area = None
+        else:
+            # areas (A^2) summed per residue, then times the surface tension,
+            # in the order of the 0.0.22 code
+            c_area, r_area, l_area = self._numerical_surface(np.asarray(xyz_nm, dtype=np.float32))
+            d_area = c_area.copy()
+            d_area[rec] -= r_area
+            d_area[lig] -= l_area
+            np_r = self._per_residue(d_area) * NUMERICAL_SURFACE_TENSION
+            dn = d_area * NUMERICAL_SURFACE_TENSION
+            c_np_area = c_area
 
         vdw_r, elec_r = self._per_residue(vdw_a), self._per_residue(elec_a)
-        pol_r, np_r = self._per_residue(dp), self._per_residue(dn)
+        pol_r = self._per_residue(dp)
         if self.report_raw_energies:
             ce, cv = self.nb.pair_energies(pos, self.rows, np.arange(self.n))
             c_elec, c_vdw = self._per_residue(ce), self._per_residue(cv)
-            c_pol, c_np = self._per_residue(pc), self._per_residue(nc)
+            c_pol = self._per_residue(pc)
+            c_np = self._per_residue(nc) if force_np else self._per_residue(c_np_area) * NUMERICAL_SURFACE_TENSION
 
         result = {}
         for k, res_id in enumerate(self.res_ids):
@@ -1641,21 +1733,24 @@ class _FrameDecomposer:
             result[res_id] = e
 
         check = {
+            'nonpolar_convention': self.nonpolar,
             'receptor_vdw': float(vdw_r.sum()), 'receptor_electrostatic': float(elec_r.sum()),
             'receptor_solvation': float(pol_r.sum()), 'receptor_nonpolar_solvation': float(np_r.sum()),
             'ligand_vdw': float(vdw_r.sum()), 'ligand_electrostatic': float(elec_r.sum()),
             'ligand_solvation': float(dp[lig].sum()), 'ligand_nonpolar_solvation': float(dn[lig].sum()),
         }
-        check['decomposed_binding_energy'] = (2.0 * (check['receptor_vdw'] + check['receptor_electrostatic'])
-                                              + float(dp.sum()) + float(dn.sum()))
+        check['decomposed_nonpolar'] = float(dn.sum())
+        check['decomposed_binding_energy_without_nonpolar'] = (
+            2.0 * (check['receptor_vdw'] + check['receptor_electrostatic']) + float(dp.sum()))
+        check['decomposed_binding_energy'] = check['decomposed_binding_energy_without_nonpolar'] + float(dn.sum())
         sums = {'complex': (float(pc.sum()), float(nc.sum())), 'receptor': (float(pr.sum()), float(nr.sum())),
                 'ligand': (float(pl.sum()), float(nl.sum()))}
         pending = (sums, 2.0 * check['receptor_electrostatic'], 2.0 * check['receptor_vdw'])
         if verify:
             check.update(self._verify(pos, *pending))
         else:
-            check.update({'max_solvation_deviation': float('nan'), 'max_interaction_deviation': float('nan'),
-                          'openmm_binding_energy': float('nan'), '_pending': pending})
+            check.update({key: float('nan') for key in _CHECK_FIELDS})
+            check['_pending'] = pending
         return result, check
 
     def verify_pending(self, xyz_nm, check):
@@ -1669,13 +1764,15 @@ class _FrameDecomposer:
     def _verify(self, pos, sums, elec_int, vdw_int):
         """Compare with OpenMM's force-group energies of the three Contexts.
 
-        The per-atom solvation energies must sum to each System's GB and
-        surface-area group energies (raises otherwise). The interaction terms
-        are compared with the complex-minus-receptor-minus-ligand van der
-        Waals and electrostatic group energies (a warning if they differ).
+        The per-atom polar energies (and, with the 'force' convention, the
+        non-polar ones) must sum to each System's GB (surface-area) group
+        energy; raises otherwise. The interaction terms are compared with the
+        complex-minus-receptor-minus-ligand van der Waals and electrostatic
+        group energies (a warning if they differ). The numerical-surface
+        non-polar term is not compared: by construction it is not the LCPO
+        energy (OpenMM's non-polar binding term is reported next to it).
         """
-        out = {'max_solvation_deviation': float('nan'), 'max_interaction_deviation': float('nan'),
-               'openmm_binding_energy': float('nan')}
+        out = {key: float('nan') for key in _CHECK_FIELDS}
         if not all(k in self.contexts for k in ('complex', 'receptor', 'ligand')):
             return out
         coords = {'complex': pos, 'receptor': pos[self.rec], 'ligand': pos[self.lig]}
@@ -1687,7 +1784,10 @@ class _FrameDecomposer:
             polar_ref = group_energy(ctx, POLAR_GROUPS)
             nonpolar_ref = group_energy(ctx, NONPOLAR_GROUPS)
             polar, nonpolar = sums[name]
-            for value, ref, label in ((polar, polar_ref, 'polar'), (nonpolar, nonpolar_ref, 'non-polar')):
+            compared = [(polar, polar_ref, 'polar')]
+            if self.nonpolar == NONPOLAR_FORCE:
+                compared.append((nonpolar, nonpolar_ref, 'non-polar'))
+            for value, ref, label in compared:
                 dev = abs(value - ref)
                 worst = max(worst, dev)
                 if dev > 0.01 + 1e-5 * abs(ref):
@@ -1705,8 +1805,14 @@ class _FrameDecomposer:
                         f"({delta[1]:.4f}/{delta[0]:.4f} kcal/mol). The receptor or ligand System "
                         f"does not carry the complex's nonbonded parameters.")
         out.update({'max_solvation_deviation': worst, 'max_interaction_deviation': dev_int,
-                    'openmm_binding_energy': float(sum(delta))})
+                    'openmm_binding_energy': float(sum(delta)),
+                    'openmm_binding_energy_without_nonpolar': float(delta[0] + delta[1] + delta[2]),
+                    'openmm_nonpolar': float(delta[3])})
         return out
+
+
+_CHECK_FIELDS = ('max_solvation_deviation', 'max_interaction_deviation', 'openmm_binding_energy',
+                 'openmm_binding_energy_without_nonpolar', 'openmm_nonpolar')
 
 
 # ==============================================================================

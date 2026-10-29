@@ -540,7 +540,9 @@ class SolvationEnergies:
     def describe(self):
         return {'polar': [m.name for m in self.polar], 'nonpolar': [m.name for m in self.nonpolar]}
 
-    def per_atom(self, positions):
+    def per_atom(self, positions, nonpolar=True):
+        """(polar, nonpolar) per-atom energies in kcal/mol; nonpolar=False
+        skips the surface-area forces and returns zeros for them."""
         if unit.is_quantity(positions):
             positions = positions.value_in_unit(unit.nanometer)
         pos = np.ascontiguousarray(np.asarray(positions, dtype=np.float64))
@@ -550,10 +552,11 @@ class SolvationEnergies:
         polar = np.zeros(self.n)
         for m in self.polar:
             polar += m.per_atom(pos)
-        nonpolar = np.zeros(self.n)
-        for m in self.nonpolar:
-            nonpolar += m.per_atom(pos)
-        return polar * KJ_TO_KCAL, nonpolar * KJ_TO_KCAL
+        nonpolar_e = np.zeros(self.n)
+        if nonpolar:
+            for m in self.nonpolar:
+                nonpolar_e += m.per_atom(pos)
+        return polar * KJ_TO_KCAL, nonpolar_e * KJ_TO_KCAL
 
 
 def group_energy(context, groups):
