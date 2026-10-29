@@ -90,6 +90,7 @@ except ImportError:
 from .inputs import InputManager, EngineMode
 from .topology import TopologyLoader
 from .trajectory import TrajectoryProcessor, reimage_molecules
+from .frames import select_frames, subset_frames
 from .interaction_entropy import (IE_SIGMA_LIMIT, METHOD_LABELS, describe,
                                   entropy_estimates, entropy_result,
                                   interaction_energies)
@@ -1970,92 +1971,37 @@ class GBSACalculator(GBSAForceManager):
     def _select_frames(self, trajectory_length, max_frames=None, frame_start=None, frame_end=None,
                       frame_stride=None, frame_selection='sequential', random_seed=42):
         """
-        Select frames based on parameters
-        
-        Parameters:
-        -----------
-        trajectory_length : int
-            Total number of frames in trajectory
-        max_frames : int, optional
-            Maximum number of frames to analyze
-        frame_start : int, optional
-            Start frame (0-indexed)
-        frame_end : int, optional
-            End frame (0-indexed)
-        frame_stride : int, optional
-            Frame stride (every Nth frame)
-        frame_selection : str
-            Selection method: 'sequential', 'equidistant', 'random'
-        random_seed : int
-            Random seed for random selection
-            
-        Returns:
-        --------
+        Trajectory frames to analyse: the range [frame_start, frame_end), then
+        frame_stride, then frame_selection over the strided frames (see
+        mmgbsa.frames.select_frames). Out-of-range frame_start/frame_end are
+        clamped with a warning.
+
+        Returns
+        -------
         list : Selected frame indices
         """
-        # Determine frame range
-        if frame_start is None:
-            frame_start = 0
-        if frame_end is None:
-            frame_end = trajectory_length
-        
-        # Validate frame range
-        frame_start = max(0, min(frame_start, trajectory_length - 1))
-        frame_end = max(frame_start + 1, min(frame_end, trajectory_length))
-        
         print(f"Frame selection parameters:")
         print(f"  • Trajectory length: {trajectory_length}")
-        print(f"  • Frame range: {frame_start} to {frame_end}")
+        print(f"  • Frame range: {frame_start if frame_start is not None else 0} to "
+              f"{frame_end if frame_end is not None else trajectory_length}")
         print(f"  • Frame stride: {frame_stride}")
         print(f"  • Selection method: {frame_selection}")
         print(f"  • Max frames: {max_frames}")
-        
-        # Generate frame indices based on selection method
-        if frame_selection == "sequential":
-            # Sequential selection with stride
-            if frame_stride is None or frame_stride <= 0:
-                frame_indices = list(range(frame_start, frame_end))
-            else:
-                frame_indices = list(range(frame_start, frame_end, frame_stride))
-                
-        elif frame_selection == "equidistant":
-            # Equidistant selection
-            if max_frames is None or max_frames <= 0:
-                max_frames = frame_end - frame_start
-            
-            step = (frame_end - frame_start) / max_frames
-            frame_indices = [frame_start + int(i * step) for i in range(max_frames)]
-            frame_indices = [min(idx, frame_end - 1) for idx in frame_indices]
-            
-        elif frame_selection == "random":
-            # Random selection
-            if max_frames is None or max_frames <= 0:
-                max_frames = frame_end - frame_start
-            
-            import random
-            random.seed(random_seed)
-            available_frames = list(range(frame_start, frame_end))
-            if frame_stride is not None and frame_stride > 1:
-                available_frames = available_frames[::frame_stride]
-            
-            frame_indices = random.sample(available_frames, min(max_frames, len(available_frames)))
-            frame_indices.sort()  # Keep chronological order
-            
-        else:
-            raise ValueError(f"Unknown frame selection method: {frame_selection}")
-        
-        # Apply max_frames limit
-        if max_frames is not None and max_frames > 0:
-            frame_indices = frame_indices[:max_frames]
-        
-        # Remove duplicates and sort
-        frame_indices = sorted(list(set(frame_indices)))
-        
+        frame_indices = select_frames(trajectory_length, max_frames, frame_start, frame_end,
+                                      frame_stride, frame_selection, random_seed)
         print(f"Selected {len(frame_indices)} frames:")
         print(f"  • Frame indices: {frame_indices[:10]}{'...' if len(frame_indices) > 10 else ''}")
         print(f"  • Frame range: {min(frame_indices)} to {max(frame_indices)}")
-        
         return frame_indices
+
+    def decomposition_frames(self, decomp_frames, frame_selection='sequential', random_seed=42):
+        """Trajectory frames of the per-residue decomposition: decomp_frames of the
+        frames this calculator analysed, chosen like frame_selection
+        (mmgbsa.frames.subset_frames). Needs a completed run()."""
+        analysed = getattr(self, 'analysed_frames', None)
+        if analysed is None:
+            raise RuntimeError("decomposition_frames needs the analysed frames of a completed run()")
+        return subset_frames(analysed, decomp_frames, frame_selection, random_seed)
 
     def validate_results(self, results_df):
         """Validate MM/GBSA results for reasonableness"""
@@ -3838,6 +3784,8 @@ class GBSACalculator(GBSAForceManager):
             original_complex_pdb = complex_pdb
         if output_dir:
             self.work_dir = Path(output_dir)
+        # a progress line every print_interval frames (at least every frame)
+        print_interval = max(1, int(print_interval or 10))
 
         log.section("Advanced MM/GBSA Analysis")
         log.info("Starting fixed enhanced MM/GBSA analysis with GBSA forces...")
@@ -4621,6 +4569,8 @@ class GBSACalculator(GBSAForceManager):
         selected_frames = self._select_frames(len(traj), max_frames, frame_start, frame_end, 
                                             frame_stride, frame_selection, random_seed)
         traj = traj[selected_frames]
+        # trajectory indices of the analysed frames; the decomposition takes a subset
+        self.analysed_frames = [int(f) for f in selected_frames]
         print(f"✓ Selected {len(traj)} frames for analysis")
         
         # Process each frame
@@ -4764,6 +4714,7 @@ class GBSACalculator(GBSAForceManager):
                 self.energies['protein'].append(protein_e)
                 self.energies['ligand'].append(ligand_e)
                 self.energies['binding'].append(binding_e)
+                self.energies['trajectory_frame'].append(int(selected_frames[i]))
 
                 self.energies['complex_nb'].append(c_nb)
                 self.energies['complex_gb'].append(c_gb)
@@ -4957,6 +4908,7 @@ class GBSACalculator(GBSAForceManager):
                 self.energies['protein'].append(protein_e)
                 self.energies['ligand'].append(ligand_e)
                 self.energies['binding'].append(binding_e)
+                self.energies['trajectory_frame'].append(int(selected_frames[i]))
                 
                 self.energies['complex_nb'].append(c_nb)
                 self.energies['complex_gb'].append(c_gb)
@@ -5431,6 +5383,10 @@ class GBSACalculator(GBSAForceManager):
                 'delta_sa': self.energies['delta_sa']
             })
             
+        if len(self.energies.get('trajectory_frame', [])) == len(self.energies['binding']):
+            # the trajectory index of each row ('frame' counts the rows)
+            data['trajectory_frame'] = self.energies['trajectory_frame']
+
         df = pd.DataFrame(data)
         
         output_file = f'fixed_enhanced_mmgbsa_results_{self.gb_model.lower()}.csv'
