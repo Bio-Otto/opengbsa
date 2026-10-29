@@ -2974,12 +2974,16 @@ class GBSACalculator(GBSAForceManager):
             modeller.delete(to_delete_solvent)
             log.info(f"Removed {len(to_delete_solvent)} solvent/ion residues")
     
-        # Create system generator
+        # Create system generator. The systems are only evaluated, never integrated:
+        # no bond constraints (a normal-mode Hessian needs every bond term, and a
+        # constrained X-H bond has none) and real atomic masses (quasi-harmonic and
+        # normal-mode entropies use them; hydrogen mass repartitioning changed
+        # them). Neither changes a potential energy term of the binding energy;
+        # only the bond energy (complex_bond) now includes the X-H bonds.
         general_kwargs = {
-            'constraints': app.HBonds,
-            'rigidWater': True,
+            'constraints': None,
+            'rigidWater': False,
             'removeCMMotion': False,
-            'hydrogenMass': 4*unit.amu
         }
         
         nonperiodic_kwargs = {
@@ -4963,17 +4967,25 @@ class GBSACalculator(GBSAForceManager):
         
         # QHA Calculation
         self.qha_entropy = 0.0
+        self.qha_delta_ts = self.qha_ts_receptor = self.qha_ts_complex = None
         if self.entropy_method == 'quasiharmonic' and len(qha_ligand_frames) > 0:
              try:
                  print("\nRunning Quasi-Harmonic Analysis (QHA)...")
                  from mmgbsa.quasi_harmonic import QuasiHarmonicAnalysis
                  combined_traj = md.join(qha_ligand_frames)
+                 self.qha_n_frames = combined_traj.n_frames
                  # Note: unit.kelvin is used in init of Core, assume self.temperature is Quantity
                  temp_K = self.temperature.value_in_unit(unit.kelvin)
                  
                  # Ligand
                  combined_traj = md.join(qha_ligand_frames)
-                 qha_lig = QuasiHarmonicAnalysis(combined_traj, ligand_system, temp_K, verbose=False)
+                 # real atomic masses of the atoms in each sliced trajectory, in its
+                 # own atom order (the Systems' masses may be repartitioned, and the
+                 # complex slice is receptor-then-ligand whatever the topology order)
+                 def element_masses(t):
+                     return [a.element.mass if a.element is not None else 0.0 for a in t.topology.atoms]
+                 qha_lig = QuasiHarmonicAnalysis(combined_traj, ligand_system, temp_K, verbose=False,
+                                                 masses=element_masses(combined_traj))
                  self.qha_entropy = qha_lig.calculate_entropy() # Ligand TS
                  print(f"  • Ligand TS: {self.qha_entropy:.2f} kcal/mol")
                  
@@ -4985,14 +4997,18 @@ class GBSACalculator(GBSAForceManager):
                       # Protein
                       # Ideally we should use verbose=True/False based on user pref, but keep log clean
                       traj_prot = md.join(qha_protein_frames)
-                      qha_prot = QuasiHarmonicAnalysis(traj_prot, protein_system, temp_K, verbose=False)
+                      qha_prot = QuasiHarmonicAnalysis(traj_prot, protein_system, temp_K, verbose=False,
+                                                       masses=element_masses(traj_prot))
                       ts_protein = qha_prot.calculate_entropy()
+                      self.qha_ts_receptor = ts_protein
                       print(f"  • Protein TS: {ts_protein:.2f} kcal/mol")
                       
                       # Complex
                       traj_complex = md.join(qha_complex_frames)
-                      qha_complex = QuasiHarmonicAnalysis(traj_complex, complex_system, temp_K, verbose=False)
+                      qha_complex = QuasiHarmonicAnalysis(traj_complex, complex_system, temp_K, verbose=False,
+                                                          masses=element_masses(traj_complex))
                       ts_complex = qha_complex.calculate_entropy()
+                      self.qha_ts_complex = ts_complex
                       print(f"  • Complex TS: {ts_complex:.2f} kcal/mol")
                       
                       # T*Delta S = TS_complex - TS_protein - TS_ligand
@@ -5443,21 +5459,31 @@ class GBSACalculator(GBSAForceManager):
              delta_ts_val = getattr(self, 'qha_delta_ts', None)
              
              print(f"\nQuasi-Harmonic Analysis Results:")
+             temp_val = self.temperature.value_in_unit(unit.kelvin)
+             entropy = {'method': 'quasiharmonic', 'label': 'Quasi-harmonic entropy',
+                        'temperature': temp_val, 'TS_ligand': ts_val,
+                        'n_frames': int(getattr(self, 'qha_n_frames', 0))}
              if delta_ts_val is not None:
                  print(f"  Ligand TS: {ts_val:.2f} kcal/mol")
                  print(f"  TΔS (Binding): {delta_ts_val:.2f} kcal/mol")
                  # TdS is negative (usually). -TdS is positive penalty.
                  # Formula: dG = dH - TdS.
-                 entropy_penalty = -delta_ts_val 
+                 entropy_penalty = -delta_ts_val
                  delta_g = mean_binding + entropy_penalty
+                 entropy.update(value=entropy_penalty, TdS_binding=delta_ts_val,
+                                TS_receptor=getattr(self, 'qha_ts_receptor', None),
+                                TS_complex=getattr(self, 'qha_ts_complex', None))
                  print(f"  Entropy Penalty (-TΔS): {entropy_penalty:.2f} kcal/mol")
                  print(f"Final Binding Free Energy (ΔG): {delta_g:.2f} kcal/mol")
              else:
                  print(f"  Absolute Vibrational Entropy (TS): {ts_val:.2f} kcal/mol")
                  print(f"  (Note: This is absolute entropy of the bound ligand, not ΔS)")
                  # We do not modify dG because we lack reference state
-                 entropy_penalty = 0.0 
+                 entropy_penalty = 0.0
                  delta_g = mean_binding
+                 # no binding entropy without qha_analyze_complex: value None, no dG
+                 entropy.update(value=None, note="absolute entropy of the bound ligand; "
+                                                 "qha_analyze_complex: true gives the binding entropy")
         else:
             print(f"\nInteraction Entropy disabled (entropy_method={self.entropy_method})")
  

@@ -235,6 +235,7 @@ class MMGBSARunner:
         log.section("STEP 3: Calculator Setup")
         
         calculator = self._setup_mmgbsa_calculator()
+        self.calculator = calculator
         
         # Step 4: Run MM/GBSA analysis
         log.section("STEP 4: MM/GBSA Analysis")
@@ -363,6 +364,7 @@ class MMGBSARunner:
                 log.success("Entropy analysis completed")
         
         # Step 6: Run per-residue decomposition (if enabled)
+        decomposition_failure = None
         if analysis_settings.get('run_per_residue_decomposition', False):
             log.section("STEP 6: Per-Residue Decomposition")
             
@@ -375,15 +377,23 @@ class MMGBSARunner:
                 'random_seed': analysis_settings.get('random_seed', 42)
             }
             
-            decomp_results = self._run_per_residue_decomposition(
+            decomp_results, decomp_error = self._run_per_residue_decomposition(
                 calculator, input_files, analysis_settings, frame_params, output_dir,
                 receptor_selection=resolved_receptor_sel,
                 ligand_selection=resolved_ligand_sel,
                 mmgbsa_results=mmgbsa_results
             )
-            if decomp_results:
+            if decomp_error is None:
+                decomp_results['status'] = 'completed'
                 self.results['decomposition'] = decomp_results
                 log.success("Per-residue decomposition completed")
+            else:
+                # never reported as success: marked in results_summary.yaml and
+                # final_report.txt; with strict_platform the run stops (below)
+                self.results['decomposition'] = {'status': 'failed', 'error': decomp_error}
+                decomposition_failure = decomp_error
+                log.error(f"PER-RESIDUE DECOMPOSITION FAILED: {decomp_error}. The MM/GBSA results "
+                          f"are complete; the per-residue results were not written.")
         
         # Step 7: Generate final report
         log.section("STEP 7: Final Report Generation")
@@ -394,7 +404,12 @@ class MMGBSARunner:
         log.section("STEP 8: Save Results")
         
         self._save_results(output_dir)
-        
+
+        if decomposition_failure and (self.config.get('platform_settings') or {}).get('strict_platform'):
+            raise RuntimeError(f"Per-residue decomposition failed ({decomposition_failure}); "
+                               f"platform_settings.strict_platform: true stops the run with an error. "
+                               f"The MM/GBSA results are in {output_dir}.")
+
         total_time = time.time() - start_time
         
         log.header("ANALYSIS COMPLETE")
@@ -473,6 +488,26 @@ class MMGBSARunner:
                     **{k: v for k, v in entropy.items() if k not in ('method', 'label', 'value')}
                 }
                 
+            elif method == 'quasiharmonic':
+                # Quasi-harmonic entropy, computed by the calculator from the
+                # covariance of the analysed frames (mmgbsa.quasi_harmonic)
+                entropy = self.results.get('mmgbsa', {}).get('entropy')
+                if not entropy or entropy.get('method') != 'quasiharmonic':
+                    log.warning("Quasi-harmonic entropy is not available from the MM/GBSA run")
+                    return None
+                if entropy.get('value') is None:
+                    log.result("Ligand TS (absolute, quasi-harmonic)", f"{entropy['TS_ligand']:.2f}", "kcal/mol")
+                    log.info("No binding entropy: set qha_analyze_complex: true for -TdS of binding")
+                else:
+                    log.result(f"{entropy['label']} (-TΔS)", f"{entropy['value']:.2f}", "kcal/mol")
+                return {
+                    'status': 'completed',
+                    'method': entropy['label'],
+                    'entropy_penalty': entropy.get('value'),
+                    'T': entropy['temperature'],
+                    **{k: v for k, v in entropy.items() if k not in ('method', 'label', 'value')}
+                }
+
             elif method in ['nmode', 'normal_mode']:
                 # Normal-mode binding entropy, computed by the calculator from the
                 # minimized complex, receptor and ligand (mmgbsa.nmode_entropy)
@@ -536,6 +571,17 @@ class MMGBSARunner:
             decomp_parameters = (decomp_complex_pdb if getattr(calculator, 'native_reduced', False)
                                  else input_files.get('complex_pdb'))
 
+            # The decomposed frames: a subset of the analysed frames (mmgbsa.frames)
+            decomposition_frames = None
+            try:
+                decomposition_frames = calculator.decomposition_frames(
+                    analysis_settings.get('decomp_frames', 10),
+                    frame_params.get('frame_selection', 'sequential'), frame_params.get('random_seed', 42))
+                log.info(f"Decomposition frames ({len(decomposition_frames)}): "
+                         f"{decomposition_frames[:10]}{' ...' if len(decomposition_frames) > 10 else ''}")
+            except Exception as e:
+                log.warning(f"Could not determine the decomposition frames: {e}")
+
             decomp_results = decomp_analyzer.run_per_residue_analysis(
                 ligand_mol=input_files.get('ligand_mol'),
                 complex_pdb=decomp_complex_pdb,
@@ -562,6 +608,13 @@ class MMGBSARunner:
             )
 
             
+            if not decomp_results or decomp_results.get('decomposition_results') is None:
+                # run_per_residue_analysis returns the MM/GBSA results when the
+                # decomposition itself failed
+                return None, ("the decomposition produced no per-residue results "
+                              "(see the errors logged above)")
+            decomp_results['frames'] = decomposition_frames
+
             # Generate Interactive HTML Report
             if decomp_results and hasattr(decomp_analyzer, 'frame_data'):
                 try:
@@ -587,18 +640,19 @@ class MMGBSARunner:
                         frame_data=decomp_analyzer.frame_data,
                         global_results=decomp_results.get('mmgbsa_results'),
                         complex_pdb_path=pandamap_path,
-                        ligand_resname=input_files.get('ligand_resname') or self.config.get('input_files', {}).get('ligand_resname')
+                        ligand_resname=input_files.get('ligand_resname') or self.config.get('input_files', {}).get('ligand_resname'),
+                        decomposition_frames=decomposition_frames
                     )
                 except Exception as e:
                     log.warning(f"Interactive report generation failed: {e}")
             
-            return decomp_results
-            
+            return decomp_results, None
+
         except Exception as e:
             import traceback
             log.error(f"Per-residue decomposition failed: {e}")
             traceback.print_exc()
-            return None
+            return None, f"{type(e).__name__}: {e}"
     
     def _generate_final_report(self, output_dir):
         """Generate comprehensive final report"""
@@ -656,6 +710,14 @@ class MMGBSARunner:
                     if 'sigma_interaction_energy' in self.results['entropy']:
                         for line in describe(self.results['entropy']):
                             f.write(f"{line}\n")
+                    if 'TS_ligand' in self.results['entropy']:
+                        e = self.results['entropy']
+                        f.write(f"Ligand TS = {e['TS_ligand']:.2f} kcal/mol (quasi-harmonic, "
+                                f"{e.get('n_frames', 0)} frames at {e['T']:.2f} K)\n")
+                        if e.get('entropy_penalty') is not None:
+                            f.write(f"-TdS (binding) = {e['entropy_penalty']:.2f} kcal/mol\n")
+                        else:
+                            f.write("No binding entropy (qha_analyze_complex: false)\n")
                     if 'n_converged' in self.results['entropy']:
                         e = self.results['entropy']
                         f.write(f"-TdS = {e['entropy_penalty']:.2f} +/- {e['sd']:.2f} kcal/mol (SD) over "
@@ -665,9 +727,14 @@ class MMGBSARunner:
                     f.write("\n")
                 
                 if 'decomposition' in self.results:
+                    decomposition = self.results['decomposition']
                     f.write("PER-RESIDUE DECOMPOSITION:\n")
                     f.write("-" * 30 + "\n")
-                    f.write("Analysis completed successfully\n\n")
+                    if decomposition.get('status') == 'failed':
+                        f.write(f"FAILED: {decomposition.get('error')}\n\n")
+                    else:
+                        frames = decomposition.get('frames')
+                        f.write("Completed" + (f" on {len(frames)} frames" if frames else "") + "\n\n")
             
             log.success(f"Final report saved: {report_file}")
             
@@ -677,10 +744,14 @@ class MMGBSARunner:
     def _save_results(self, output_dir):
         """Save all results and configuration to output directory"""
         try:
-            # Save configuration
+            # Save the effective configuration: every option with the value this
+            # run used, so the run can be repeated from the file
             config_file = output_dir / "analysis_config.yaml"
             with open(config_file, 'w', encoding='utf-8') as f:
-                yaml.dump(self.config, f, default_flow_style=False, indent=2)
+                f.write("# Effective configuration of this run: every option with the value used\n"
+                        "# (defaults filled in). Repeat the run with: opengbsa analysis_config.yaml\n")
+                yaml.safe_dump(self._sanitize_results_for_yaml(self.effective_run_config()), f,
+                               default_flow_style=False, indent=2, sort_keys=False)
             
             # Save results summary
             results_file = output_dir / "results_summary.yaml"
@@ -692,6 +763,27 @@ class MMGBSARunner:
             
         except Exception as e:
             log.error(f"Results saving failed: {e}")
+
+    def effective_run_config(self):
+        """The configuration with the values the run resolved at run time.
+
+        Options whose null means "decided by the run" get the value used:
+        max_workers, sa_model, lcpo_typing, rgbmax and solvent_dielectric (which
+        amber_compatible takes from the topology). Input paths are those used,
+        after any format conversion.
+        """
+        import copy
+        config = copy.deepcopy(self.config)
+        calculator = getattr(self, 'calculator', None)
+        if calculator is not None:
+            settings = config['analysis_settings']
+            settings['max_workers'] = calculator.max_workers
+            settings['sa_model'] = calculator.sa_model
+            settings['lcpo_typing'] = calculator.lcpo_typing
+            settings['rgbmax'] = calculator.rgbmax
+            if calculator.solvent_dielectric is not None:
+                settings['solvent_dielectric'] = float(calculator.solvent_dielectric)
+        return config
 
     def _sanitize_results_for_yaml(self, data):
         """

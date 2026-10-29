@@ -167,8 +167,9 @@ class HTMLReportGenerator:
         if isinstance(global_results, dict):
             if 'entropy' in global_results:
                 entropy = global_results['entropy']
-                if not entropy:
-                    # No entropy method was requested: no -TdS and no dG
+                if not entropy or entropy.get('value') is None:
+                    # No entropy method was requested, or it gives no binding
+                    # entropy (quasi-harmonic of the ligand alone): no -TdS, no dG
                     return None, None, None
                 neg_tds = float(entropy['value'])
                 method = entropy['label']
@@ -187,9 +188,22 @@ class HTMLReportGenerator:
 
         return neg_tds, method, delta_g
 
-    def generate_report(self, analysis_results, frame_data, global_results=None, complex_pdb_path=None, ligand_resname=None):
+    def _top_n(self):
+        """Residues shown in the top-residue plots and tables (plot_top_residues)."""
+        try:
+            return max(1, int((self.config.get('analysis_settings') or {}).get('plot_top_residues', 10)))
+        except (TypeError, ValueError):
+            return 10
+
+    def generate_report(self, analysis_results, frame_data, global_results=None, complex_pdb_path=None,
+                        ligand_resname=None, decomposition_frames=None):
         """
         Generate the publication-ready interactive HTML report.
+
+        decomposition_frames : trajectory indices of the decomposed frames, in
+            order. The time series and the heat map are drawn over these
+            trajectory frames, and the MM/GBSA rows are matched to them by the
+            trajectory_frame column of the results.
         """
         try:
             logger.info("Generating advanced HTML report...")
@@ -217,7 +231,8 @@ class HTMLReportGenerator:
             plotly_div = self._generate_plotly_div(
                 frame_data,
                 global_results=global_results,
-                analysis_results=analysis_results
+                analysis_results=analysis_results,
+                decomposition_frames=decomposition_frames
             )
             plotly_container = f'<div style="min-height: 700px; height: auto; width: 100%;">{plotly_div}</div>'
             html_content = html_content.replace('<div id="heatmap-plot" class="plot-container"></div>', plotly_container)
@@ -237,7 +252,28 @@ class HTMLReportGenerator:
         """Not used with PandaMap iframe."""
         return "// 3Dmol.js not needed (PandaMap embedded)"
 
-    def _generate_plotly_div(self, frame_data, global_results=None, analysis_results=None):
+    @staticmethod
+    def _trajectory_frames(df, decomposition_frames=None):
+        """Trajectory index of each decomposition row, or None if unknown.
+
+        'frame_index' is the trajectory index (serial decomposition) or the
+        position among the decomposed frames (parallel decomposition); the
+        latter is mapped through `decomposition_frames`.
+        """
+        frames = list(decomposition_frames) if decomposition_frames is not None else None
+        if 'frame_index' in df.columns:
+            idx = pd.to_numeric(df['frame_index'], errors='coerce')
+            if idx.notna().all():
+                idx = [int(i) for i in idx]
+                if frames and not set(idx) <= set(frames) and max(idx) < len(frames):
+                    idx = [frames[i] for i in idx]
+                return idx
+        if frames and len(frames) == len(df):
+            return frames
+        return None
+
+    def _generate_plotly_div(self, frame_data, global_results=None, analysis_results=None,
+                             decomposition_frames=None):
         """Generate publication-ready Plotly dashboard HTML."""
         if not frame_data:
             return "<div>No Data</div>"
@@ -313,24 +349,25 @@ class HTMLReportGenerator:
                 except Exception:
                     df_glob = None
 
+            # The trajectory frames of the decomposition rows: the x axis of the time
+            # series and of the heat map, and the key that matches the MM/GBSA rows
+            traj_frames = self._trajectory_frames(df, decomposition_frames)
+            if traj_frames is not None:
+                df['trajectory_frame'] = traj_frames
+
             if df_glob is not None and not df_glob.empty:
                 df_glob = df_glob.reset_index(drop=True).copy()
                 if 'binding_energy' in df_glob.columns:
                     df_glob['binding_energy'] = pd.to_numeric(df_glob['binding_energy'], errors='coerce')
-                # Align frame counts; if impossible, disable global component plots.
-                if len(df_glob) != len(df):
-                    aligned = None
-                    if 'frame_index' in df.columns:
-                        try:
-                            idx = pd.to_numeric(df['frame_index'], errors='coerce').astype('Int64')
-                            idx_list = [int(i) for i in idx.tolist() if pd.notna(i)]
-                            if len(idx_list) == len(df) and max(idx_list, default=-1) < len(df_glob):
-                                aligned = df_glob.iloc[idx_list].reset_index(drop=True)
-                        except Exception:
-                            aligned = None
-                    if aligned is None and len(df_glob) > len(df):
-                        aligned = df_glob.iloc[:len(df)].reset_index(drop=True)
-                    df_glob = aligned
+                if traj_frames is not None and 'trajectory_frame' in df_glob.columns:
+                    # the MM/GBSA row of each decomposed frame (NaN if that frame failed)
+                    df_glob = (df_glob.drop_duplicates('trajectory_frame').set_index('trajectory_frame')
+                               .reindex(traj_frames).reset_index())
+                elif len(df_glob) != len(df):
+                    # frames cannot be matched: no MM/GBSA series rather than wrong ones
+                    logger.warning("Report: the decomposed frames cannot be matched to the MM/GBSA "
+                                   "frames; the MM/GBSA time series are left out.")
+                    df_glob = None
                 if df_glob is None or 'binding_energy' not in df_glob.columns:
                     df_glob = None
 
@@ -340,7 +377,7 @@ class HTMLReportGenerator:
                 return "<div class='alert alert-warning'>No per-residue frame decomposition columns found for plotting.</div>"
 
             mean_energies = {col: pd.to_numeric(df[col], errors='coerce').mean() for col in energy_cols}
-            top_n = 20
+            top_n = self._top_n()
             sorted_residues = sorted(mean_energies.items(), key=lambda x: x[1])[:top_n]
             used_cols = set()
             selected_top = []
@@ -373,7 +410,7 @@ class HTMLReportGenerator:
                     clean_name = col.replace('_total', '').replace('_A', '')
                     selected_top.append((clean_name, col, float(mean_val)))
 
-            x_frames = df['frame_number']
+            x_frames = df['trajectory_frame'] if 'trajectory_frame' in df.columns else df['frame_number']
             plots_html = []
 
             # Build canonical component series
@@ -386,10 +423,6 @@ class HTMLReportGenerator:
                 if {'delta_vdw', 'delta_elec'}.issubset(df_glob.columns):
                     series_vdw = pd.to_numeric(df_glob['delta_vdw'], errors='coerce')
                     series_elec = pd.to_numeric(df_glob['delta_elec'], errors='coerce')
-                elif 'delta_nb' in df_glob.columns:
-                    nb = pd.to_numeric(df_glob['delta_nb'], errors='coerce')
-                    series_vdw = nb * 0.75
-                    series_elec = nb * 0.25
                 else:
                     series_vdw = df[vdw_cols].sum(axis=1) if vdw_cols else pd.Series(0.0, index=df.index)
                     series_elec = df[elec_cols].sum(axis=1) if elec_cols else pd.Series(0.0, index=df.index)
@@ -432,7 +465,7 @@ class HTMLReportGenerator:
                 fig_line.add_trace(go.Scatter(x=x_line, y=y_solv, mode='lines', name='Solvation', line=dict(color='#CC79A7', width=2.2, dash='dot')))
                 fig_line.update_layout(
                     title='Energy Components vs Time (inc. Entropy)',
-                    xaxis_title='Frame',
+                    xaxis_title='Trajectory frame',
                     yaxis_title='Energy (kcal/mol)',
                     height=700,
                     hovermode='x unified',
@@ -490,7 +523,7 @@ class HTMLReportGenerator:
             ))
             fig_heat.update_layout(
                 title='Per-Residue Interaction Energy Timeline',
-                xaxis_title='Frame Number',
+                xaxis_title='Trajectory frame',
                 yaxis_title='Residue',
                 height=900,
                 margin=dict(l=220, r=60, b=70, t=80)
@@ -670,11 +703,12 @@ class HTMLReportGenerator:
                     elec_col = 'electrostatic' if 'electrostatic' in df_sorted.columns else 'complex_electrostatic'
                     
                     if total_col in df_sorted.columns:
-                        df_sorted = df_sorted.nsmallest(10, total_col)
+                        top_n = self._top_n()
+                        df_sorted = df_sorted.nsmallest(top_n, total_col)
                         
-                        html += """
+                        html += f"""
         <div class="col-md-12" style="margin-top: 20px;">
-            <h4 style="color: #333; margin-bottom: 15px;">🔥 Top 10 Binding Hotspots - Energy Components</h4>
+            <h4 style="color: #333; margin-bottom: 15px;">🔥 Top {top_n} Binding Hotspots - Energy Components</h4>
             <table class="table table-bordered table-hover" style="background:white; border-radius:8px; overflow:hidden;">
                 <thead class="table-light">
                     <tr>
@@ -1055,7 +1089,7 @@ class HTMLReportGenerator:
             mean_energies = {col: df[col].mean() for col in energy_cols}
             
             # Sort and take top 20 (or matched to config if passed)
-            top_n = 20
+            top_n = self._top_n()
             sorted_residues = sorted(mean_energies.items(), key=lambda x: x[1])
             top_residues = sorted_residues[:top_n]
             
