@@ -23,189 +23,110 @@ from .interaction_entropy import describe, entropy_result
 from .decomposition import PerResidueDecomposition
 from .logger import ToolLogger
 from .reporting import HTMLReportGenerator
+from .config import ConfigManager, OPTIONS, effective_config
 
 # Initialize global logger
 log = ToolLogger()
+
+def make_run_directory(base_dir, prefix='analysis'):
+    """Create and return a new folder <base_dir>/<prefix>_<YYYYmmdd_HHMMSS>.
+
+    A run started in the same second as another gets the suffix _2, _3, ...
+    The folder is created with mkdir without exist_ok, so two processes
+    (e.g. a job array) never share one.
+    """
+    base = Path(base_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    n = 1
+    while True:
+        path = base / (f"{prefix}_{stamp}" if n == 1 else f"{prefix}_{stamp}_{n}")
+        try:
+            path.mkdir()
+            return path
+        except FileExistsError:
+            n += 1
+
 
 class MMGBSARunner:
     """
     Main runner class for MM/GBSA analysis with YAML configuration
     """
-    
+
     def __init__(self, config_file, output_dir=None):
         """
         Initialize runner with YAML configuration
-        
+
         Parameters:
         -----------
         config_file : str or dict
-            Path to YAML configuration file or config dictionary
+            Path to a YAML configuration file, validated as the opengbsa
+            command validates it, or a configuration dict (not validated).
         output_dir : str, optional
-            Output directory path
+            Folder of this run, used as given. Without it the run creates a new
+            folder <output_directory>/analysis_<date>_<time>/.
         """
-        if isinstance(config_file, str):
-            self.config_file = config_file
-            self.config = self._load_config()
+        if isinstance(config_file, (str, Path)):
+            self.config_file = str(config_file)
+            config = self._load_config()
         else:
             self.config_file = None
-            self.config = config_file
-        log.info(f"MMGBSARunner Initialized (Version: Fix-Decomposition-NativeMode-v3)")
-        
-        # Load analysis settings = {}
+            config = config_file
+        # Every option present, with its default where the configuration leaves it
+        # out (mmgbsa.config.OPTIONS); written to analysis_config.yaml
+        self.config = effective_config(config)
         self.results = {}
         self.output_dir = output_dir
-        
+
     def _load_config(self):
-        """Load and validate YAML configuration"""
-        try:
-            with open(self.config_file, 'r') as f:
-                config = yaml.safe_load(f)
-            
-            # Validate required sections
-            required_sections = ['input_files', 'analysis_settings']
-            for section in required_sections:
-                if section not in config:
-                    raise ValueError(f"Missing required section: {section}")
-            
-            # Set defaults for optional sections
-            if 'output_settings' not in config:
-                config['output_settings'] = {}
-            if 'advanced_settings' not in config:
-                config['advanced_settings'] = {}
-            
-            return config
-            
-        except Exception as e:
-            log.error(f"Error loading configuration: {e}")
-            sys.exit(1)
-    
+        """Load and validate a YAML configuration file (as the opengbsa command does)."""
+        manager = ConfigManager()
+        if not manager.load_config(self.config_file):
+            raise ValueError(f"Could not read the configuration file {self.config_file}")
+        if not manager.validate_config():
+            raise ValueError("Configuration validation failed:\n  - "
+                             + "\n  - ".join(manager.get_validation_errors()))
+        for warning in manager.get_validation_warnings():
+            log.warning(warning)
+        return manager.get_config()
+
     def _validate_input_files(self):
-        """Validate all input files exist"""
+        """Every input file the configuration names must exist."""
         input_files = self.config['input_files']
         missing_files = []
-        
-        for file_type, file_path in input_files.items():
-            # Skip None/null values
-            if file_path is None:
+        if not input_files.get('complex_pdb'):
+            missing_files.append("complex_pdb: not given")
+        for key, option in OPTIONS['input_files'].items():
+            file_path = input_files.get(key)
+            if not option.path or file_path is None:
                 continue
-                
-            # Skip known non-file keys
-            if file_type in ['ligand_resname', 'receptor_resname', 'ligand_charge']:
-                continue
-            
-            if not Path(file_path).exists():
-                missing_files.append(f"{file_type}: {file_path}")
-        
+            if not Path(str(file_path)).exists():
+                missing_files.append(f"{key}: {file_path}")
+
         if missing_files:
             log.error("Missing input files:")
             for missing in missing_files:
                 log.error(f"  • {missing}")
             return False
-        
+
         log.success("All required input files found")
         return True
-    
-    def _select_frames(self, trajectory_length):
-        """
-        Select frames based on configuration parameters
-        """
-        analysis_settings = self.config['analysis_settings']
-        
-        # Get frame selection parameters
-        max_frames = analysis_settings.get('max_frames', None)
-        frame_start = analysis_settings.get('frame_start', None)
-        frame_end = analysis_settings.get('frame_end', None)
-        frame_stride = analysis_settings.get('frame_stride', None)
-        frame_selection = analysis_settings.get('frame_selection', 'sequential')
-        random_seed = analysis_settings.get('random_seed', 42)
-        
-        # Determine frame range
-        if frame_start is None:
-            frame_start = 0
-        if frame_end is None:
-            frame_end = trajectory_length
-        
-        # Validate frame range
-        frame_start = max(0, min(frame_start, trajectory_length - 1))
-        frame_end = max(frame_start + 1, min(frame_end, trajectory_length))
-        
-        log.info("Frame selection parameters:")
-        log.result("Trajectory length", trajectory_length)
-        log.result("Frame range", f"{frame_start} to {frame_end}")
-        log.result("Selection method", frame_selection)
-        
-        # ... (Selection logic remains same) ...
-        # Generate frame indices based on selection method
-        if frame_selection == "sequential":
-            if frame_stride is None or frame_stride <= 0:
-                frame_indices = list(range(frame_start, frame_end))
-            else:
-                frame_indices = list(range(frame_start, frame_end, frame_stride))
-                
-        elif frame_selection == "equidistant":
-            if max_frames is None or max_frames <= 0:
-                max_frames = frame_end - frame_start
-            
-            step = (frame_end - frame_start) / max_frames
-            frame_indices = [frame_start + int(i * step) for i in range(max_frames)]
-            frame_indices = [min(idx, frame_end - 1) for idx in frame_indices]
-            
-        elif frame_selection == "random":
-            if max_frames is None or max_frames <= 0:
-                max_frames = frame_end - frame_start
-            
-            import random
-            random.seed(random_seed)
-            available_frames = list(range(frame_start, frame_end))
-            if frame_stride is not None and frame_stride > 1:
-                available_frames = available_frames[::frame_stride]
-            
-            frame_indices = random.sample(available_frames, min(max_frames, len(available_frames)))
-            frame_indices.sort()  # Keep chronological order
-            
-        else:
-            raise ValueError(f"Unknown frame selection method: {frame_selection}")
-        
-        # Apply max_frames limit
-        if max_frames is not None and max_frames > 0:
-            frame_indices = frame_indices[:max_frames]
-        
-        # Remove duplicates and sort
-        frame_indices = sorted(list(set(frame_indices)))
-        
-        log.success(f"Selected {len(frame_indices)} frames for analysis")
-        
-        return frame_indices
-    
+
     def _create_output_directory(self):
-        """Create output directory with timestamp"""
+        """The run folder: output_dir as given, else a new timestamped folder."""
         if self.output_dir is None:
-            # The documented/canonical config schema (config_master.yaml, the
-            # README quick-start, and every real user config) puts this under
-            # 'params.output_directory'. 'output_settings.output_directory' is
-            # an older/alternate key kept only as a fallback for configs that
-            # use it; ConfigManager.get_config() does not normalize between
-            # the two, so both must be checked here rather than assuming
-            # 'output_settings' exists (indexing it directly crashes with a
-            # KeyError for any config following the documented schema).
-            output_dir = (
-                self.config.get('params', {}).get('output_directory')
-                or self.config.get('output_settings', {}).get('output_directory')
-                or 'mmgbsa_results'
-            )
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_path = Path(output_dir) / f"analysis_{timestamp}"
+            base = self.config.get('output_settings', {}).get('output_directory') or 'mmgbsa_results'
+            output_path = make_run_directory(base, 'analysis')
         else:
             output_path = Path(self.output_dir)
-        
-        output_path.mkdir(parents=True, exist_ok=True)
-        
+            output_path.mkdir(parents=True, exist_ok=True)
+
         # Update instance variable so it can be retrieved
         self.output_dir = output_path
-        
+
         log.info(f"Output directory established: {output_path}")
         return output_path
-    
+
     def _setup_mmgbsa_calculator(self):
         """Setup MM/GBSA calculator with configuration"""
         analysis_settings = self.config['analysis_settings']
@@ -218,6 +139,7 @@ class MMGBSARunner:
             salt_concentration=analysis_settings.get('salt_concentration', 0.15),
             max_workers=analysis_settings.get('max_workers', None),
             protein_forcefield=forcefield_settings.get('protein_forcefield', 'amber'),
+            charge_method=analysis_settings.get('charge_method', 'am1bcc'),
             solute_dielectric=analysis_settings.get('solute_dielectric', 1.0),
             solvent_dielectric=analysis_settings.get('solvent_dielectric', None),   # 78.5, or MMPBSA.py's with amber_compatible
             entropy_method=(analysis_settings.get('entropy_method', 'interaction')
@@ -307,21 +229,10 @@ class MMGBSARunner:
         input_files = self.config['input_files']
         analysis_settings = self.config['analysis_settings']
         
-        # GROMACS SMART DETECTION (Swap PDB for TOP if available)
+        # A .pdb complex is Coordinate Mode. GROMACS Native Mode is chosen by giving
+        # the .top as complex_pdb; a .top next to a .pdb no longer switches the mode.
         complex_pdb = input_files.get('complex_pdb')
-        if complex_pdb and str(complex_pdb).endswith('.pdb'):
-            from pathlib import Path
-            pdb_path = Path(complex_pdb)
-            # Check for .top with same basename
-            candidate_top = pdb_path.with_suffix('.top')
-            if candidate_top.exists():
-                log.warning(f"Found GROMACS topology {candidate_top.name} matching input PDB.")
-                log.warning("Switching input to .top file to enable Native GROMACS Mode.")
-                complex_pdb = str(candidate_top)
-                input_files['complex_pdb'] = complex_pdb
-                # Also ensure we don't have conflicting ligand_mol if we are going native
-                # Native mode handles ligands via topology
-        
+
         # GROMACS AUTO-CONVERSION CHECK
         if complex_pdb and str(complex_pdb).endswith('.top'):
             log.info("Detected GROMACS topology (.top). Attempting auto-conversion to Amber format...")
@@ -437,11 +348,7 @@ class MMGBSARunner:
                 log.success("Entropy analysis completed")
         
         # Step 6: Run per-residue decomposition (if enabled)
-        # Step 6: Run per-residue decomposition (if enabled)
-        advanced_settings = self.config.get('advanced_settings', {})
-        if (analysis_settings.get('run_per_residue_decomposition', False) or 
-            analysis_settings.get('per_residue_decomposition', False) or
-            advanced_settings.get('run_per_residue_decomposition', False)):
+        if analysis_settings.get('run_per_residue_decomposition', False):
             log.section("STEP 6: Per-Residue Decomposition")
             
             # Get frame parameters for per-residue decomposition
@@ -814,80 +721,38 @@ class MMGBSARunner:
         return str(data)
 
 
-def create_sample_config():
-    """Create a sample YAML configuration file"""
-    sample_config = {
-        'input_files': {
-            'ligand_mol': 'test/ligand.sdf',
-            'complex_pdb': 'test/complex.pdb',
-            'ligand_pdb': 'test/ligand.pdb',
-            'trajectory': 'test/complex.xtc'
-        },
-        'analysis_settings': {
-            'temperature': 300,
-            'gb_model': 'OBC2',
-            'salt_concentration': 0.15,
-            'max_frames': 50,
-            'verbose': 1,
-            'use_cache': True,
-            'parallel_processing': False,
-            'energy_decomposition': False,
-            'run_entropy_analysis': False,
-            'run_per_residue_decomposition': False,
-            'decomp_frames': 10
-        },
-        'output_settings': {
-            'output_directory': 'mmgbsa_results',
-            'save_plots': True,
-            'save_trajectories': False
-        },
-        'advanced_settings': {
-            'minimization_tolerance': 1e-6,
-            'nma_quality_threshold': 'Good',
-            'hot_spot_threshold': -1.0
-        }
-    }
-    
-    return sample_config
-
-
 def main():
-    """Main entry point"""
+    """`python -m mmgbsa.runner config.yaml`: the same run as `opengbsa config.yaml`."""
     parser = argparse.ArgumentParser(description='MM/GBSA Analysis Runner')
     parser.add_argument('config_file', nargs='?', help='YAML configuration file')
     parser.add_argument('--create-config', action='store_true', help='Create sample configuration file')
     parser.add_argument('--config-name', default='mmgbsa_config.yaml', help='Name for sample config file')
-    
+
     args = parser.parse_args()
-    
+
     if args.create_config:
-        # Create sample configuration
-        sample_config = create_sample_config()
-        with open(args.config_name, 'w', encoding='utf-8') as f:
-            yaml.dump(sample_config, f, default_flow_style=False, indent=2)
+        ConfigManager().create_default_config(args.config_name)
         log.success(f"Sample configuration created: {args.config_name}")
-        print("Edit this file with your specific parameters and run:")
-        print(f"python mmgbsa_runner.py {args.config_name}")
+        print(f"Edit this file with your specific parameters and run: opengbsa {args.config_name}")
         return
-    
+
     if not args.config_file:
         log.error("Please provide a configuration file or use --create-config")
         print("Usage:")
-        print("  python mmgbsa_runner.py config.yaml")
-        print("  python mmgbsa_runner.py --create-config")
-        return
-    
-    # Run analysis
-    runner = MMGBSARunner(args.config_file)
+        print("  python -m mmgbsa.runner config.yaml")
+        print("  python -m mmgbsa.runner --create-config")
+        sys.exit(1)
+
+    try:
+        runner = MMGBSARunner(args.config_file)
+    except ValueError as e:
+        log.error(str(e))
+        sys.exit(1)
     results = runner.run_analysis()
-    
-    if results:
-        pass # Already logged by runner
-    else:
+    if not results:
         log.error("Analysis failed!")
         sys.exit(1)
 
 
 if __name__ == '__main__':
     main()
- 

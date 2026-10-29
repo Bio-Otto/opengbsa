@@ -46,7 +46,9 @@ def test_gb_model_defaults_to_obc2(make_config):
 def test_empty_section_is_an_empty_section(make_config):
     manager, ok = make_config("  max_frames: 10\n", "platform_settings:\n")
     assert ok, manager.get_validation_errors()
-    assert manager.get_config()["platform_settings"] == {}
+    # an empty section takes the default of each of its options
+    assert manager.get_config()["platform_settings"] == {
+        "preferred_platform": None, "decomposition_platform": None, "strict_platform": False}
 
 
 @pytest.mark.parametrize("key,value", [("frame_selection", "every_other"),

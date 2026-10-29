@@ -1448,6 +1448,16 @@ _KCAL = unit.kilocalories_per_mole
 _INTERNAL_GROUPS = (10, 11, 12, 13, 14)   # bond, angle, torsion, RB torsion, CMAP
 
 
+def _platform_name(name):
+    """Canonical OpenMM platform name in any case ('cuda' -> 'CUDA'); None for
+    null/'auto'; an unknown name is returned unchanged."""
+    from .config import canonical_platform
+    try:
+        return canonical_platform(name)
+    except ValueError:
+        return name
+
+
 def _force_groups(system):
     """The force groups present in a System, as a sorted tuple."""
     return tuple(sorted({f.getForceGroup() for f in system.getForces()}))
@@ -1580,13 +1590,12 @@ def _frame_worker_process(args):
 class GBSACalculator(GBSAForceManager):
     """Advanced True Force Field MMGBSA Calculator"""
 
-    # Partial-charge method of the OpenFF parameterisation of a residue that the
-    # protein force field lacks (and of parameterize_ligand_openff). Ligands built
-    # from a ligand_mol file keep the file's charges (MMFF94 if it has none).
-    OPENFF_CHARGE_METHOD = 'am1bcc'
+    # charge_method: partial charges given to a Coordinate-Mode ligand whose file has
+    # none, and to residues the protein force field lacks (parameterised with OpenFF)
+    CHARGE_METHODS = ('am1bcc', 'mmff94', 'gasteiger')
 
     def __init__(self, temperature=300, verbose=True, gb_model='OBC2', salt_concentration=0.15,
-                 max_workers=None, protein_forcefield='amber',
+                 max_workers=None, protein_forcefield='amber', charge_method='am1bcc',
              solute_dielectric=1.0, solvent_dielectric=None, entropy_method='none', decomposition_method='full',
              platform=None, sa_model=None, nonbonded_cutoff=None,
              reimage_trajectory=True, charmm_params=None, charmm_coordinates=None,
@@ -1610,6 +1619,11 @@ class GBSACalculator(GBSAForceManager):
              The frames are split over workers whenever the platform is CPU.
         protein_forcefield : str
              Protein forcefield to use ('amber', etc.)
+        charge_method : str
+             Coordinate Mode: partial charges ('am1bcc', 'mmff94' or 'gasteiger',
+             OpenFF toolkit) of a ligand_mol whose file has none and of residues
+             the protein force field lacks. Charges in the ligand file are kept.
+             A failing method is an error, not a fallback.
         solute_dielectric : float
              Solute dielectric constant (default 1.0)
         solvent_dielectric : float
@@ -1686,6 +1700,11 @@ class GBSACalculator(GBSAForceManager):
         self.protein_forcefield = pff
         # Support user-defined ligand forcefield (openff, gaff)
         self.ligand_forcefield = 'openff' 
+        charge_method = str(charge_method or 'am1bcc').strip().lower()
+        if charge_method not in self.CHARGE_METHODS:
+            raise ValueError(f"charge_method must be one of {list(self.CHARGE_METHODS)}, "
+                             f"not '{charge_method}'")
+        self.charge_method = charge_method
         self.solute_dielectric = solute_dielectric
         # amber_compatible reproduces Amber MMPBSA.py's GB conventions: LCPO non-polar
         # term, effective Born radii only within rgbmax = 25 A, and MMPBSA.py's solvent
@@ -1775,8 +1794,10 @@ class GBSACalculator(GBSAForceManager):
             return
         
         if isinstance(platform_settings, dict):
-            self.preferred_platform = platform_settings.get('preferred_platform')
-            self.decomposition_platform = platform_settings.get('decomposition_platform')
+            # OpenMM platform names in any case ('cuda' -> 'CUDA'); an unknown name
+            # is kept and reported as unusable by setup_optimized_platform
+            self.preferred_platform = _platform_name(platform_settings.get('preferred_platform'))
+            self.decomposition_platform = _platform_name(platform_settings.get('decomposition_platform'))
             self.strict_platform = bool(platform_settings.get('strict_platform', False))
             
             if self.preferred_platform:
@@ -2469,22 +2490,7 @@ class GBSACalculator(GBSAForceManager):
         
         # Create force field and parameterize
         try:
-            # Explicitly assign charges first
-            log.process(f"Assigning partial charges using {self.OPENFF_CHARGE_METHOD}...")
-            if self.OPENFF_CHARGE_METHOD in ['am1bcc', 'gasteiger']:
-                self.physics_assumptions.append(f"Ligand Parameterization: Missing explicit quantum RESP charges in native structural matrix. Approximated via empirical '{self.OPENFF_CHARGE_METHOD}' derivation.")
-            try:
-                mol.assign_partial_charges(partial_charge_method=self.OPENFF_CHARGE_METHOD)
-                log.info("Charges assigned successfully")
-            except Exception as e:
-                if self.OPENFF_CHARGE_METHOD == 'am1bcc':
-                    log.warning(f"AM1-BCC failed: {e}")
-                    log.info("Retrying with 'gasteiger' charges as fallback...")
-                    self.physics_assumptions.append("Ligand Parameterization: Standard AM1-BCC empirical mapping failed. Falling back to extreme basic 'gasteiger' approximations.")
-                    mol.assign_partial_charges(partial_charge_method='gasteiger')
-                    log.info("Gasteiger charges assigned successfully")
-                else:
-                    raise e
+            self.assign_ligand_charges(mol, ligand_mol)
 
             # Use SystemGenerator for robust handling of both OpenFF and GAFF
             # and crucially to handle Implicit Solvent automatically via factory
@@ -2775,7 +2781,7 @@ class GBSACalculator(GBSAForceManager):
                     for res_name in unique_missing:
                         log.process(f"Parameterizing {res_name}...")
                         xml_out = param_engine.work_dir / f"{res_name}.xml"
-                        xml_path, h_pdb_path = param_engine.simple_run(complex_pdb, res_name, xml_out, charge_method=self.OPENFF_CHARGE_METHOD)
+                        xml_path, h_pdb_path = param_engine.simple_run(complex_pdb, res_name, xml_out, charge_method=self.charge_method)
                         forcefield.loadFile(str(xml_path))
                         log.success(f"Generated XML parameters for {res_name} (PDB unchanged)")
                     
@@ -2819,6 +2825,37 @@ class GBSACalculator(GBSAForceManager):
         print(f"✓ Total protein preparation time: {total_time:.1f}s")
         
         return protein_gbsa_system, protein_top, protein_pos, complex_pdb
+
+    def assign_ligand_charges(self, molecule, source=None):
+        """Give an OpenFF Molecule partial charges, unless its file had them.
+
+        Charges read from the ligand file are kept. Otherwise `charge_method`
+        (am1bcc, mmff94 or gasteiger) assigns them; when that method fails the
+        run stops with an error that says how to avoid it, instead of falling
+        back to another method. Returns the method used ('file' for the file's
+        charges) and records it in physics_assumptions.
+        """
+        name = Path(str(source)).name if source else 'the ligand'
+        if molecule.partial_charges is not None:
+            log.info(f"Ligand partial charges: kept from {name}")
+            self.ligand_charge_source = 'file'
+            return 'file'
+        method = self.charge_method
+        log.process(f"{name} has no partial charges; assigning {method} charges (charge_method)...")
+        try:
+            molecule.assign_partial_charges(partial_charge_method=method)
+        except Exception as e:
+            need = (" AM1-BCC needs AmberTools (sqm) or the OpenEye toolkit." if method == 'am1bcc' else "")
+            raise RuntimeError(
+                f"charge_method '{method}' could not assign partial charges to {name}: {e}.{need} "
+                f"Put partial charges in the ligand file (.sdf), or set "
+                f"analysis_settings.charge_method to mmff94 (or gasteiger).") from e
+        log.success(f"Ligand partial charges: {method}")
+        self.ligand_charge_source = method
+        note = f"Ligand partial charges: {method} (charge_method), the ligand file had none."
+        if note not in self.physics_assumptions:
+            self.physics_assumptions.append(note)
+        return method
 
     def get_ligand_positions_openmm(self, ligand_mol_obj, ligand_pdb):
         """Get ligand positions, preferring PDB but falling back to Molecule conformer if atom count mismatches"""
@@ -2943,17 +2980,10 @@ class GBSACalculator(GBSAForceManager):
                 
             molecules_list = [ligand_mol_obj]
             
-            # The ligand keeps the partial charges of its file. A file without charges
-            # gets MMFF94 charges (Gasteiger if MMFF94 fails), which avoids the slow
-            # AM1-BCC charges SystemGenerator would otherwise compute.
-            if ligand_mol_obj.partial_charges is None:
-                log.process("The ligand file has no partial charges; assigning MMFF94 charges "
-                            "(Gasteiger if MMFF94 fails)...")
-                try:
-                    ligand_mol_obj.assign_partial_charges(partial_charge_method='mmff94')
-                except Exception as e:
-                     log.warning(f"MMFF94 failed: {e}. Trying Gasteiger...")
-                     ligand_mol_obj.assign_partial_charges(partial_charge_method='gasteiger')
+            # The ligand keeps the partial charges of its file; a file without
+            # charges gets charge_method charges (SystemGenerator uses the
+            # molecule's charges when it has them)
+            self.assign_ligand_charges(ligand_mol_obj, ligand_mol)
             
             # Identify and delete existing ligand from PDB
             ligand_resname_extracted = self.find_ligand_resname(modeller.topology)
@@ -3291,7 +3321,7 @@ class GBSACalculator(GBSAForceManager):
                                   ("Environment platform", env_pref)):
             if not requested or str(requested).lower() == 'auto':
                 continue
-            requested = str(requested)
+            requested = _platform_name(requested) or str(requested)
             properties = _props(requested)
             platform = _can_use_platform(requested, properties)
             if platform is not None:
