@@ -20,17 +20,12 @@ class GromacsPreprocessor:
     to enable Native Amber Mode processing in MM/GBSA.
     """
     
-    # Standard Amber GB-model-to-radii-set pairing (see e.g. Amber Reference
-    # Manual / MMPBSA.py docs): HCT/GBn pair with 'mbondi', OBC1/OBC2 with
-    # 'mbondi2', GBn2 with 'mbondi3'. Kept in sync with the identical mapping
-    # in mmgbsa_core.py's StructureManager._GB_MODEL_RADII_SET.
-    _GB_MODEL_RADII_SET = {
-        'HCT': 'mbondi',
-        'OBC1': 'mbondi2',
-        'OBC2': 'mbondi2',
-        'GBn': 'mbondi',
-        'GBn2': 'mbondi3',
-    }
+    # The radii set of each GB model, as in mmgbsa_core.py's
+    # StructureManager._GB_MODEL_RADII_SET: GBn is bondi, as Amber recommends
+    # and as its neck correction needs (mbondi's 0.8 A hydrogens lie outside
+    # its 1-2 A range).
+    from .mmgbsa_core import StructureManager as _StructureManager
+    _GB_MODEL_RADII_SET = dict(_StructureManager._GB_MODEL_RADII_SET)
 
     @staticmethod
     def convert_to_amber(topology_file, coordinate_file, output_dir=None, gb_model='OBC2'):
@@ -67,11 +62,13 @@ class GromacsPreprocessor:
         topology_file = Path(topology_file).resolve()
         coordinate_file = Path(coordinate_file).resolve()
         
+        # The converted files go to output_dir (the run folder), never next to the
+        # input; without one, to a new temporary folder
         if output_dir is None:
-            output_dir = topology_file.parent
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
+            import tempfile
+            output_dir = Path(tempfile.mkdtemp(prefix='opengbsa_gromacs_'))
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
             
         stem = topology_file.stem
         
@@ -84,13 +81,9 @@ class GromacsPreprocessor:
         log.info(f"Auto-converting Gromacs files: {topology_file.name} -> Amber format")
         
         try:
-            # 1. Load System
-            # Pre-Sanitize to fix indented includes
-            GromacsPreprocessor.sanitize_topology(str(topology_file))
-            
-            # Note: Requires ParmEd with indented include fix?
-            # We assume ParmEd is patched or input is clean.
-            gmx = pmd.gromacs.GromacsTopologyFile(str(topology_file), xyz=str(coordinate_file))
+            # 1. Load System (from a sanitized copy if its includes are indented)
+            readable_top = GromacsPreprocessor.sanitize_topology(str(topology_file), output_dir)
+            gmx = pmd.gromacs.GromacsTopologyFile(str(readable_top), xyz=str(coordinate_file))
 
             # 1b. Assign real GB radii (see docstring: GROMACS topologies have
             # none of their own) BEFORE saving, so every downstream .prmtop
@@ -143,40 +136,40 @@ class GromacsPreprocessor:
             raise e
 
     @staticmethod
-    def sanitize_topology(topology_path):
+    def sanitize_topology(topology_path, output_dir):
         """
-        Sanitizes Gromacs topology file to ensure compatibility with ParmEd.
-        Specific fixes:
-        1. Removes leading whitespace before #include handling (ParmEd parser issue).
+        The path of a version of the GROMACS topology that ParmEd can read.
+
+        ParmEd's preprocessor does not accept an indented #include. When the
+        topology has one, a copy without the indentation is written to
+        `output_dir`, with every relative #include that exists next to the
+        original made absolute so that it is still found. The input file is
+        never changed. Returns the original path when no change is needed.
         """
-        try:
-            with open(topology_path, 'r') as f:
-                lines = f.readlines()
-            
-            changed = False
-            new_lines = []
-            for line in lines:
-                # Fix indented includes
-                if line.strip().startswith('#include') and line.startswith(' '):
-                    new_lines.append(line.strip() + '\n')
-                    changed = True
-                else:
-                    new_lines.append(line)
-            
-            if changed:
-                log.info(f"Sanitizing topology: Fixed indented includes in {topology_path}")
-                # Create backup
-                backup = str(topology_path) + ".bak"
-                if not os.path.exists(backup):
-                    with open(backup, 'w') as f:
-                        f.writelines(lines)
-                
-                # Overwrite with fixed content
-                with open(topology_path, 'w') as f:
-                    f.writelines(new_lines)
-                    
-        except Exception as e:
-            log.warning(f"Failed to sanitize topology: {e}")
+        topology_path = Path(topology_path)
+        with open(topology_path, 'r') as f:
+            lines = f.readlines()
+        if not any(line.strip().startswith('#include') and line[:1].isspace() for line in lines):
+            return topology_path
+
+        new_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('#include'):
+                quoted = stripped[len('#include'):].strip()
+                name = quoted.strip('"<>')
+                candidate = topology_path.parent / name
+                if not Path(name).is_absolute() and candidate.exists():
+                    stripped = f'#include "{candidate.resolve()}"'
+                new_lines.append(stripped + '\n')
+            else:
+                new_lines.append(line)
+        sanitized = Path(output_dir) / f"{topology_path.stem}_sanitized.top"
+        with open(sanitized, 'w') as f:
+            f.writelines(new_lines)
+        log.info(f"Indented #include lines in {topology_path.name}: reading a sanitized copy, "
+                 f"{sanitized}")
+        return sanitized
 
     @staticmethod
     def fix_torsions(file_list):

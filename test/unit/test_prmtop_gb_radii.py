@@ -66,3 +66,12 @@ def test_gbn_falls_back_outside_neck_range(mbondi_peptide):
     st.atoms[0].solvent_radius = 0.8      # e.g. an mbondi hydroxyl H
     assert StructureManager.gb_radii_decision(st, "GBn", amber_native=True) == "bondi"
     assert StructureManager.gb_radii_decision(st, "OBC2", amber_native=True) is None
+
+
+def test_converters_use_the_radii_sets_of_the_calculator():
+    """GROMACS .top and OpenMM .xml input get the radii set of each GB model that every
+    other input gets (GBn: bondi; the converters used mbondi before 0.0.23)."""
+    from mmgbsa.conversion import GromacsPreprocessor
+    from mmgbsa.mmgbsa_core import StructureManager
+    assert GromacsPreprocessor._GB_MODEL_RADII_SET == StructureManager._GB_MODEL_RADII_SET
+    assert StructureManager._GB_MODEL_RADII_SET["GBn"] == "bondi"

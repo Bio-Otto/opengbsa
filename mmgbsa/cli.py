@@ -14,11 +14,15 @@ from ._version import __version__, __author__, __email__, __link__, __license__
 
 try:
     from .config import ConfigManager
-    from .runner import MMGBSARunner
-    from .utils import setup_logging, create_output_directory, check_dependencies
+    from .runner import MMGBSARunner, make_run_directory
+    from .utils import setup_logging, check_dependencies
 except ImportError:
     # Fallback for direct execution
     pass
+
+DEFAULT_CONFIG_NAME = "mmgbsa_config.yaml"
+COMPLETE_CONFIG_NAME = "complete_mmgbsa_config.yaml"
+
 
 def create_parser() -> argparse.ArgumentParser:
     """Create command line argument parser."""
@@ -29,7 +33,7 @@ def create_parser() -> argparse.ArgumentParser:
 Examples:
   # Write a configuration template: minimal, or with every option explained
   opengbsa --create-config
-  opengbsa --create-complete-config
+  opengbsa --create-complete-config my_config.yaml
 
   # Run an analysis defined by a configuration file
   opengbsa config.yaml
@@ -57,14 +61,15 @@ Documentation: https://opengbsa.readthedocs.io/
     # Options
     parser.add_argument(
         '--create-config',
-        action='store_true',
-        help='Create default configuration file'
+        nargs='?', const=DEFAULT_CONFIG_NAME, default=None, metavar='PATH',
+        help=f'Create a short configuration file (default PATH: {DEFAULT_CONFIG_NAME})'
     )
     
     parser.add_argument(
         '--create-complete-config',
-        action='store_true',
-        help='Create complete configuration file with all options'
+        nargs='?', const=COMPLETE_CONFIG_NAME, default=None, metavar='PATH',
+        help=f'Create a configuration file with every option and its default '
+             f'(default PATH: {COMPLETE_CONFIG_NAME})'
     )
     
     parser.add_argument(
@@ -186,15 +191,21 @@ def fetch_test_data_command(only: Optional[str] = None, force: bool = False):
           f"available under {data_root() / 'test' / 'data'}")
     return 0
 
-def create_config_command(complete: bool = False):
-    """Create configuration command."""
-    config_name = "complete_mmgbsa_config.yaml" if complete else "mmgbsa_config.yaml"
+def create_config_command(complete: bool = False, path: Optional[str] = None):
+    """Create configuration command: write the template to `path`."""
+    config_name = path or (COMPLETE_CONFIG_NAME if complete else DEFAULT_CONFIG_NAME)
     
     if os.path.exists(config_name):
-        response = input(f"{config_name} already exists. Overwrite? (y/N): ")
+        try:
+            response = input(f"{config_name} already exists. Overwrite? (y/N): ")
+        except EOFError:
+            response = ''
         if response.lower() != 'y':
             print("Configuration creation cancelled.")
             return 0
+    parent = os.path.dirname(config_name)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     
     config_manager = ConfigManager()
     success = False
@@ -236,7 +247,7 @@ def run_analysis_command(config_file: str, complete: bool = False, output_dir: O
     output_path = None
     if output_dir is not None:
         try:
-            output_path = create_output_directory(output_dir)
+            output_path = str(make_run_directory(output_dir, 'mmgbsa_analysis'))
         except Exception as e:
             print(f"✗ Error creating output directory: {e}")
             return 1
@@ -295,10 +306,10 @@ def main():
         return fetch_test_data_command(only=args.only, force=args.force_refetch)
 
     if args.create_config:
-        return create_config_command(complete=False)
+        return create_config_command(complete=False, path=args.create_config)
     
     if args.create_complete_config:
-        return create_config_command(complete=True)
+        return create_config_command(complete=True, path=args.create_complete_config)
     
     # Handle main analysis command
     if not args.config_file:

@@ -1,10 +1,17 @@
 Output files
 ============
 
+.. _opt-output_directory:
+
 Every run writes its results to a new folder,
 ``<output_directory>/analysis_<date>_<time>/`` (or
 ``<DIR>/mmgbsa_analysis_<date>_<time>/`` with ``--output-dir DIR``), so runs
-never overwrite each other. The files below are those of the
+never overwrite each other. ``output_directory`` is the only option of
+``output_settings``; its default is ``mmgbsa_results``, relative to the folder
+from which ``opengbsa`` is started. Two runs started in the same second get
+folders ending in ``_2``, ``_3`` and so on.
+
+The files below are those of the
 :doc:`../quickstart`, which uses the OBC2 model, the per-residue decomposition
 and the entropy estimate.
 
@@ -23,6 +30,7 @@ and the entropy estimate.
     ├── frame_by_frame_decomposition_residue_summary.csv  column index of the file above
     ├── binding_hot_spots.csv                           residues that contribute most
     ├── decomposition_summary.csv                       sum and top residue
+    ├── decomposition_energy_check.csv                  decomposed vs OpenMM energies, per frame
     ├── per_residue_decomposition.png                   hot-spot plots
     ├── per_residue_heatmap.png                         top residues frame by frame
     ├── interactive_report.html                         all results in one web page
@@ -119,20 +127,70 @@ over the decomposed frames and its standard deviation (``_std`` columns):
 
 ``total`` is the value shown in the plots and the PyMOL view; adding
 ``nonpolar_solvation`` gives the residue's full share including the surface
-term. Negative values favour binding. The sum over the receptor residues is not
-expected to equal the binding enthalpy: as in Amber's per-residue
-decomposition, each receptor-ligand pair term is split equally between the
-receptor residue and the ligand, and the ligand's share is not listed.
+term. Negative values favour binding.
+
+The van der Waals, electrostatic and polar terms come from the OpenMM systems
+of the MM/GBSA calculation itself, so they follow the run's GB model,
+``rgbmax``, salt concentration and dielectric constants. The van der Waals and
+electrostatic terms are half of each pair energy between the residue and the
+ligand. The polar term is the change of the residue's atoms between the complex
+and the receptor; an atom's GB energy is its self term plus half of each of its
+pair terms. Amber MMPBSA.py splits the terms the same way.
+
+The non-polar term depends on ``amber_compatible``. By default it is the change
+of the residue's atoms in the run's own surface-area energy (``sa_model``,
+``lcpo_typing``). With ``amber_compatible: true`` it follows MMPBSA.py's
+decomposition instead: MMPBSA.py always decomposes the non-polar term with a
+numerical surface (sander ``gbsa=2``), not with LCPO. OpenGBSA then uses the
+change of each atom's numerical (Shrake-Rupley) surface area between the
+complex and the receptor, times 0.0072 kcal/mol/Å². As in Amber, these terms do
+not add up to the LCPO term of the binding energy.
+
+The sum over the receptor residues is not the binding enthalpy: the ligand
+keeps the other half of each pair term and its own solvation change. With the
+ligand's share added, the decomposition gives the binding energy of every
+decomposed frame term by term (without ``amber_compatible``; with it, all terms
+except the non-polar one). ``decomposition_energy_check.csv`` lists, per frame,
+the receptor and ligand sums, the decomposed binding energy, OpenMM's binding
+energy for the same coordinates, both with and without the non-polar term, and
+the largest difference between the per-atom solvation energies and OpenMM's GB
+and surface-area energies. A failed decomposition is reported as an error and
+writes no per-residue files.
 ``frame_by_frame_decomposition.csv`` gives the same terms for every frame, in
 columns named ``<NAME><NUMBER>_<CHAIN>_<term>``.
 ``binding_hot_spots.csv`` lists the residues with the largest contributions,
-and ``decomposition_summary.csv`` gives their sum and the top residue.
+and ``decomposition_summary.csv`` gives their sum, the top residue and the mean
+decomposed and OpenMM binding energies.
 
 Plots and reports
 -----------------
 
 The plots, the interactive HTML report and the PyMOL view are shown in
 :doc:`visualization`.
+
+.. _opt-reporting:
+
+The options of ``reporting_settings`` shape the interactive report
+``interactive_report.html``, which the per-residue decomposition writes:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 16 56
+
+   * - Option
+     - Default
+     - Meaning
+   * - ``include_all_plots``
+     - ``true``
+     - ``false`` keeps only the heat map of the top residues and leaves out
+       the time series, the distributions and the bar charts.
+   * - ``export_format``
+     - ``png``
+     - The format of the plots' download button, any image format of Plotly
+       (``png``, ``svg``, ``jpeg``, ``webp``).
+   * - ``export_width``, ``export_height``
+     - ``4200``, ``2800``
+     - The size of a downloaded plot in pixels.
 
 Intermediate files
 ------------------

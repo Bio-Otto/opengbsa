@@ -105,6 +105,8 @@ A ``.tpr`` is read directly with TprParser. For CHARMM force fields use the
 type and so cannot apply CHARMM's pair-specific corrections (NBFIX). OpenGBSA
 warns in that case.
 
+.. _charmm-namd:
+
 CHARMM / NAMD
 ~~~~~~~~~~~~~
 
@@ -145,6 +147,8 @@ exactly. A ``CustomNonbondedForce`` or another custom force, for example the
 NBFIX terms of a CHARMM system built in OpenMM, cannot be converted; OpenGBSA
 then stops and asks for the original topology.
 
+.. _coordinate-mode:
+
 Coordinate Mode
 ---------------
 
@@ -167,6 +171,8 @@ including hydrogens. The rebuilt topology can differ from the one used in the
 simulation, for example in partial charges or in the placement of atoms that
 were missing.
 
+.. _receptor-and-ligand:
+
 Receptor and ligand
 -------------------
 
@@ -177,12 +183,133 @@ this order:
 1. ``analysis_settings.ligand_selection`` and ``receptor_selection``: MDTraj
    selections such as ``"chainid 1"``, ``"resid 288 to 312"`` or
    ``"resname LIG"``. Residue and chain indices count from 0 in the order of
-   the topology after water and ions are removed.
+   the topology after water and ions are removed; ``chainid`` is this index,
+   not the chain letter of a PDB file.
 2. ``binding_mode: ppi``: the receptor is chain 0 and the ligand is chain 1.
 3. ``receptor_topology`` and ``ligand_topology`` (Amber): their atom counts.
-4. Otherwise the first residue named ``LIG``, ``UNL``, ``UNK``, ``DRUG`` or
-   ``MOL``, or else the smallest non-solvent residue with fewer than 200 atoms.
+4. Otherwise every residue with the first of the names ``LIG``, ``UNL``,
+   ``UNK``, ``DRUG`` and ``MOL`` that occurs, or else the residue name with the
+   fewest atoms in total, if that is under 200.
 
 Everything that is not the ligand is the receptor, unless
 ``receptor_selection`` says otherwise. The log reports the number of receptor
 and ligand atoms; check it on a new system.
+
+.. _opt-binding_mode:
+
+``binding_mode``
+~~~~~~~~~~~~~~~~
+
+:Default: ``standard``
+:Values: ``standard``, ``ppi``
+
+``standard`` finds the ligand by the rules above. ``ppi`` is for two-chain
+complexes: the receptor is chain 0 and the ligand chain 1. A complex with one
+chain or with more than two chains stops with an error that asks for
+``ligand_selection`` and ``receptor_selection``; with both selections given,
+the chains are not counted. A topology without chain records, such as an Amber
+``.prmtop``, has a single chain, so use selections there. The older value
+``dimer_ligand`` is accepted as ``standard``, with a warning.
+
+.. _opt-ligand_selection:
+
+``ligand_selection`` and ``receptor_selection``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Default: none
+:Values: MDTraj selection strings
+
+They override ``binding_mode``. With only ``ligand_selection`` the receptor is
+every other atom, and with only ``receptor_selection`` the ligand is. A
+selection that matches no atom, and receptor and ligand selections that share
+atoms, stop the run with an error. Atoms in neither selection, for example a
+third chain, are left out of the calculation; the log and ``final_report.txt``
+say how many.
+
+.. code-block:: yaml
+
+    analysis_settings:
+      ligand_selection: "chainid 2"
+      receptor_selection: "chainid 0 1"     # two receptor chains, for example an antibody
+
+The input_files options
+-----------------------
+
+.. _opt-complex_pdb:
+
+``complex_pdb``
+~~~~~~~~~~~~~~~
+
+:Values: a file path; required
+
+The system. Its extension decides the mode: ``.prmtop``, ``.parm7``, ``.top``,
+``.tpr``, ``.psf`` and an OpenMM ``.xml`` start Native Mode; ``.pdb`` and
+``.gro`` start Coordinate Mode. A GROMACS ``.top`` and an OpenMM ``.xml`` are
+first converted to Amber topologies.
+
+.. _opt-trajectory:
+
+``trajectory``
+~~~~~~~~~~~~~~
+
+:Values: a file path; required
+
+The MD trajectory, in any format MDTraj reads. OpenGBSA reads the whole file
+before it chooses the frames. For a very long trajectory, writing only the
+frames you need to a smaller file, for example with ``cpptraj`` or
+``gmx trjconv``, saves time and memory.
+
+.. _opt-solvated_topology:
+
+``solvated_topology``
+~~~~~~~~~~~~~~~~~~~~~
+
+:Default: none
+:Values: a ``.gro``, ``.pdb`` or ``.prmtop`` file
+
+The topology of the atoms in the trajectory when the trajectory still contains
+water and ions and ``complex_pdb`` describes only the complex. OpenGBSA reads
+the trajectory with it and then removes the solvent (`Water and ions`_). For
+``.psf`` input it also gives the coordinates.
+
+.. _opt-receptor_topology:
+
+``receptor_topology`` and ``ligand_topology``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Default: none
+:Values: Amber ``.prmtop``, ``.parm7`` or ``.new`` files
+
+Native Mode with Amber input. The receptor atoms come first in the complex
+topology and the ligand atoms follow; the atom count of the receptor topology
+defines where the ligand starts. The parameters of receptor and ligand are
+read from these files. Another file type stops the run with an error. In
+Coordinate Mode the two files are not used, and the log says so.
+
+.. _opt-ligand_mol:
+
+``ligand_mol``
+~~~~~~~~~~~~~~
+
+:Default: none
+:Values: an ``.sdf`` or ``.mol2`` file
+
+Coordinate Mode only. The small-molecule ligand with bond orders and, if
+available, partial charges. It is parameterised with OpenFF. Charges in the
+file are kept. Without them, charges are computed with ``charge_method``
+(``analysis_settings``; ``am1bcc`` by default, or ``mmff94`` or ``gasteiger``).
+AM1-BCC needs AmberTools' ``sqm``; if it fails, the run stops and asks for
+charges in the file or another method. The ligand is found by its residue
+name (rule 4 above), so ``ligand_mol`` cannot be combined with
+``ligand_selection``: a selected ligand is built with the protein force field.
+A configuration with both stops with an error.
+
+``ligand_pdb`` and ``ligand_resname``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+:Default: none
+
+``ligand_pdb`` is a PDB file of the ligand alone. OpenGBSA only checks that its
+residue names occur in the complex. ``ligand_resname`` is the residue name
+shown in the ligand box of the interactive 3D view. Neither changes which atoms
+are the ligand.

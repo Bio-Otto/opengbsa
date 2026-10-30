@@ -30,7 +30,7 @@ OpenGBSA provides the five GB models of Amber, set with
      - Onufriev A, Bashford D, Case DA (2004) *Proteins* 55:383-394
    * - ``GBn``
      - 7
-     - ``mbondi`` (``bondi`` in Amber)
+     - ``bondi``
      - Mongan J, Simmerling C, McCammon JA, Case DA, Onufriev A (2007)
        *J Chem Theory Comput* 3:156-169
    * - ``GBn2``
@@ -87,11 +87,18 @@ Debye-Hückel screening of Srinivasan et al. (1999), as in Amber:
 
 At 0.15 M, :math:`\varepsilon_\mathrm{solvent} = 78.5` and 300 K this gives
 :math:`\kappa = 0.093` Å⁻¹. ``salt_concentration: 0`` switches screening off.
+Amber's ``sander`` uses a constant instead,
+:math:`\kappa = 0.73\sqrt{0.10806\,I}` Å⁻¹, which depends on neither the
+temperature nor the solvent dielectric. ``amber_compatible: true`` uses
+Amber's constant. Its value at 0.15 M, 0.0929 Å⁻¹, lies within 1.2 % of the
+formula above for solvent dielectrics between 78.3 and 80 at 300 K.
 
 Dielectric constants
 --------------------
 
 The solute dielectric is 1.0 and the solvent dielectric 78.5 by default
-(``solute_dielectric``, ``solvent_dielectric``). With ``amber_compatible``
-the solvent dielectric of MMPBSA.py is used: 80.0 when it evaluates the energy
-with ``sander`` (CHARMM and chamber topologies) and 78.3 when it uses NAB.
+(``solute_dielectric``, ``solvent_dielectric``). As Amber's ``intdiel``, the
+solute dielectric divides the gas-phase electrostatic energy as well as
+entering the GB term. With ``amber_compatible`` the solvent dielectric of
+MMPBSA.py is used: 80.0 when it evaluates the energy with ``sander`` (CHARMM and
+chamber topologies) and 78.3 when it uses NAB.

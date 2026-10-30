@@ -2,27 +2,602 @@
 Configuration Management Module for OpenGBSA
 
 This module handles configuration file loading, validation, and management.
+
+`OPTIONS` is the single table of every configuration section and option the
+analysis reads: its default, the values it accepts and its text in the
+template that ``opengbsa --create-complete-config`` writes. Validation, the
+defaults filled into a run's ``analysis_config.yaml`` and the template are all
+derived from it. ``DEPRECATED_ALIASES`` lists the old spellings that still
+work, ``REMOVED_SECTIONS``/``REMOVED_OPTIONS`` the options that no longer do
+anything; everything else is an unknown option and gives a warning.
 """
 
+import copy
+import difflib
 import os
 import yaml
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
 
+
+# --------------------------------------------------------------------------
+# Value checks. Each returns the normalised value or raises ValueError with a
+# text that says what is allowed.
+# --------------------------------------------------------------------------
+
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _or_null(text, null):
+    return f"{text}, or null ({null})" if null else text
+
+
+def boolean(allow_int=False):
+    """true or false (with allow_int also an integer >= 0: 0 is false, others true)."""
+    def check(value):
+        if isinstance(value, bool):
+            return value
+        if allow_int and _is_int(value) and value >= 0:
+            return bool(value)
+        raise ValueError("must be true or false" + (" (or 1/0)" if allow_int else ""))
+    return check
+
+
+def integer(minimum=None, maximum=None, null=None, also=()):
+    """An integer in [minimum, maximum], or one of `also`; null if `null` says what it means."""
+    if minimum is not None and maximum is not None:
+        text = f"an integer from {minimum} to {maximum}"
+    elif minimum is not None:
+        text = f"an integer >= {minimum}"
+    else:
+        text = "an integer"
+    if also:
+        text = " or ".join(str(a) for a in also) + f" or {text}"
+    text = _or_null(text, null)
+
+    def check(value):
+        if value is None and null:
+            return None
+        if _is_int(value) and (value in also or ((minimum is None or value >= minimum)
+                                                 and (maximum is None or value <= maximum))):
+            return value
+        raise ValueError(f"must be {text}")
+    return check
+
+
+def number(greater_than=None, minimum=None, maximum=None, null=None):
+    """A number (> greater_than, >= minimum, <= maximum); returned as a float."""
+    parts = []
+    if greater_than is not None:
+        parts.append(f"> {greater_than:g}")
+    if minimum is not None:
+        parts.append(f">= {minimum:g}")
+    if maximum is not None:
+        parts.append(f"<= {maximum:g}")
+    text = _or_null("a number" + (" " + " and ".join(parts) if parts else ""), null)
+
+    def check(value):
+        if value is None and null:
+            return None
+        if (_is_number(value)
+                and (greater_than is None or value > greater_than)
+                and (minimum is None or value >= minimum)
+                and (maximum is None or value <= maximum)):
+            return float(value)
+        raise ValueError(f"must be {text}")
+    return check
+
+
+def choice(values, null=None, ignore_case=False, null_value=None):
+    """One of `values` (canonical spelling returned); null if `null` says what it means."""
+    text = _or_null(f"one of {list(values)}", null)
+    lookup = {v.lower() if ignore_case else v: v for v in values}
+
+    def check(value):
+        if value is None and null:
+            return null_value
+        key = value.lower() if (ignore_case and isinstance(value, str)) else value
+        if isinstance(key, str) and key in lookup:
+            return lookup[key]
+        raise ValueError(f"must be {text}" + (" (any case)" if ignore_case else ""))
+    return check
+
+
+def text(null=None):
+    """A string; null if `null` says what it means."""
+    def check(value):
+        if value is None and null:
+            return None
+        if isinstance(value, str) and value.strip():
+            return value
+        raise ValueError(f"must be {_or_null('a text', null)}")
+    return check
+
+
+def path():
+    """A file path, or null."""
+    return text(null="not used")
+
+
+def paths():
+    """A file path, a list of file paths, or null."""
+    def check(value):
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip():
+            return value
+        if isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value):
+            return value
+        raise ValueError("must be a file path, a list of file paths, or null")
+    return check
+
+
+def protein_forcefield(value):
+    """amber, amber14, charmm or charmm_gromacs in any case; amber14-all and
+    amber14-all.xml mean amber14, auto means amber (as the calculator reads them)."""
+    names = {'amber': 'amber', 'amber14': 'amber14', 'charmm': 'charmm',
+             'charmm_gromacs': 'charmm_gromacs', 'amber14-all': 'amber14',
+             'amber14-all.xml': 'amber14', 'auto': 'amber'}
+    if isinstance(value, str) and value.strip().lower() in names:
+        return names[value.strip().lower()]
+    raise ValueError("must be one of ['amber', 'amber14', 'charmm', 'charmm_gromacs'] (any case; "
+                     "amber14-all and amber14-all.xml mean amber14)")
+
+
+PLATFORMS = ('CUDA', 'OpenCL', 'CPU', 'Reference')
+
+
+def canonical_platform(name):
+    """Canonical OpenMM platform name of `name` in any case ('cuda' -> 'CUDA');
+    None for null or 'auto' (automatic choice). Raises ValueError otherwise."""
+    if name is None or (isinstance(name, str) and name.strip().lower() == 'auto'):
+        return None
+    if isinstance(name, str):
+        for platform in PLATFORMS:
+            if name.strip().lower() == platform.lower():
+                return platform
+    raise ValueError(f"must be one of {list(PLATFORMS)} (any case), or null/auto for the "
+                     f"automatic choice (CUDA, then OpenCL, then CPU)")
+
+
+def platform_name():
+    return canonical_platform
+
+
+# --------------------------------------------------------------------------
+# The option table
+# --------------------------------------------------------------------------
+
+class _Required:
+    def __repr__(self):
+        return 'REQUIRED'
+
+
+REQUIRED = _Required()
+
+
+@dataclass(frozen=True)
+class Option:
+    """One configuration option.
+
+    default  value used when the option is left out (REQUIRED: no default)
+    check    value -> normalised value; raises ValueError saying what is allowed
+    comment  its text in the generated template
+    example  value shown in the template when it differs from the default
+    heading  sub-heading written before it in the template
+    path     True for input files that must exist
+    """
+    default: Any = None
+    check: Optional[Callable[[Any], Any]] = None
+    comment: str = ''
+    example: Any = None
+    heading: str = ''
+    path: bool = False
+
+
+ENTROPY_METHODS = ['none', 'interaction', 'c2', 'quasiharmonic', 'normal_mode', 'nmode']
+
+OPTIONS: Dict[str, Dict[str, Option]] = {
+    'input_files': {
+        'complex_pdb': Option(
+            REQUIRED, path(), path=True, example='path/to/complex.prmtop', comment=(
+                "Native Mode (the topology of the MD simulation is read as is):\n"
+                "  Amber .prmtop/.parm7, GROMACS .top (with a .gro of the same folder) or\n"
+                "  .tpr, CHARMM/NAMD .psf (needs forcefield_settings.charmm_params), or a\n"
+                "  serialised OpenMM System .xml with a .pdb of the same name next to it.\n"
+                "Coordinate Mode (OpenGBSA builds the topology from a force field):\n"
+                "  .pdb or .gro of the complex, plus ligand_mol for a small-molecule ligand.")),
+        'trajectory': Option(
+            REQUIRED, path(), path=True, example='path/to/trajectory.xtc',
+            comment="MD trajectory (.xtc, .trr, .dcd, .nc, .trj, multi-model .pdb, ...)."),
+        'solvated_topology': Option(None, path(), path=True, comment=(
+            "Topology of the atoms in the trajectory when it still contains water and\n"
+            "ions (for example the solvated .gro or .prmtop). Not needed for a dry\n"
+            "trajectory.")),
+        'receptor_topology': Option(None, path(), path=True, comment=(
+            "Native Mode, Amber only (.prmtop or .parm7): receptor and ligand topologies\n"
+            "written with the complex. Their atom counts define the receptor and the ligand.")),
+        'ligand_topology': Option(None, path(), path=True),
+        'ligand_mol': Option(None, path(), path=True, comment=(
+            "Coordinate Mode: the small-molecule ligand (.sdf, or .mol2), with bond\n"
+            "orders and, if possible, partial charges (else charge_method assigns them).\n"
+            "Parameterised with OpenFF.")),
+        'ligand_pdb': Option(None, path(), path=True, comment=(
+            "Optional ligand-only .pdb; used only to check the ligand residue names.")),
+        'ligand_resname': Option(None, text(null="detected"), comment=(
+            "Residue name shown in the ligand box of the interactive 3D viewer.")),
+    },
+    'output_settings': {
+        'output_directory': Option('mmgbsa_results', text(), comment=(
+            "Each run writes <output_directory>/analysis_<date>_<time>/ (with _2, _3, ...\n"
+            "added when that folder exists). opengbsa --output-dir DIR overrides this.")),
+    },
+    'analysis_settings': {
+        # --- receptor and ligand ---
+        'binding_mode': Option(
+            'standard', choice(['standard', 'ppi']), heading='receptor and ligand', comment=(
+                "standard: receptor = everything but the ligand, ligand found automatically\n"
+                "  (receptor_topology atom count, else residue LIG/UNL/UNK/DRUG/MOL, else the\n"
+                "  smallest non-solvent residue). ppi: receptor = chainid 0, ligand = chainid 1\n"
+                "  of a topology with exactly two chains.")),
+        'receptor_selection': Option(None, text(null="everything but the ligand"), comment=(
+            "MDTraj selections; they override binding_mode, e.g. \"chainid 1\". With only\n"
+            "ligand_selection the receptor is every other atom. The two must not overlap;\n"
+            "atoms in neither are left out of the calculation.")),
+        'ligand_selection': Option(None, text(null="detected")),
+        'charge_method': Option('am1bcc', choice(['am1bcc', 'mmff94', 'gasteiger'], ignore_case=True),
+                                comment=(
+            "Coordinate Mode: partial charges of a ligand_mol file that has none, and of\n"
+            "residues the protein force field lacks: am1bcc (needs AmberTools' sqm),\n"
+            "mmff94 or gasteiger. Charges in the ligand file are always kept.")),
+        # --- solvation model ---
+        'gb_model': Option('OBC2', choice(['OBC2', 'OBC1', 'HCT', 'GBn', 'GBn2']),
+                           heading='solvation model', comment="OBC2, OBC1, HCT, GBn, GBn2"),
+        'gb_radii_set': Option('auto', choice(['auto', 'mbondi', 'mbondi2', 'mbondi3', 'bondi'],
+                                              null="auto", null_value='auto'),
+                               comment="auto, mbondi, mbondi2, mbondi3, bondi"),
+        'salt_concentration': Option(0.15, number(minimum=0.0, maximum=2.0),
+                                     comment="M, Debye-Hueckel screening"),
+        'temperature': Option(300.0, number(greater_than=0.0, maximum=1000.0), comment="K"),
+        'solute_dielectric': Option(1.0, number(greater_than=0.0),
+                                    comment="interior dielectric of the GB and Coulomb terms"),
+        'solvent_dielectric': Option(None, number(greater_than=0.0, null="78.5, or MMPBSA.py's "
+                                                                       "value with amber_compatible"),
+                                     comment="null = 78.5 (MMPBSA.py's value with amber_compatible)"),
+        'sa_model': Option('LCPO', choice(['LCPO', 'ACE'], null="LCPO", null_value='LCPO'),
+                           comment="non-polar term: LCPO or ACE"),
+        'lcpo_typing': Option(None, choice(['element', 'amber'],
+                                           null="element; amber with amber_compatible"),
+                              comment="element (default) or amber"),
+        'rgbmax': Option(None, number(greater_than=0.0, null="no Born-radius cutoff"),
+                         comment="Born-radius cutoff in A; null = every atom pair"),
+        'amber_compatible': Option(False, boolean(), comment=(
+            "true = Amber MMPBSA.py's conventions: rgbmax 25 A, MMPBSA.py's solvent\n"
+            "dielectric and LCPO with Amber's atom typing.")),
+        # --- frames ---
+        'frame_start': Option(None, integer(minimum=0, null="first frame"), heading='frames',
+                              comment="0-based; null = first frame"),
+        'frame_end': Option(None, integer(minimum=1, null="last frame"),
+                            comment="exclusive; null = last frame"),
+        'frame_stride': Option(None, integer(minimum=1, null="1"),
+                               comment="every Nth frame of the range; null = 1"),
+        'max_frames': Option(50, integer(minimum=1, maximum=10000, null="every frame"),
+                             comment="null = every frame of the range after striding"),
+        'frame_selection': Option('sequential', choice(['sequential', 'equidistant', 'random']), comment=(
+            "Chooses max_frames frames among the frames of the range after striding:\n"
+            "sequential: the first ones; equidistant: spread evenly; random: a random\n"
+            "set (random_seed).")),
+        'random_seed': Option(42, integer(null="42")),
+        'reimage_trajectory': Option(True, boolean(),
+                                     comment="make molecules whole across periodic boundaries"),
+        # --- per-residue decomposition ---
+        'run_per_residue_decomposition': Option(False, boolean(), heading='per-residue decomposition'),
+        'decomp_frames': Option(10, integer(minimum=1, null="every analysed frame"), comment=(
+            "frames decomposed: a subset of the analysed frames, chosen like\n"
+            "frame_selection (the first ones, evenly spread, or random); not more than\n"
+            "max_frames; null = every analysed frame")),
+        'report_raw_energies': Option(False, boolean(),
+                                      comment="also write complex/receptor/ligand energies"),
+        'plot_top_residues': Option(10, integer(minimum=1),
+                                    comment="residues in the hot-spot plots, table and report"),
+        'energy_decomposition': Option(False, boolean(), comment=(
+            "A second, faster decomposition inside the main calculation (fast or full),\n"
+            "mainly for development.")),
+        'decomposition_method': Option('full', choice(['full', 'fast'])),
+        # --- entropy ---
+        'run_entropy_analysis': Option(False, boolean(), heading='entropy (-TdS)', comment=(
+            "run_entropy_analysis switches the estimate on; entropy_method chooses it:\n"
+            "interaction (interaction entropy) or c2 (second-order cumulant), both from\n"
+            "the fluctuation of the gas-phase interaction energy and reported with its\n"
+            "standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol);\n"
+            "quasiharmonic: ligand quasi-harmonic entropy (qha_analyze_complex: true\n"
+            "adds receptor and complex to give a binding entropy); nmode: normal-mode\n"
+            "binding entropy of complex, receptor and ligand, each minimized in GB\n"
+            "without the non-polar term (amber_compatible: MMPBSA.py's HCT model,\n"
+            "15 A Born-radius cutoff and no salt), on nmode_frames frames spread\n"
+            "evenly over the analysed frames.")),
+        'entropy_method': Option('interaction', choice(ENTROPY_METHODS)),
+        'qha_analyze_complex': Option(False, boolean()),
+        'nmode_frames': Option(10, integer(minimum=1, null="every analysed frame"),
+                               comment="nmode: frames used; null = every analysed frame"),
+        'nmode_drms': Option(0.001, number(greater_than=0.0),
+                             comment="nmode: RMS gradient (kcal/mol/A) the minimization must reach"),
+        'nmode_maxcyc': Option(10000, integer(minimum=1),
+                               comment="nmode: iterations per minimization round"),
+        'nmode_precision': Option('mixed', choice(['mixed', 'double'], null="double",
+                                                  null_value='double'),
+                                  comment="nmode: GPU force precision for the Hessian; double on CPU"),
+        # --- execution ---
+        'max_workers': Option(None, integer(minimum=1, null="min(cores - 1, 4)"), heading='execution',
+                              comment="CPU worker processes; null = min(cores - 1, 4)"),
+        'print_interval': Option(10, integer(minimum=1), comment="energy line every N frames"),
+        # the former levels 2 and 3 behaved like 1 and are read as true
+        'verbose': Option(True, boolean(allow_int=True), comment="false = fewer setup messages"),
+    },
+    'forcefield_settings': {
+        'protein_forcefield': Option('amber', protein_forcefield, comment=(
+            "Coordinate Mode only: amber (ff14SB, default), amber14 (amber14-all),\n"
+            "charmm or charmm_gromacs (CHARMM36).")),
+        'charmm_params': Option(None, paths(), comment=(
+            "CHARMM/NAMD .psf input: parameter files (.prm, .str, .rtf), one path or a list.")),
+        'charmm_coordinates': Option(None, path(), comment=(
+            "CHARMM/NAMD .psf input: coordinates (.pdb, .coor, .crd) if no\n"
+            "solvated_topology is given.")),
+    },
+    'platform_settings': {
+        'preferred_platform': Option(None, canonical_platform, comment=(
+            "null = automatic (CUDA, then OpenCL, then CPU). Or CUDA, OpenCL, CPU,\n"
+            "Reference (any case). Select a GPU with the environment variable\n"
+            "CUDA_VISIBLE_DEVICES.")),
+        'decomposition_platform': Option(None, canonical_platform, comment=(
+            "Platform for the per-residue decomposition; null = same as above.")),
+        'strict_platform': Option(False, boolean(), comment=(
+            "true = stop with an error instead of falling back to another platform, and\n"
+            "stop when the per-residue decomposition fails.")),
+    },
+    'advanced_settings': {
+        'n_jobs': Option(-1, integer(minimum=1, also=(-1,)), comment=(
+            "Worker processes for a per-residue decomposition on the CPU; -1 = all cores.")),
+    },
+    'reporting_settings': {
+        'include_all_plots': Option(True, boolean(), comment="energy time series and distributions"),
+        'export_format': Option('png', choice(['png', 'svg', 'jpeg', 'webp']),
+                                comment="format of the plot export button"),
+        'export_width': Option(4200, integer(minimum=1)),
+        'export_height': Option(2800, integer(minimum=1)),
+    },
+}
+
+SECTION_TITLES = {
+    'input_files': 'input files',
+    'output_settings': 'output',
+    'analysis_settings': 'analysis',
+    'forcefield_settings': 'force field',
+    'platform_settings': 'hardware',
+    'advanced_settings': 'advanced',
+    'reporting_settings': 'HTML report',
+}
+
+REQUIRED_SECTIONS = ('input_files', 'analysis_settings')
+
+# Old spellings that still work, with the option that replaces them.
+DEPRECATED_ALIASES = {
+    ('params', 'output_directory'): ('output_settings', 'output_directory'),
+    ('analysis_settings', 'per_residue_decomposition'): ('analysis_settings', 'run_per_residue_decomposition'),
+    ('advanced_settings', 'run_per_residue_decomposition'): ('analysis_settings', 'run_per_residue_decomposition'),
+}
+# The legacy top-level 'input' section and its keys
+LEGACY_INPUT_KEYS = {
+    'topology': 'complex_pdb',
+    'trajectory': 'trajectory',
+    'ligand_mol': 'ligand_mol',
+    'ligand_pdb': 'ligand_pdb',
+    'receptor_topology': 'receptor_topology',
+    'ligand_topology': 'ligand_topology',
+    'solvated_topology': 'solvated_topology',
+}
+
+_RETIRED_RUNNER = "it was read only by the retired complete runner and had no effect on opengbsa runs"
+REMOVED_SECTIONS = {
+    'reproducibility_settings': _RETIRED_RUNNER,
+    'visualization_settings': ("it was never read; the energy_decomposition 'fast' PyMOL script "
+                               "(-0.5 kcal/mol, 5 A) and heat maps are always written"),
+}
+REMOVED_OPTIONS = {
+    'input_files': {
+        'receptor_resname': "it was never read",
+        'ligand_charge': "it was never read",
+    },
+    'output_settings': {
+        'analysis_name': _RETIRED_RUNNER,
+    },
+    'analysis_settings': {
+        'use_cache': "the per-run cache never reused anything",
+        'parallel_processing': ("CPU runs always split the frames over worker processes; "
+                                "max_workers sets how many"),
+        'dimer_mode': ("run a second analysis with receptor_selection and ligand_selection for "
+                       "the interface between two units"),
+        'receptor_subunits': ("run a second analysis with receptor_selection and ligand_selection "
+                              "for the interface between two units"),
+        'compound_name': _RETIRED_RUNNER,
+        'save_frame_by_frame_csv': _RETIRED_RUNNER,
+        'frame_by_frame_csv_name': _RETIRED_RUNNER,
+        'include_residue_summary': _RETIRED_RUNNER,
+        'frame_output_components': _RETIRED_RUNNER,
+        'frame_output_format': _RETIRED_RUNNER,
+    },
+    'reporting_settings': {
+        'entropy_approximation': "the report shows the result of entropy_method",
+        'generate_final_report': _RETIRED_RUNNER,
+        'include_plots': _RETIRED_RUNNER,
+        'include_statistics': _RETIRED_RUNNER,
+        'include_convergence': _RETIRED_RUNNER,
+    },
+}
+
+NONBONDED_CUTOFF_MESSAGE = (
+    "analysis_settings.nonbonded_cutoff is no longer supported: MM/GBSA evaluates every atom "
+    "pair without a cutoff, as Amber's MMPBSA.py does (cut = 999). To limit the effective "
+    "Born-radius integral, set analysis_settings.rgbmax (A).")
+
+
+def known_options():
+    """{section: [option, ...]} of every option in OPTIONS (for documentation checks)."""
+    return {section: list(options) for section, options in OPTIONS.items()}
+
+
+def default_config():
+    """Every section and option with its default (REQUIRED options are None)."""
+    return {section: {name: (None if opt.default is REQUIRED else copy.deepcopy(opt.default))
+                      for name, opt in options.items()}
+            for section, options in OPTIONS.items()}
+
+
+def apply_aliases(config):
+    """Map deprecated spellings in `config` (in place) onto the options that replace them.
+
+    Returns the deprecation warnings. The legacy top-level 'input' section is
+    copied into input_files when there is no input_files section;
+    params.output_directory takes precedence over output_settings.output_directory,
+    as before; the per_residue_decomposition aliases switch the decomposition
+    on if any of the spellings does.
+    """
+    warnings = []
+    if not isinstance(config, dict):
+        return warnings
+    # A section left empty in YAML loads as null
+    for section, value in list(config.items()):
+        if value is None and (section in OPTIONS or section in ('params', 'input')
+                              or section.endswith(('_files', '_settings', 'params'))):
+            config[section] = {}
+
+    if 'input' in config:
+        legacy = config.pop('input') or {}
+        if 'input_files' in config:
+            warnings.append("The top-level 'input' section is deprecated and is ignored because "
+                            "an input_files section is given; use input_files only.")
+        else:
+            warnings.append("The top-level 'input' section is deprecated; use input_files "
+                            "(its 'topology' key is input_files.complex_pdb).")
+            config['input_files'] = {LEGACY_INPUT_KEYS.get(k, k): v for k, v in legacy.items()}
+
+    for (old_section, old_key), (new_section, new_key) in DEPRECATED_ALIASES.items():
+        old = config.get(old_section)
+        if not isinstance(old, dict) or old_key not in old:
+            continue
+        value = old.pop(old_key)
+        warnings.append(f"{old_section}.{old_key} is deprecated; use {new_section}.{new_key}.")
+        target = config.setdefault(new_section, {})
+        if not isinstance(target, dict):
+            continue
+        if new_key == 'run_per_residue_decomposition':
+            target[new_key] = bool(target.get(new_key)) or bool(value)
+        else:
+            target[new_key] = value          # params.output_directory wins, as before
+        if old_section == 'params' and not old:
+            del config['params']
+
+    settings = config.get('analysis_settings')
+    if isinstance(settings, dict) and settings.get('binding_mode') == 'dimer_ligand':
+        settings['binding_mode'] = 'standard'
+        warnings.append("binding_mode 'dimer_ligand' is deprecated; it is the same as 'standard'.")
+    return warnings
+
+
+def effective_config(config):
+    """The configuration a run uses: aliases mapped, every option present.
+
+    Values are normalised where they pass their check (e.g. 'cuda' -> 'CUDA',
+    300 -> 300.0); a value that fails its check is kept as given (the Python
+    interface does not validate). Unknown and removed options are left out.
+    """
+    cfg = copy.deepcopy(config or {})
+    apply_aliases(cfg)
+    out = default_config()
+    for section, options in OPTIONS.items():
+        given = cfg.get(section)
+        if not isinstance(given, dict):
+            continue
+        for name, opt in options.items():
+            if name not in given:
+                continue
+            value = given[name]
+            if opt.check is not None:
+                try:
+                    value = opt.check(value)
+                except ValueError:
+                    pass
+            out[section][name] = value
+    settings = out['analysis_settings']
+    if settings.get('random_seed') is None:
+        settings['random_seed'] = 42
+    return out
+
+
+def _suggestion(name, candidates):
+    match = difflib.get_close_matches(name, list(candidates), n=1, cutoff=0.6)
+    return f"; did you mean '{match[0]}'?" if match else ""
+
+
+def _yaml_scalar(value):
+    if value is None:
+        return 'null'
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def complete_config_text():
+    """The YAML text of `opengbsa --create-complete-config`, built from OPTIONS."""
+    lines = [
+        "# OpenGBSA complete configuration (opengbsa --create-complete-config).",
+        "# Every option the analysis reads, set to its default. Delete what you do not",
+        "# need: an option that is left out takes the value shown here. Options that",
+        "# are not listed here are reported as unknown when the run starts.",
+        "# Reference: https://opengbsa.readthedocs.io/",
+        "",
+    ]
+    for section, options in OPTIONS.items():
+        lines.append(f"# {'-' * 64} {SECTION_TITLES[section]}")
+        lines.append(f"{section}:")
+        for name, opt in options.items():
+            if opt.heading:
+                lines.append(f"  # --- {opt.heading} ---")
+            value = opt.example if opt.example is not None else opt.default
+            entry = f"  {name}: {_yaml_scalar(None if value is REQUIRED else value)}"
+            comment = opt.comment.strip('\n')
+            if comment and ('\n' in comment or len(entry) + len(comment) > 86):
+                lines.extend(f"  # {line}".rstrip() for line in comment.split('\n'))
+                lines.append(entry)
+            elif comment:
+                lines.append(f"{entry:<30} # {comment}")
+            else:
+                lines.append(entry)
+        lines.append("")
+    return "\n".join(lines)
+
+
 class ConfigManager:
     """
     Configuration manager for MM/GBSA analysis.
-    
+
     Handles loading, validation, and management of configuration files.
     """
-    
+
     def __init__(self, config_path: Optional[str] = None):
         """
         Initialize configuration manager.
-        
+
         Args:
             config_path: Path to configuration file
         """
@@ -30,31 +605,31 @@ class ConfigManager:
         self.config = {}
         self.validation_errors = []
         self.validation_warnings = []
-        
+
         if config_path:
             self.load_config(config_path)
-    
+
     def load_config(self, config_path: str) -> bool:
         """
         Load configuration from YAML file.
-        
+
         Args:
             config_path: Path to configuration file
-            
+
         Returns:
             True if successful, False otherwise
         """
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                self.config = yaml.safe_load(f)
-            
+                self.config = yaml.safe_load(f) or {}
+
             # Normalize configuration (handle legacy 'input' section)
             self._normalize_config()
-            
+
             self.config_path = config_path
             logger.info(f"Configuration loaded from: {config_path}")
             return True
-            
+
         except FileNotFoundError:
             logger.error(f"Configuration file not found: {config_path}")
             return False
@@ -64,273 +639,218 @@ class ConfigManager:
         except Exception as e:
             logger.error(f"Error loading configuration: {e}")
             return False
-    
-    
+
     def _normalize_config(self):
         """
-        Normalize configuration to standard format.
-        Handles legacy 'input' section alias to 'input_files', and turns a
-        section left empty in YAML (which loads as null) into an empty section.
+        Map deprecated spellings (legacy 'input' section, params.output_directory,
+        the per_residue_decomposition aliases) onto the current options and turn
+        a section left empty in YAML (which loads as null) into an empty section.
+        The deprecation warnings are reported by validate_config.
         """
-        for section, value in list(self.config.items()):
-            if value is None and section.endswith(('_files', '_settings', 'params')):
-                self.config[section] = {}
-        if 'input_files' not in self.config and 'input' in self.config:
-            logger.info("Normalizing legacy 'input' section to 'input_files'")
-            inp = self.config['input']
-            
-            # Create input_files section
-            self.config['input_files'] = {}
-            
-            # Map keys
-            mapping = {
-                'topology': 'complex_pdb',
-                'trajectory': 'trajectory',
-                'ligand_mol': 'ligand_mol',
-                'ligand_pdb': 'ligand_pdb',
-                'receptor_topology': 'receptor_topology',
-                'ligand_topology': 'ligand_topology',
-                'solvated_topology': 'solvated_topology'
-            }
-            
-            for legacy_key, new_key in mapping.items():
-                if legacy_key in inp:
-                    self.config['input_files'][new_key] = inp[legacy_key]
+        self._alias_warnings = apply_aliases(self.config)
 
     def validate_config(self) -> bool:
         """
         Validate configuration.
-        
+
+        Unknown sections and options give a warning (with the closest known
+        name), removed options a warning that says why they are gone, and a
+        value outside what an option accepts an error that says what it
+        accepts. A valid configuration is completed with the default of every
+        option it leaves out (see OPTIONS), so get_config() returns what the
+        run uses.
+
         Returns:
             True if valid, False otherwise
         """
         self.validation_errors = []
-        self.validation_warnings = []
-        
+        self.validation_warnings = list(getattr(self, '_alias_warnings', []))
+        self._alias_warnings = []
+        if not isinstance(self.config, dict):
+            self.validation_errors.append("The configuration must be a YAML mapping of sections")
+            return False
+        self.validation_warnings += apply_aliases(self.config)
+
         # Check required sections
-        required_sections = ['input_files', 'analysis_settings']
-        for section in required_sections:
+        for section in REQUIRED_SECTIONS:
             if section not in self.config:
                 self.validation_errors.append(f"Missing required section: {section}")
-        
         if self.validation_errors:
             return False
-        
-        # Validate input files
+
+        self._check_sections()
         self._validate_input_files()
-        
-        # Validate analysis settings
-        self._validate_analysis_settings()
-        
-        # Cross-field validation
+        self._validate_options()
         self._validate_cross_fields()
-        
-        return len(self.validation_errors) == 0
-    
+
+        if self.validation_errors:
+            return False
+        self.config = effective_config(self.config)
+        return True
+
+    def _check_sections(self):
+        """Warn about unknown and removed sections and options."""
+        for section in list(self.config):
+            if section in OPTIONS:
+                values = self.config[section]
+                if values is None:
+                    self.config[section] = {}
+                elif not isinstance(values, dict):
+                    self.validation_errors.append(f"Section {section} must be a mapping of options, "
+                                                  f"not {values!r}")
+                continue
+            if section == 'params' and isinstance(self.config[section], dict):
+                # params.output_directory was mapped above; nothing else was ever read
+                for name in self.config[section]:
+                    elsewhere = [s for s, o in OPTIONS.items() if name in o]
+                    where = f"; it belongs in {elsewhere[0]}" if elsewhere else ""
+                    self.validation_warnings.append(f"params.{name} is ignored (params only ever "
+                                                    f"supplied output_directory){where}")
+                continue
+            if section in REMOVED_SECTIONS:
+                self.validation_warnings.append(f"Section '{section}' was removed and is ignored: "
+                                                f"{REMOVED_SECTIONS[section]}.")
+            else:
+                self.validation_warnings.append(f"Unknown section '{section}' is ignored"
+                                                f"{_suggestion(section, OPTIONS)}")
+        for section, options in OPTIONS.items():
+            values = self.config.get(section)
+            if not isinstance(values, dict):
+                continue
+            for name in values:
+                if name in options:
+                    continue
+                if section == 'analysis_settings' and name == 'nonbonded_cutoff':
+                    continue                           # checked in _validate_options
+                removed = REMOVED_OPTIONS.get(section, {})
+                if name in removed:
+                    self.validation_warnings.append(f"Option '{name}' in {section} was removed and "
+                                                    f"is ignored: {removed[name]}.")
+                    continue
+                hint = _suggestion(name, options)
+                if not hint:
+                    elsewhere = [s for s, o in OPTIONS.items() if name in o]
+                    if elsewhere:
+                        hint = f"; it belongs in {elsewhere[0]}"
+                self.validation_warnings.append(f"Unknown option '{name}' in {section} is "
+                                                f"ignored{hint}")
+
     def _validate_input_files(self):
         """Validate input files section."""
-        input_files = self.config.get('input_files', {})
-        
-        required_files = ['complex_pdb', 'trajectory']
-        for file_key in required_files:
-            if file_key not in input_files:
-                self.validation_errors.append(f"Missing required file: {file_key}")
+        input_files = self.config.get('input_files') or {}
+        if not isinstance(input_files, dict):
+            return
+        for key, opt in OPTIONS['input_files'].items():
+            if opt.default is REQUIRED and key not in input_files:
+                self.validation_errors.append(f"Missing required file: {key}")
                 continue
-            
-            file_path = input_files[file_key]
-            if not self._validate_file_path(file_path, file_key):
-                self.validation_errors.append(f"Invalid file path: {file_path}")
-    
-    def _validate_analysis_settings(self):
-        """Validate analysis settings section."""
-        settings = self.config.get('analysis_settings', {})
-        
-        # Required parameters with validation rules
-        required_params = {
-            'temperature': (float, 0, 1000),
-            'gb_model': (str, ['OBC2', 'OBC1', 'HCT', 'GBn', 'GBn2'], None),  # param_type, allowed_values, None
-            'salt_concentration': (float, 0.0, 2.0),
-            'max_frames': (int, 1, 10000)
-        }
-        
-        for param, validation_rule in required_params.items():
-            if param not in settings:
-                # Inject defaults for common parameters instead of failing
-                defaults = {
-                    'temperature': 300.0,
-                    'gb_model': 'OBC2',
-                    'salt_concentration': 0.15,
-                    'max_frames': 50
-                }
-                if param in defaults:
-                    settings[param] = defaults[param]
-                    self.config['analysis_settings'][param] = defaults[param] # Update actual config
-                    continue
-                else: 
-                    self.validation_errors.append(f"Missing required parameter: {param}")
-                    continue
-            
-            value = settings[param]
-            
-            if param == 'max_frames' and value is None:
+            if not opt.path or input_files.get(key) is None:
                 continue
-                
-            param_type, min_val, max_val = validation_rule
-            
-            if param_type is float and isinstance(value, int) and not isinstance(value, bool):
-                value = float(value)   # 300 means 300.0
-                self.config['analysis_settings'][param] = value
-            if not self._validate_parameter(param, value, param_type, min_val, max_val):
-                self.validation_errors.append(f"Invalid parameter value: {param} = {value}")
+            file_path = input_files[key]
+            if not isinstance(file_path, str):
+                self.validation_errors.append(f"Invalid file path: input_files.{key} = {file_path!r} "
+                                              f"must be a path")
+            elif not self._validate_file_path(file_path, key):
+                self.validation_errors.append(f"Invalid file path: {file_path} (input_files.{key}: "
+                                              f"not found or not readable)")
 
-        # Options that select a code path: an unknown value would otherwise be ignored
-        # or fail only later in the run
-        pff = (self.config.get('forcefield_settings') or {}).get('protein_forcefield')
-        allowed_pff = ['amber', 'amber14', 'amber14-all', 'amber14-all.xml', 'charmm',
-                       'charmm_gromacs', 'auto']
-        if pff is not None and str(pff).strip().lower() not in allowed_pff:
-            self.validation_errors.append(f"Invalid protein_forcefield '{pff}'. Must be one of: "
-                                          f"['amber', 'amber14', 'charmm', 'charmm_gromacs']")
-        for param, allowed in (('frame_selection', ['sequential', 'equidistant', 'random']),
-                               ('entropy_method', ['none', 'interaction', 'c2', 'quasiharmonic',
-                                                   'normal_mode', 'nmode']),
-                               ('decomposition_method', ['full', 'fast'])):
-            value = settings.get(param)
-            if value is not None and value not in allowed:
-                self.validation_errors.append(f"Invalid {param} '{value}'. Must be one of: {allowed}")
-        
-        # Validate gb_radii_set ('auto': an Amber .prmtop keeps its own radii)
-        valid_radii_sets = ['auto', 'mbondi', 'mbondi2', 'mbondi3', 'bondi']
-        radii_set = settings.get('gb_radii_set', 'auto')
-        if radii_set not in valid_radii_sets:
-            self.validation_errors.append(
-                f"Invalid gb_radii_set '{radii_set}'. Must be one of: {valid_radii_sets}"
-            )
+    def _validate_options(self):
+        """Check every given option against OPTIONS and store its normalised value."""
+        for section, options in OPTIONS.items():
+            values = self.config.get(section)
+            if not isinstance(values, dict):
+                continue
+            for name, opt in options.items():
+                if name not in values or opt.check is None or (section == 'input_files' and opt.path):
+                    continue
+                try:
+                    values[name] = opt.check(values[name])
+                except ValueError as e:
+                    self.validation_errors.append(f"Invalid {section}.{name} = {values[name]!r}: {e}")
+        settings = self.config.get('analysis_settings') or {}
+        if 'nonbonded_cutoff' in settings:
+            cutoff = settings.pop('nonbonded_cutoff')
+            if cutoff is None or (_is_number(cutoff) and cutoff >= 999):
+                self.validation_warnings.append(NONBONDED_CUTOFF_MESSAGE + " The value given means "
+                                                "no cutoff, so the option is ignored.")
+            else:
+                self.validation_errors.append(NONBONDED_CUTOFF_MESSAGE)
+        if 'entropy_method' in settings and settings['entropy_method'] is None:
+            # choice() already reported it; say how to switch the estimate off
+            self.validation_errors.append("entropy_method: null is not allowed; use 'none' or "
+                                          "run_entropy_analysis: false for no entropy estimate")
 
-        # Born-radius cutoff (A, Amber's rgbmax) and the MMPBSA.py-compatible preset
-        rgbmax = settings.get('rgbmax', None)
-        if rgbmax is not None and (not isinstance(rgbmax, (int, float)) or isinstance(rgbmax, bool) or rgbmax <= 0):
-            self.validation_errors.append(f"Invalid rgbmax '{rgbmax}': a positive distance in A, or null for no cutoff")
-        if not isinstance(settings.get('amber_compatible', False), bool):
-            self.validation_errors.append("amber_compatible must be true or false")
-        lcpo_typing = settings.get('lcpo_typing', None)
-        if lcpo_typing is not None and lcpo_typing not in ('element', 'amber'):
-            self.validation_errors.append(f"Invalid lcpo_typing '{lcpo_typing}'. Must be one of: ['element', 'amber']")
-        sa_model = settings.get('sa_model', None)
-        if sa_model is not None and sa_model not in ('ACE', 'LCPO'):
-            self.validation_errors.append(f"Invalid sa_model '{sa_model}'. Must be one of: ['ACE', 'LCPO']")
-
-        # Normal-mode entropy: frames, minimization criterion and iterations, precision
-        def positive(value, kind):
-            return isinstance(value, kind) and not isinstance(value, bool) and value > 0
-        nmode_frames = settings.get('nmode_frames', None)
-        if nmode_frames is not None and not positive(nmode_frames, int):
-            self.validation_errors.append(f"Invalid nmode_frames '{nmode_frames}': a positive number of "
-                                          f"frames, or null for every analysed frame")
-        nmode_drms = settings.get('nmode_drms', None)
-        if nmode_drms is not None and not positive(nmode_drms, (int, float)):
-            self.validation_errors.append(f"Invalid nmode_drms '{nmode_drms}': a positive RMS gradient in kcal/mol/A")
-        nmode_maxcyc = settings.get('nmode_maxcyc', None)
-        if nmode_maxcyc is not None and not positive(nmode_maxcyc, int):
-            self.validation_errors.append(f"Invalid nmode_maxcyc '{nmode_maxcyc}': a positive number of iterations")
-        nmode_precision = settings.get('nmode_precision', None)
-        if nmode_precision is not None and nmode_precision not in ('mixed', 'double'):
-            self.validation_errors.append(f"Invalid nmode_precision '{nmode_precision}'. Must be one of: ['mixed', 'double']")
-
-        # Validate binding_mode
-        valid_binding_modes = ['standard', 'dimer_ligand', 'ppi']
-        binding_mode = settings.get('binding_mode', 'standard')
-        if binding_mode not in valid_binding_modes:
-            self.validation_errors.append(
-                f"Invalid binding_mode '{binding_mode}'. Must be one of: {valid_binding_modes}"
-            )
-        else:
-            # Inject default so downstream code can always read it
-            self.config['analysis_settings']['binding_mode'] = binding_mode
-    
     def _validate_cross_fields(self):
-        """Validate cross-field dependencies."""
+        """Validate cross-field dependencies (on the values given, before defaults)."""
         settings = self.config.get('analysis_settings', {})
-        
+
         # Frame range validation
         frame_start = settings.get('frame_start')
         frame_end = settings.get('frame_end')
-        if frame_start is not None and frame_end is not None:
-            if frame_end <= frame_start:
-                self.validation_errors.append("frame_end must be greater than frame_start")
-        
+        if _is_int(frame_start) and _is_int(frame_end) and frame_end <= frame_start:
+            self.validation_errors.append(f"frame_end ({frame_end}) must be greater than "
+                                          f"frame_start ({frame_start}); frame_end is exclusive")
+
         # Decomposition frames validation (only when a decomposition runs)
         max_frames = settings.get('max_frames')
         decomp_frames = settings.get('decomp_frames')
-        decomposition_on = (settings.get('run_per_residue_decomposition') or
-                            settings.get('per_residue_decomposition') or
-                            (self.config.get('advanced_settings') or {}).get('run_per_residue_decomposition'))
-        if decomposition_on and decomp_frames is not None and max_frames is not None:
-            if decomp_frames > max_frames:
-                self.validation_errors.append("decomp_frames cannot be greater than max_frames")
-        
-        # Random seed validation
-        frame_selection = settings.get('frame_selection')
-        random_seed = settings.get('random_seed')
-        if frame_selection == 'random' and random_seed is None:
-            self.validation_errors.append("random_seed is required when frame_selection is 'random'")
-    
+        if (settings.get('run_per_residue_decomposition') and _is_int(decomp_frames)
+                and _is_int(max_frames) and decomp_frames > max_frames):
+            self.validation_errors.append(f"decomp_frames ({decomp_frames}) cannot be greater than "
+                                          f"max_frames ({max_frames}): the decomposed frames are a "
+                                          f"subset of the analysed frames")
+
+        # Coordinate Mode builds a ligand chosen by a selection with the protein force
+        # field, so a small molecule from ligand_mol would get no parameters
+        input_files = self.config.get('input_files') or {}
+        complex_pdb = str(input_files.get('complex_pdb') or '').lower()
+        if (complex_pdb.endswith(('.pdb', '.gro')) and input_files.get('ligand_mol')
+                and settings.get('ligand_selection')):
+            self.validation_errors.append(
+                "ligand_mol and ligand_selection cannot be combined in Coordinate Mode: a selected "
+                "ligand is built with the protein force field. Leave out ligand_selection; the "
+                "small-molecule ligand is then found by its residue name (LIG, UNL, UNK, DRUG, MOL)")
+
     def _validate_file_path(self, file_path: str, file_key: str) -> bool:
         """Validate file path."""
         if not file_path:
             return False
-        
+
         # Check if file exists
         if not os.path.exists(file_path):
             return False
-        
+
         # Check if file is readable
         if not os.access(file_path, os.R_OK):
             return False
-        
+
         # Check file size (max 1GB)
         file_size = os.path.getsize(file_path)
         if file_size > 1024 * 1024 * 1024:  # 1GB
             self.validation_warnings.append(f"Large file: {file_path} ({file_size / 1024**3:.1f}GB)")
-        
+
         return True
-    
-    def _validate_parameter(self, param: str, value: Any, param_type: type, min_val: Any, max_val: Any) -> bool:
-        """Validate parameter value."""
-        # Type check
-        if not isinstance(value, param_type):
-            return False
-        
-        # Range check
-        if isinstance(min_val, (int, float)) and isinstance(max_val, (int, float)):
-            if value < min_val or value > max_val:
-                return False
-        elif isinstance(min_val, list):
-            if value not in min_val:
-                return False
-        
-        return True
-    
+
     def get_config(self) -> Dict[str, Any]:
         """Get configuration dictionary."""
         return self.config.copy()
-    
+
     def get_input_files(self) -> Dict[str, str]:
         """Get input files configuration."""
         return self.config.get('input_files', {}).copy()
-    
+
     def get_analysis_settings(self) -> Dict[str, Any]:
         """Get analysis settings configuration."""
         return self.config.get('analysis_settings', {}).copy()
-    
+
     def get_validation_errors(self) -> List[str]:
         """Get validation errors."""
         return self.validation_errors.copy()
-    
+
     def get_validation_warnings(self) -> List[str]:
         """Get validation warnings."""
         return self.validation_warnings.copy()
-    
+
     def create_default_config(self, output_path: str) -> bool:
         """
         Create a short, commented configuration file with the settings most
@@ -393,7 +913,8 @@ analysis_settings:
     def create_complete_config(self, output_path: str) -> bool:
         """
         Create a configuration file with every option the analysis reads, its
-        default and its meaning (`opengbsa --create-complete-config`).
+        default and its meaning (`opengbsa --create-complete-config`), built
+        from OPTIONS.
 
         Args:
             output_path: Path to save configuration file
@@ -401,163 +922,13 @@ analysis_settings:
         Returns:
             True if successful, False otherwise
         """
-        complete_config_yaml = """# OpenGBSA complete configuration (opengbsa --create-complete-config).
-# Every option the analysis reads, set to its default. Delete what you do not
-# need: an option that is left out takes the value shown here.
-# Reference: https://opengbsa.readthedocs.io/
-
-# ---------------------------------------------------------------- input files
-input_files:
-  # Native Mode (the topology of the MD simulation is read as is):
-  #   Amber .prmtop, GROMACS .top (with a .gro of the same folder) or .tpr,
-  #   CHARMM/NAMD .psf (needs forcefield_settings.charmm_params), or a
-  #   serialised OpenMM System .xml with a .pdb of the same name next to it.
-  # Coordinate Mode (OpenGBSA builds the topology from a force field):
-  #   .pdb or .gro of the complex, plus ligand_mol for a small-molecule ligand.
-  complex_pdb: path/to/complex.prmtop
-
-  # MD trajectory (.xtc, .trr, .dcd, .nc, .trj, multi-model .pdb, ...).
-  trajectory: path/to/trajectory.xtc
-
-  # Topology of the atoms in the trajectory when it still contains water and
-  # ions (for example the solvated .gro or .prmtop). Not needed for a dry
-  # trajectory.
-  solvated_topology: null
-
-  # Native Mode, Amber only: receptor and ligand topologies written with the
-  # complex. Their atom counts define the receptor and the ligand.
-  receptor_topology: null
-  ligand_topology: null
-
-  # Coordinate Mode: the small-molecule ligand (.sdf, or .mol2), with bond
-  # orders and partial charges. Parameterised with OpenFF.
-  ligand_mol: null
-
-  # Optional ligand-only .pdb; used only to check the ligand residue names.
-  ligand_pdb: null
-
-  # Residue name shown in the ligand box of the interactive 3D viewer.
-  ligand_resname: null
-
-# ---------------------------------------------------------------- output
-output_settings:
-  # Each run writes <output_directory>/analysis_<date>_<time>/.
-  # opengbsa --output-dir DIR overrides this.
-  output_directory: mmgbsa_results
-
-# ---------------------------------------------------------------- analysis
-analysis_settings:
-  # --- receptor and ligand ---
-  # standard: receptor = everything but the ligand, ligand found automatically
-  #   (receptor_topology atom count, else residue LIG/UNL/UNK/DRUG/MOL, else the
-  #   smallest non-solvent residue). ppi: receptor = chainid 0, ligand = chainid 1.
-  # dimer_ligand: same as standard.
-  binding_mode: standard
-  # MDTraj selections; they override binding_mode, e.g. "chainid 1".
-  receptor_selection: null
-  ligand_selection: null
-
-  # --- solvation model ---
-  gb_model: OBC2               # OBC2, OBC1, HCT, GBn, GBn2
-  gb_radii_set: auto           # auto, mbondi, mbondi2, mbondi3, bondi
-  salt_concentration: 0.15     # M, Debye-Hueckel screening
-  temperature: 300.0           # K
-  solute_dielectric: 1.0
-  solvent_dielectric: null     # null = 78.5 (MMPBSA.py's value with amber_compatible)
-  sa_model: LCPO               # non-polar term: LCPO or ACE
-  lcpo_typing: null            # element (default) or amber
-  rgbmax: null                 # Born-radius cutoff in A; null = every atom pair
-  nonbonded_cutoff: null       # A; null (or >= 999) = no cutoff
-  # true = Amber MMPBSA.py's conventions: rgbmax 25 A, MMPBSA.py's solvent
-  # dielectric and LCPO with Amber's atom typing.
-  amber_compatible: false
-
-  # --- frames ---
-  frame_start: null            # 0-based; null = first frame
-  frame_end: null              # exclusive; null = last frame
-  frame_stride: null           # null = 1
-  max_frames: 50               # null = every selected frame
-  # sequential: the first max_frames frames of the range after striding;
-  # equidistant: max_frames frames spread evenly over the range;
-  # random: max_frames random frames (random_seed).
-  frame_selection: sequential
-  random_seed: 42
-  reimage_trajectory: true     # make molecules whole across periodic boundaries
-
-  # --- per-residue decomposition ---
-  run_per_residue_decomposition: false
-  decomp_frames: 10            # frames used; must not exceed max_frames
-  report_raw_energies: false   # also write complex/receptor/ligand energies
-  plot_top_residues: 10        # residues shown in the hot-spot plots
-  # A second, faster decomposition inside the main calculation (fast or full),
-  # mainly for development.
-  energy_decomposition: false
-  decomposition_method: full
-
-  # --- entropy (-TdS) ---
-  # run_entropy_analysis switches the estimate on; entropy_method chooses it:
-  # interaction (interaction entropy) or c2 (second-order cumulant), both from
-  # the fluctuation of the gas-phase interaction energy and reported with its
-  # standard deviation (IE unreliable above 3.6, C2 above 6.0 kcal/mol);
-  # quasiharmonic: ligand quasi-harmonic entropy (qha_analyze_complex: true
-  # adds receptor and complex to give a binding entropy); nmode: normal-mode
-  # binding entropy of complex, receptor and ligand, each minimized in GB
-  # without the non-polar term (amber_compatible: MMPBSA.py's HCT model,
-  # 15 A Born-radius cutoff and no salt), on nmode_frames frames spread
-  # evenly over the analysed frames.
-  run_entropy_analysis: false
-  entropy_method: interaction
-  qha_analyze_complex: false
-  nmode_frames: 10             # nmode: frames used; null = every analysed frame
-  nmode_drms: 0.001            # nmode: RMS gradient (kcal/mol/A) the minimization must reach
-  nmode_maxcyc: 10000          # nmode: iterations per minimization round
-  nmode_precision: mixed       # nmode: GPU force precision for the Hessian; double on CPU
-
-  # --- execution ---
-  max_workers: null            # CPU worker processes; null = min(cores - 1, 4)
-  print_interval: 10           # progress line every N frames
-  use_cache: true              # reuse parameterised systems within a run
-
-# ---------------------------------------------------------------- force field
-forcefield_settings:
-  # Coordinate Mode only: amber (ff14SB, default), amber14 (amber14-all),
-  # charmm or charmm_gromacs (CHARMM36).
-  protein_forcefield: amber
-  # CHARMM/NAMD .psf input: parameter files (.prm, .str, .rtf), one path or a list.
-  charmm_params: null
-  # CHARMM/NAMD .psf input: coordinates (.pdb, .coor, .crd) if no
-  # solvated_topology is given.
-  charmm_coordinates: null
-
-# ---------------------------------------------------------------- hardware
-platform_settings:
-  # null = automatic (CUDA, then OpenCL, then CPU). Or CUDA, OpenCL, CPU,
-  # Reference. Select a GPU with the environment variable CUDA_VISIBLE_DEVICES.
-  preferred_platform: null
-  # Platform for the per-residue decomposition; null = same as above.
-  decomposition_platform: null
-  # true = stop with an error instead of falling back to another platform.
-  strict_platform: false
-
-advanced_settings:
-  # Worker processes for a per-residue decomposition on the CPU; -1 = all cores.
-  n_jobs: -1
-
-# ---------------------------------------------------------------- HTML report
-reporting_settings:
-  include_all_plots: true      # energy time series and distributions
-  export_format: png           # format of the plot export button
-  export_width: 4200
-  export_height: 2800
-"""
-
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(complete_config_yaml)
-            
+                f.write(complete_config_text())
+
             logger.info(f"Complete configuration created: {output_path}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error creating complete configuration: {e}")
-            return False 
+            return False

@@ -67,17 +67,25 @@ enthalpy is therefore the more useful quantity.
 QHA (or Principal Component Analysis - PCA) estimates the configurational entropy by fitting a multi-variate Gaussian to the distribution of conformations sampled in the trajectory.
 
 **Theory**:
-It diagonalizes the mass-weighted covariance matrix of atomic fluctuations. The entropy is calculated from the eigenvalues (:math:`\lambda_i`) of this matrix.
+The frames are superimposed and the mass-weighted covariance matrix of the
+atomic fluctuations is diagonalized. Each eigenvalue :math:`\lambda_i` is
+treated as the variance of a harmonic oscillator with the frequency
+:math:`\omega_i = \sqrt{k_B T/\lambda_i}`, and the entropy is that of these
+quantum oscillators (Andricioaei and Karplus 2001):
 
 .. math::
 
-   S_{config} \approx k_B \sum_{i} \left[ \frac{1}{2}\ln(1 + \frac{k_B T e^2}{\hbar^2 \omega_i^2}) \right]
+   S = R \sum_{i} \left[ \frac{x_i}{e^{x_i} - 1} - \ln\left(1 - e^{-x_i}\right) \right],
+   \qquad x_i = \frac{\hbar\omega_i}{k_B T}
+
+The six modes removed by the superposition have eigenvalues near zero and add
+no entropy.
 
 *   **Pros**:
     *   **Anharmonicity**: Captures some anharmonic motions and correlations between atoms.
 *   **Cons**:
     *   **Sampling**: Requires that the simulation is long enough to sample the relevant phase space. If the trajectory is too short (fewer frames than degrees of freedom), the entropy will be underestimated.
-*   **Citation**: Karplus, M., & Kushick, J. N. (1981). Method for estimating the configurational entropy of macromolecules. *Macromolecules*, 14(2), 325-332.
+*   **Citation**: Karplus, M., & Kushick, J. N. (1981). Method for estimating the configurational entropy of macromolecules. *Macromolecules*, 14(2), 325-332. Andricioaei, I., & Karplus, M. (2001). On the calculation of entropy from covariance matrices of the atomic fluctuations. *Journal of Chemical Physics*, 115(14), 6289-6292.
 *   **In OpenGBSA** (``entropy_method: quasiharmonic``): the absolute
     entropy of the ligand over the evaluated frames. With
     ``qha_analyze_complex: true`` the receptor and the complex are analysed as

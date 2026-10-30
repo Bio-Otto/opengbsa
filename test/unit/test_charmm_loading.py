@@ -150,7 +150,7 @@ def test_charmm_run_end_to_end_produces_physical_energy(tmp_path):
 
     calculator = GBSACalculator(
         temperature=300, verbose=0, gb_model="OBC2", salt_concentration=0.15,
-        use_cache=False, protein_forcefield="charmm",
+        protein_forcefield="charmm",
         charmm_params=[PRM_PATH, STR_PATH], charmm_coordinates=PDB_PATH,
     )
     results = calculator.run(
